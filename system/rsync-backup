@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Command-line
+[ "${1##*-}" == "help" -o $# -lt 1 ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <rsync-backup.conf|rsync-backup.d>
+
+SYNOPSIS:
+  Backup (RSync) a given remote host according to the parameters specified in
+  the configuration file(s).
+
+PERMISSIONS:
+  The backup operator (account) MUST be able to SSH seamlessly into the remote
+  host as 'root', using public key authentication.
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - RSYNC_BACKUP_SRC: the remote host/path (user@hostname:path)
+   - RSYNC_BACKUP_DST: the directory to store the backup file(s) into
+
+  The configuration file MAY define the following settings:
+   - RSYNC_BACKUP_OPT: additional RSync options
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -maxdepth 1 -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+RSYNC_BACKUP_SRC=
+RSYNC_BACKUP_DST=
+RSYNC_BACKUP_OPT=
+source "${1}"
+[ -z "${RSYNC_BACKUP_SRC}" ] && _ERROR "Missing backup source parameter (RSYNC_BACKUP_SRC)" && exit 1
+[ -z "${RSYNC_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (RSYNC_BACKUP_DST)" && exit 1
+echo "INFO: to '${RSYNC_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Check backup destination
+[ ! -e "${RSYNC_BACKUP_DST}" ] && mkdir -p "${RSYNC_BACKUP_DST}" && sleep 1
+[ ! -d "${RSYNC_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${RSYNC_BACKUP_DST})" && exit 1
+[ ! -w "${RSYNC_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${RSYNC_BACKUP_DST})" && exit 1
+
+# Log
+RSYNC_BACKUP_LOG="${RSYNC_BACKUP_DST%%/}/rsync-backup.log"
+echo "INFO: with full log in '${RSYNC_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${RSYNC_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${RSYNC_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${RSYNC_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${RSYNC_BACKUP_LOG}"
+MESG:
+EOF
+echo '[... (start of output may be truncated; see log for full output) ...]' >&2
+
+# Check lock
+RSYNC_BACKUP_LOCK="${RSYNC_BACKUP_DST%%/}/rsync-backup.lock"
+[ -e "${RSYNC_BACKUP_LOCK}" ] && _ERROR "Process already locked (${RSYNC_BACKUP_LOCK})" | tee -a "${RSYNC_BACKUP_LOG}" && exit 1
+
+# Perform backup
+RSYNC_BACKUP_ERROR=0
+touch "${RSYNC_BACKUP_LOCK}"
+rsync -av --exclude "rsync-backup.*" ${RSYNC_BACKUP_OPT} ${RSYNC_BACKUP_SRC} ${RSYNC_BACKUP_DST} 2>&1 | tee -a "${RSYNC_BACKUP_LOG}" | tail -n 10
+[ ${PIPESTATUS[0]} -ne 0 ] && RSYNC_BACKUP_ERROR=1
+rm "${RSYNC_BACKUP_LOCK}"
+
+# End
+if [ ${RSYNC_BACKUP_ERROR} -eq 0 ]; then 
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${RSYNC_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${RSYNC_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${RSYNC_BACKUP_LOG}"
+exit 0
+

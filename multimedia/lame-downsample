@@ -1,0 +1,195 @@
+#!/bin/bash
+
+# Command-line
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<option> ...] <source-dir> <destination-dir>
+
+SYNOPSIS:
+  Downsample or transcode (to MP3 format) all audio files found in the source
+  directory to the destination directory (keeping the same structure).
+  Supported (source) formats are WAV, MP3, AAC/M4A, FLAC.
+  This script is "thread-safe", meaning that it can be executed concurrently
+  with the same arguments in order to benefit from multiple CPUs/cores.
+
+OPTIONS:
+  -b, --bitrate   Target bitrate, in kilobit per second (kbs) [default:128]
+                  This is used only to prevent re-encoding source MP3 files that
+                  are below the given bitrate.
+
+  -l, --lameopts  LAME options [default:--preset standard]
+
+  -c, --comment   ID3 comment [default:LAME options]
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+TARGET_KBS=128
+LAME_OPTS='--preset standard'
+LAME_COMMENT='#AUTO#'
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-b'|'--bitrate')  
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--bitrate)' >&2 && exit 1; TARGET_KBS="${1}";;
+    '-l'|'--lameopts')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--lameopts)' >&2 && exit 1; LAME_OPTS="${1}";;
+    '-c'|'--comment')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--comment)' >&2 && exit 1; LAME_COMMENT="${1}";;
+    '-p'|'--include-pdf')
+      PDF_INCL='yes';;
+    *)
+      if [ -z "${SRC_DIR}" ]; then SRC_DIR="${1}"
+      elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
+      else echo 'ERROR: Invalid (extra) argument' >&2 && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+
+# Check dependencies (and format support)
+[ -z "$(which lame)" ] && echo "ERROR[$$]: 'lame' cannot be found" >&2 && exit 1
+AAC_INCL='yes'; [ -z "$(which faad)" ] && echo "WARNING[$$]: 'faad' cannot be found; '*.m4a' files will not be transcoded" >&2 && AAC_INCL=
+FLAC_INCL='yes'; [ -z "$(which flac)" ] && echo "WARNING[$$]: 'flac' cannot be found; '*.flac' files will not be transcoded" >&2 && FLAC_INCL=
+ID3_INCL='yes'; [ -z "$(which id3info)" ] && echo "WARNING[$$]: 'id3info' cannot be found; tags will not be retrieved from '*.mp3' files" >&2 && ID3_INCL=
+METAFLAC_INCL='yes'; [ -z "$(which metaflac)" ] && echo "WARNING[$$]: 'metaflac' cannot be found; tags will not be retrieved from '*.flac' files" >&2 && METAFLAC_INCL=
+
+# Check directories and files
+SRC_DIR=${SRC_DIR%%/}
+DST_DIR=${DST_DIR%%/}
+[ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unable to read from source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
+[ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
+
+# Lock function
+DST_LOCK="${DST_DIR}/.lock"
+function atomic_begin {
+  n=100; while true; do # loop for ~5 seconds (100 x 0.05 seconds in average)
+    n=$(( ${n}-1 ))
+    [ ${n} -le 0 ] && echo "ERROR[$$]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
+    [ $(( ${n} % 10 )) -eq 0 ] && echo "WARNING[$$]: Waiting for lock (${DST_LOCK})" >&2
+    if ( set -o noclobber; echo -n > "${DST_LOCK}" ) 2>/dev/null; then
+      break
+    fi
+    sleep 0.0$(( ${RANDOM} % 10 ))
+  done
+}
+function atomic_end {
+  rm -f "${DST_LOCK}"
+}
+
+# Check/create ID3 comment
+[ "${LAME_COMMENT}" == "#AUTO#" ] && LAME_COMMENT="Transcoded with ${0##*/} (${LAME_OPTS})"
+
+# Trap signals
+trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}"; exit 2' INT TERM
+
+# Loop through audio files
+echo "INFO[$$]: Looking for files to transcode..."
+IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -iname '*.wav' -o -iname '*.mp3' ${AAC_INCL:+-o -iname '*.aac' -o -iname '*.m4a' -o -iname '*.mp4'} ${FLAC_INCL:+-o -iname '*.flac'} \)" | sort); do
+  # Compute destination file name
+  e_src="${p_src##*.}"
+  p_dst="${p_src%.*}.mp3"
+  p_dst="${DST_DIR}/${p_dst#${SRC_DIR}/}"
+  d_dst="$(dirname ${p_dst})"
+  f_dst="$(basename ${p_dst})"
+
+  # Check/create destination directory
+  [ ! -d "${d_dst}" ] && mkdir -p "${d_dst}"
+  [ ! -d "${d_dst}" ] && echo "WARNING[$$]: Failed to create destination directory (${d_dst}); skipping..." >&2 && continue
+  [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}): skipping..." >&2 && continue
+
+  # Check destination file
+  atomic_begin
+  [ -e "${p_dst}" ] && atomic_end && continue
+  touch "${p_dst}"
+  atomic_end
+
+  # Transcoding
+  echo "INFO[$$]: Transcoding ${p_src} -> ${p_dst}"
+
+  # Extract tags from file
+  tt=; tl=; ta=; tn=; ty=; br=
+  case "${e_src}" in
+
+    'mp3')
+      if [ -n "${ID3_INCL}" ]; then
+        IFS=$'\n'; for tag in $(id3info "${p_src}" | egrep '(TIT2|TALB|TPE1|TRCK|TYER|Bitrate)' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}'); do
+          case "${tag%%|*}" in
+            'TIT2') tt="${tag##*|}";;
+            'TALB') tl="${tag##*|}";;
+            'TPE1') ta="${tag##*|}";;
+            'TRCK') tn="${tag##*|}";;
+            'TYER') ty="${tag##*|}";;
+            'Bitrate') br="$(echo ${tag##*|} | sed 's/[^0-9]//g')";;
+          esac
+        done
+      fi
+      ;;
+
+    'aac'|'m4a'|'mp4')
+      IFS=$'\n'; for tag in $(faad --info "${p_src}" 2>&1 | egrep '^(title|album|artist|track|date):' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | iconv -f utf-8 -t iso-8859-1); do
+       case "${tag%%|*}" in
+          'title') tt="${tag##*|}";;
+          'album') tl="${tag##*|}";;
+          'artist') ta="${tag##*|}";;
+          'track') tn="${tag##*|}";;
+          'data') ty="${tag##*|}";;
+        esac
+      done
+      ;;
+
+    'flac')
+      if [ -n "${METAFLAC_INCL}" ]; then
+        IFS=$'\n'; for tag in $(metaflac --export-tags-to=- "${p_src}" | egrep '^(TITLE|ALBUM|ARTIST|TRACKNUMBER|DATE)=' | awk -F '=' 'BEGIN {OFS="|"} {print $1,$2}' | iconv -f utf-8 -t iso-8859-1); do
+         case "${tag%%|*}" in
+            'TITLE') tt="${tag##*|}";;
+            'ALBUM') tl="${tag##*|}";;
+            'ARTIST') ta="${tag##*|}";;
+            'TRACKNUMBER') tn="${tag##*|}";;
+            'DATE') ty="${tag##*|}";;
+          esac
+        done
+      fi
+      ;;
+
+  esac
+  tags=
+  [ -n "${tt}" ] && tags="${tags} --tt \"${tt}\""
+  [ -n "${tl}" ] && tags="${tags} --tl \"${tl}\""
+  [ -n "${ta}" ] && tags="${tags} --ta \"${ta}\""
+  [ -n "${tn}" ] && tags="${tags} --tn \"${tn}\""
+  [ -n "${ty}" ] && tags="${tags} --ty \"${ty}\""
+  [ -n "${LAME_COMMENT}" ] && tags="${tags} --tc \"${LAME_COMMENT}\" "
+  [ -n "${tags}" ] && tags="--add-id3v2 ${tags}"
+   
+  # Downsample/transcode audio file
+  if [ "${e_src}" == 'mp3' -a -n "${br}" ] && [ ${br} -le ${TARGET_KBS} ]; then
+    eval "cp \"${p_src}\" \"${p_dst}\""
+  else
+    case "${e_src}" in
+
+      'wav'|'mp3')
+        eval "lame --silent ${LAME_OPTS} ${tags} \"${p_src}\" \"${p_dst}\""
+        ;;
+
+      'aac'|'m4a'|'mp4')
+        eval "faad --quiet --downmix -o- \"${p_src}\" | lame --silent ${LAME_OPTS} ${tags} - \"${p_dst}\""
+        ;;
+
+      'flac')
+        eval "flac -F --silent --decode --stdout \"${p_src}\" | lame --silent ${LAME_OPTS} ${tags} - \"${p_dst}\""
+        ;;
+
+    esac
+  fi
+  [ $? -ne 0 ] && echo "WARNING[$$]: An error occured while transcoding (${p_aux} -> ${p_dst}); skipping..." >&2 && continue
+   
+done
+
+# Done
+echo "INFO[$$]: Done"
+exit 0
+

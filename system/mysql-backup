@@ -1,0 +1,147 @@
+#!/bin/bash
+
+# Command-line
+[ "${1##*-}" == "help" -o $# -lt 1 ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <mysql-backup.conf|mysql-backup.d>
+
+SYNOPSIS:
+  Backup a MySQL database according to the connection parameters specified
+  in the configuration file(s).
+
+PERMISSIONS:
+  The backup operator (account) MUST be granted the proper permissions:
+    mysql> GRANT LOCK TABLES, SELECT, SHOW VIEW, SUPER ON *.*
+           TO 'sysbackup'@'<hostname>' IDENTIFIED BY '<password>' [REQUIRE SSL];
+    mysql> FLUSH PRIVILEGES;
+  NOTE: The root user/account already has the proper permissions.
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - MYSQL_BACKUP_CNF: the path to the MySQL 'defaults-extra-file'
+   - MYSQL_BACKUP_DST: the directory to store the backup file(s) into
+
+  The configuration file MAY define the following settings:
+   - MYSQL_BACKUP_CMD: the executing command/environment (dflt: bash -c)
+
+  The MySQL 'defaults-extra-file' file MUST define the following parameters:
+    [client]
+    host=...
+    user=...
+    password=...
+    default-character-set=utf8
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -maxdepth 1 -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+MYSQL_BACKUP_CMD="bash -c"
+MYSQL_BACKUP_CNF=
+MYSQL_BACKUP_DST=
+source "${1}"
+MYSQL_BACKUP_DST=${MYSQL_BACKUP_DST%%/}
+[ -z "${MYSQL_BACKUP_CNF}" ] && _ERROR "Missing MySQL configuration parameter (MYSQL_BACKUP_CNF)" && exit 1
+[ -z "${MYSQL_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (MYSQL_BACKUP_DST)" && exit 1
+echo "INFO: to '${MYSQL_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Check MySQL configuration
+MYSQL_BACKUP_DO="[ ! -r '${MYSQL_BACKUP_CNF}' ]"
+${MYSQL_BACKUP_CMD} "${MYSQL_BACKUP_DO}" && _ERROR "Missing/invalid MySQL configuration (${MYSQL_BACKUP_CNF})" && exit 1
+
+# Check backup destination
+[ ! -e "${MYSQL_BACKUP_DST}" ] && mkdir -p "${MYSQL_BACKUP_DST}"
+[ ! -d "${MYSQL_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${MYSQL_BACKUP_DST})" && exit 1
+[ ! -w "${MYSQL_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${MYSQL_BACKUP_DST})" && exit 1
+
+# Log
+MYSQL_BACKUP_LOG="${MYSQL_BACKUP_DST%%/}/mysql-backup.log"
+echo "INFO: with full log in '${MYSQL_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${MYSQL_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${MYSQL_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${MYSQL_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${MYSQL_BACKUP_LOG}"
+MESG:
+EOF
+
+# Retrieve database list
+MYSQL_BACKUP_DO="mysql --defaults-extra-file='${MYSQL_BACKUP_CNF}' -B -N mysql -e 'show databases;'"
+MYSQL_BACKUP_DBS="$(${MYSQL_BACKUP_CMD} "${MYSQL_BACKUP_DO}" 2> /tmp/$$.stderr)"
+e=$?
+cat /tmp/$$.stderr | tee -a "${MYSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
+[ ${e} -ne 0 ] && _ERROR "Failed to retrieve database list" | tee -a "${MYSQL_BACKUP_LOG}" && exit 1
+
+# Check lock
+MYSQL_BACKUP_LOCK="${MYSQL_BACKUP_DST%%/}/mysql-backup.lock"
+[ -e "${MYSQL_BACKUP_LOCK}" ] && _ERROR "Process already locked (${MYSQL_BACKUP_LOCK})" | tee -a "${MYSQL_BACKUP_LOG}" && exit 1
+
+# Perform backup
+MYSQL_BACKUP_ERROR=0
+touch "${MYSQL_BACKUP_LOCK}"
+for db in ${MYSQL_BACKUP_DBS}; do
+  MYSQL_BACKUP_DO="mysqldump --defaults-extra-file='${MYSQL_BACKUP_CNF}' --opt --single-transaction --routines '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
+  ${MYSQL_BACKUP_CMD} "${MYSQL_BACKUP_DO}" 2> /tmp/$$.stderr > "${MYSQL_BACKUP_DST}"/${db}.mysqldump.bz2
+  e=$?
+  cat /tmp/$$.stderr | tee -a "${MYSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
+  [ ${e} -ne 0 ] && MYSQL_BACKUP_ERROR=1
+  echo "$(ls -lh "${MYSQL_BACKUP_DST}"/${db}.mysqldump.bz2)" | tee -a "${MYSQL_BACKUP_LOG}"
+done
+rm "${MYSQL_BACKUP_LOCK}"
+
+# End
+if [ ${MYSQL_BACKUP_ERROR} -eq 0 ]; then
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${MYSQL_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${MYSQL_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${MYSQL_BACKUP_LOG}"
+exit 0
+

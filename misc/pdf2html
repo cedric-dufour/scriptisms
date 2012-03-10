@@ -1,0 +1,132 @@
+#!/bin/bash
+
+# Command-line
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<option> ...] <source-pdf> <destination-dir>
+
+SYNOPSIS:
+  Convert the given PDF file to HTML and PNG images for easier/faster browsing.
+
+OPTIONS:
+  -d, --output-dpi     Output PNG images resolution (DPI) [default:120]
+
+  -D, --input-dpi      Input PDF resolution (DPI) [default:image-dpi]
+      For PDF document containing bitmap images, setting this option to 2-4x
+      the output image resolution allows over-sampling of the input image
+      and anti-aliasing to kick in the conversion process.
+
+  -h, --html-template  HTML template used to replace the PDF file
+      Any included '%FILE%' and '%PAGES%' anchors will be replaced with the
+      approriate corresponding values.
+      If not specified, the built-in template will be used.
+
+  -p, --include-pdf    Include original PDF file along the HTML/PNG output
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+IMG_DPI=120
+PDF_DPI=
+PDF_INCL=
+HTML_TMPL=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-d'|'--output-dpi')  
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-d)' >&2 && exit 1; IMG_DPI="${1}";;
+    '-D'|'--input-dpi')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-D)' >&2 && exit 1; PDF_DPI="${1}";;
+    '-h'|'--html-template')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-h)' >&2 && exit 1; HTML_TMPL="${1}";;
+    '-p'|'--include-pdf')
+      PDF_INCL='yes';;
+    *)
+      if [ -z "${SRC_PDF}" ]; then SRC_PDF="${1}"
+      elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
+      else echo 'ERROR: Invalid (extra) argument' >&2 && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+[ -z "${PDF_DPI}" ] && PDF_DPI=${IMG_DPI}
+
+# Check dependencies
+[ -z "$(which convert)" ] && echo "ERROR[$$]: 'convert' cannot be found (ImageMagick)" >&2 && exit 1
+
+# Check directories and files
+DST_DIR="${DST_DIR%%/}"
+[ ! -r "${SRC_PDF}" ] && echo "ERROR[$$]: Unable to read source PDF file (${SRC_PDF})" >&2 && exit 1
+[ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
+[ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
+[ -n "${HTML_TMPL}" ] && [ ! -r "${HTML_TMPL}" ] && echo "ERROR[$$]: Unable to read HTML template file (${HTML_TMPL})" >&2 && exit 1
+
+# Convert
+f_dst="${SRC_PDF##*/}"
+p_dst="${DST_DIR}/${f_dst}"
+f_dst_prefix="${f_dst%.*}"
+p_dst_prefix="${DST_DIR}/${f_dst_prefix}"
+[ "${PDF_INCL}" == 'yes' ] && cp "${SRC_PDF}" "${p_dst}"
+[ ! -e "${p_dst_prefix}" ] && mkdir "${p_dst_prefix}"
+[ ! -d "${p_dst_prefix}" ] && echo "ERROR[$$]: Failed to create destination directory (${p_dst_prefix})" >&2 && exit 1
+# NOTE:
+#  - Let's use and 8-bit palette and highest Zlib compression (with no adaptive filtering), which gives the best size/quality ratio for eVFRM PDF files
+#  - Let's allow over-sampling in order to cope with PDF containing bitmap images (and thus allow anti-aliasing nonetheless)
+[ ${PDF_DPI} == ${IMG_DPI} ] && resize='' || resize="-resize $(( 100 * ${IMG_DPI} / ${PDF_DPI} ))%"
+convert -density ${PDF_DPI} "${SRC_PDF}" -filter blackman ${resize} -define png:color-type=3 -define png:bit-depth=8 -type palette -quality 90 "${p_dst_prefix}/img.png" 2>/dev/null
+pages_pdf="$(ls -1 "${p_dst_prefix}"/*.png | wc -l)"
+if [ -n "${HTML_TMPL}" ]; then
+  cp "${HTML_TMPL}" "${p_dst_prefix}.html"
+  sed -i "s|%FILE%|${f_dst_prefix}|g;s|%PAGES%|${pages_pdf}|g" "${p_dst_prefix}.html"
+else
+  cat << EOF > "${p_dst_prefix}.html"
+<HTML>
+<HEAD>
+<STYLE TYPE="text/css">
+BODY {WIDTH:100%;MARGIN:5px;}
+TABLE {MARGIN:auto;FONT:12px sans-serif;}
+TD {PADDING:0px 1px;TEXT-ALIGN:center;}
+SELECT {FONT:12px sans-serif;BORDER:solid 1px #000000;}
+A {COLOR:#000000;TEXT-DECORATION:none;}
+A:hover {FONT-WEIGHT:bold;}
+A:visited {COLOR:#000000;}
+</STYLE>
+<SCRIPT TYPE="text/javascript">
+var pFile='${f_dst_prefix}/img';
+var pPages=${pages_pdf};
+var oGoto=null;
+var oImg=null;
+function init() {
+  oGoto=document.getElementById('goto');
+  oPage=document.getElementById('page');
+  for(i=0;i<pPages;i++) oGoto.options[i]=new Option(i+1);
+}
+function show(p) {
+  if(p<0) p=0; else if(p>=pPages) p=pPages-1;
+  oPage.src=( pPages>1 ? pFile+'-'+p+'.png' : pFile+'.png' );
+  oGoto.selectedIndex=p;
+}
+</SCRIPT>
+</HEAD>
+<BODY ONLOAD="javascript:init();show(0);">
+<TABLE CELLSPACING="0" BORDER="0"><TR>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(0);">&lt;&lt;</A></TD>
+<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex-1);">&lt;</A></TD>
+<TD>&nbsp;</TD><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD>
+<TD>/</TD><TD>${pages_pdf}</TD>
+<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&gt;</A></TD>
+<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&gt;&gt;</A></TD>
+${PDF_INCL/yes/<TD>&nbsp;</TD><TD>(<A HREF="${f_dst}">pdf</A>)</TD>}
+</TR></TABLE>
+<TABLE CELLSPACING="0" BORDER="0"><TR>
+<TD><IMG ID="page"/></TD>
+</TR></TABLE>
+</BODY>
+</HTML>
+EOF
+fi
+
+# Done
+exit 0
+

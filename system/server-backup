@@ -1,0 +1,217 @@
+#!/bin/bash
+
+# Command-line
+[ "${1##*-}" == "help" -o $# -lt 2 ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} {full|diff(erential)|test} <server-backup.conf|server-backup.d>
+
+SYNOPSIS:
+  Backup (tar) the given server according to the parameters specified in the
+  configuration file(s).
+
+PERMISSIONS:
+  The backup operator (account) MUST be able to read all files to backup
+  seamlessly.
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - SERVER_BACKUP_DST: the backup file (tarball) name (prefix)
+
+  The configuration file MAY define the following settings:
+   - SERVER_BACKUP_CMD: the executing command/environment (dflt: bash -c)
+   - SERVER_BACKUP_OPT: additional backup (tar) options
+   - SERVER_BACKUP_DSZ: maximum differential backup size in bytes (dflt:50MB)
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ "${1}" != 'full' -a "${1}" != 'diff' -a "${1}" != 'differential' -a "${1}" != 'test' ] && _ERROR "Invalid/missing backup method (${1})" && exit 1
+[ ! -r "${2}" ] && _ERROR "Invalid/missing backup configuration file (${2})" && exit 1
+if [ $# -gt 2 ]; then
+  m="${1}"; shift
+  while [ -n "${1}" ]; do
+    ${0} ${m} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${2}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${2}'"
+  IFS=$'\n'; for f in $(find "${2}" -maxdepth 1 -type f -name "*.conf" | sort); do
+    ${0} ${1} ${f}
+  done
+  exit 0
+fi
+
+# Banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${2}'"
+
+# Parameters
+SERVER_BACKUP_CMD="bash -c"
+SERVER_BACKUP_DST=
+SERVER_BACKUP_OPT=
+SERVER_BACKUP_DSZ=52428800
+source "${2}"
+SERVER_BACKUP_DST=${SERVER_BACKUP_DST%%/}
+[ -z "${SERVER_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (SERVER_BACKUP_DST)" && exit 1
+let SERVER_BACKUP_DSZ=SERVER_BACKUP_DSZ+0
+[ ${SERVER_BACKUP_DSZ} -le 0 ] && _ERROR "Invalid maximum differential backup sizer (SERVER_BACKUP_DSZ)" && exit 1
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Some useful variables
+SERVER_BACKUP_DATE="$(date +'%Y%m%d')"
+SERVER_BACKUP_TIME="$(date +'%H%M%S')"
+SERVER_BACKUP_NOW="$(date +'%Y-%m-%d') $(date +'%H:%M:%S')"
+
+# Internal settings
+SERVER_BACKUP_LBL="Timestamp: ${SERVER_BACKUP_DATE}T${SERVER_BACKUP_TIME}"
+SERVER_BACKUP_RUN="$(dirname ${SERVER_BACKUP_DST})"
+SERVER_BACKUP_EXCL_ALWAYS="--exclude=\"*/dev/log\" --exclude=\"/tmp/*\" --exclude=\"/var/cache/man/*/index.db\" --exclude=\"/var/cache/apt/*.bin\" --exclude=\"/var/cache/apt/archives/*.deb\" --exclude=\"/var/lock/*\" --exclude=\"/var/run/*\" --exclude=\"/var/tmp/*\" --exclude=\"core\""
+SERVER_BACKUP_EXCL_DIFF="--exclude=\"/var/log/*\" --exclude=\"/var/spool/*\""
+
+# Prepare resources
+[ ! -d "${SERVER_BACKUP_RUN}" ] && mkdir ${SERVER_BACKUP_RUN} && sleep 1
+[ ! -w "${SERVER_BACKUP_RUN}" ] && _ERROR "Cannot write to runtime directory (${SERVER_BACKUP_RUN})" && exit 1
+
+# Destination
+SERVER_BACKUP_FILE_FULL="${SERVER_BACKUP_DST}.server-backup.full.tar.gz"
+SERVER_BACKUP_FILE_DIFF="${SERVER_BACKUP_DST}.server-backup.diff.tar.gz"
+case "${1}" in
+
+ full)
+  SERVER_BACKUP_FILE="${SERVER_BACKUP_FILE_FULL}"
+  SERVER_BACKUP_LBL="[FULL] ${SERVER_BACKUP_LBL}"
+  ;;
+
+ diff|differential)
+  SERVER_BACKUP_FILE="${SERVER_BACKUP_FILE_DIFF}"
+  SERVER_BACKUP_LBL="[DIFFERENTIAL] ${SERVER_BACKUP_LBL}"
+  ;;
+
+ test)
+  ${SERVER_BACKUP_CMD} "uname -n"
+  exit 0
+  ;;
+
+esac
+SERVER_BACKUP_LOG="${SERVER_BACKUP_FILE%.tar.gz}.log"
+SERVER_BACKUP_FILE="${SERVER_BACKUP_FILE}"
+echo "INFO: to '${SERVER_BACKUP_FILE}'"
+echo "INFO: labeled '${SERVER_BACKUP_LBL}'"
+echo "INFO: with full log in '${SERVER_BACKUP_LOG}'"
+echo '................................................................................'
+
+# Log
+rm -f "${SERVER_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${SERVER_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${SERVER_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${SERVER_BACKUP_LOG}"
+MESG:
+EOF
+
+# Check lock
+SERVER_BACKUP_LOCK="${SERVER_BACKUP_DST}.server-backup.lock"
+[ -e "${SERVER_BACKUP_LOCK}" ] && _ERROR "Process already locked (${SERVER_BACKUP_LOCK})" | tee -a "${SERVER_BACKUP_LOG}" && exit 1
+
+# Method
+SERVER_BACKUP_ERROR=0
+case "${1}" in
+
+ full)
+  # Remove timestamps
+  rm -f "${SERVER_BACKUP_DST}.server-backup.full.ts"
+
+  # Perform backup
+  touch "${SERVER_BACKUP_LOCK}"
+  SERVER_BACKUP_DO="tar -cS --one-file-system --label '${SERVER_BACKUP_LBL}' ${SERVER_BACKUP_EXCL_ALWAYS} ${SERVER_BACKUP_OPT} / \$(mount | egrep ' type (ext2|ext3|ext4|hfs|hfsplus|hpfs|ntfs|vfat|xfs|reiserfs) ' | cut -d' ' -f3 | grep -v '^/\$') | gzip -9; exit \${PIPESTATUS[0]}"
+  ${SERVER_BACKUP_CMD} "${SERVER_BACKUP_DO}" 2> /tmp/$$.stderr > "${SERVER_BACKUP_FILE}"
+  e=$?
+  cat /tmp/$$.stderr | tee -a "${SERVER_BACKUP_LOG}"; rm /tmp/$$.stderr
+  [ ${e} -ge 2 ] && SERVER_BACKUP_ERROR=1
+  [ ${e} -eq 1 ] && _WARNING "Some (non-critical) error occured during the backup process" | tee -a "${SERVER_BACKUP_LOG}"
+  echo "$(ls -lh "${SERVER_BACKUP_FILE}")" | tee -a "${SERVER_BACKUP_LOG}"
+  rm "${SERVER_BACKUP_LOCK}"
+
+  if [ ${SERVER_BACKUP_ERROR} -eq 0 ]; then
+    # Verify
+    tar -tPzf "${SERVER_BACKUP_FILE}" > /dev/null
+    [ $? -ne 0 ] && _WARNING "Verification failed" | tee -a "${SERVER_BACKUP_LOG}"
+
+    # Update timestamps
+    echo "${SERVER_BACKUP_NOW}" > "${SERVER_BACKUP_DST}.server-backup.full.ts"
+  fi
+  ;;
+
+
+ diff|differential)
+  # Parameters
+  [ ! -r "${SERVER_BACKUP_DST}.server-backup.full.ts" ] && _ERROR "Failed to retrieve last backup parameters (timestamp)" | tee -a "${SERVER_BACKUP_LOG}" && SERVER_BACKUP_ERROR=1
+
+  if [ ${SERVER_BACKUP_ERROR} -eq 0 ]; then
+    # Perform backup
+    touch "${SERVER_BACKUP_LOCK}"
+    SERVER_BACKUP_LAST="$(cat "${SERVER_BACKUP_DST}.server-backup.full.ts")"
+    SERVER_BACKUP_DO="tar -cS --one-file-system --label '${SERVER_BACKUP_LBL}' --newer '${SERVER_BACKUP_LAST}' ${SERVER_BACKUP_EXCL_ALWAYS} ${SERVER_BACKUP_EXCL_DIFF} ${SERVER_BACKUP_OPT} / \$(mount | egrep ' type (ext2|ext3|ext4|hfs|hfsplus|hpfs|ntfs|vfat|xfs|reiserfs) ' | cut -d' ' -f3 | grep -v '^/\$') | gzip -9; exit \${PIPESTATUS[0]}"
+    ${SERVER_BACKUP_CMD} "${SERVER_BACKUP_DO}" 2> /tmp/$$.stderr > "${SERVER_BACKUP_FILE}"
+    e=$?
+    cat /tmp/$$.stderr | tee -a "${SERVER_BACKUP_LOG}"; rm /tmp/$$.stderr
+    [ ${e} -ge 2 ] && SERVER_BACKUP_ERROR=1
+    [ ${e} -eq 1 ] && _WARNING "Some (non-critical) error occured during the backup process" | tee -a "${SERVER_BACKUP_LOG}"
+    echo "$(ls -lh "${SERVER_BACKUP_FILE}")" | tee -a "${SERVER_BACKUP_LOG}"
+    rm "${SERVER_BACKUP_LOCK}"
+  fi
+
+  if [ ${SERVER_BACKUP_ERROR} -eq 0 ]; then
+    # Verify
+    tar -tPzf "${SERVER_BACKUP_FILE}" > /dev/null
+    [ $? -ne 0 ] && SERVER_BACKUP_ERROR=1 && _ERROR "Verification failed" | tee -a "${SERVER_BACKUP_LOG}"
+
+    # Check filesize
+    SERVER_BACKUP_FILE_SIZE=$(ls -s --block-size=1 "${SERVER_BACKUP_FILE}" | cut -d' ' -f1)
+    [ ${SERVER_BACKUP_FILE_SIZE} -gt ${SERVER_BACKUP_DSZ} ] && _WARNING "Differential backup is larger than ${SERVER_BACKUP_DSZ} bytes" | tee -a "${SERVER_BACKUP_LOG}"
+    if [ -r "${SERVER_BACKUP_FILE_FULL}" ]; then
+      [ ${SERVER_BACKUP_FILE_SIZE} -gt $(ls -s --block-size=1 "${SERVER_BACKUP_FILE_FULL}" | cut -d' ' -f1) ] && _WARNING "Differential backup is larger than full backup" | tee -a "${SERVER_BACKUP_LOG}"
+    else
+      _WARNING "Cannot find full backup file to compare backup sizes" | tee -a "${SERVER_BACKUP_LOG}"
+    fi
+  fi
+  ;;
+
+esac
+
+# End
+if [ ${SERVER_BACKUP_ERROR} -eq 0 ]; then 
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${SERVER_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${SERVER_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${SERVER_BACKUP_LOG}"
+exit 0

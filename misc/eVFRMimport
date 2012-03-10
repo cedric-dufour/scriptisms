@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# Command-line
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<option> ...] <source-dir> <destination-dir>
+
+SYNOPSIS:
+  Copy Skyguide eVFR Manual to the given destination directory, converting
+  all PDF files to PNG images for easier/faster browsing.
+  This script is "thread-safe", meaning that it can be executed concurrently
+  with the same arguments in order to benefit from multiple CPUs/cores.
+
+OPTIONS:
+  -d, --output-dpi     Output PNG images resolution (DPI) [default:120]
+
+  -D, --input-dpi      Input PDF resolution (DPI) [default:3*image-dpi]
+      For PDF document containing bitmap images, setting this option to 2-4x
+      the output image resolution allows over-sampling of the input image
+      and anti-aliasing to kick in the conversion process.
+
+  -h, --html-template  HTML template used to replace the PDF file
+      Any included '%FILE%' and '%PAGES%' anchors will be replaced with the
+      approriate corresponding values.
+      If not specified, the built-in template will be used.
+
+  -p, --include-pdf    Include original PDF file along the HTML/PNG output
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+IMG_DPI=120
+PDF_DPI=
+PDF_INCL=
+HTML_TMPL=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-d'|'--output-dpi')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-d)' >&2 && exit 1; IMG_DPI="${1}";;
+    '-D'|'--input-dpi')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-D)' >&2 && exit 1; PDF_DPI="${1}";;
+    '-h'|'--html-template')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-h)' >&2 && exit 1; HTML_TMPL="${1}";;
+    '-p'|'--include-pdf')
+      PDF_INCL='yes';;
+    *)
+      if [ -z "${SRC_DIR}" ]; then SRC_DIR="${1}"
+      elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
+      else echo 'ERROR: Invalid (extra) argument' >&2 && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+# NOTE: By default, let's use 3x over-sampling in order to cope with PDF containing bitmap images (and thus allow anti-aliasing nonetheless)
+[ -z "${PDF_DPI}" ] && PDF_DPI=$(( 3 * ${IMG_DPI} ))
+
+# Check dependencies
+[ -z "$(which pdf2html)" ] && echo "ERROR[$$]: 'pdf2html' cannot be found" >&2 && exit 1
+
+# Check directories and files
+SRC_DIR=${SRC_DIR%%/}
+DST_DIR=${DST_DIR%%/}
+[ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unable to read from source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
+[ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
+
+# Lock function
+DST_LOCK="${DST_DIR}/.lock"
+function atomic_begin {
+  n=100; while true; do # loop for ~5 seconds (100 x 0.05 seconds in average)
+    n=$(( ${n}-1 ))
+    [ ${n} -le 0 ] && echo "ERROR[$$]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
+    [ $(( ${n} % 10 )) -eq 0 ] && echo "WARNING[$$]: Waiting for lock (${DST_LOCK})" >&2
+    if ( set -o noclobber; echo -n > "${DST_LOCK}" ) 2>/dev/null; then
+      break
+    fi
+    sleep 0.0$(( ${RANDOM} % 10 ))
+  done
+}
+function atomic_end {
+  rm -f "${DST_LOCK}"
+}
+
+# Trap signals
+trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}"; exit 2' INT TERM
+
+# Loop through files 
+IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -type f | sort); do
+  # Compute destination file name
+  e_src="${p_src##*.}"
+  case "${e_src}" in
+    'p7s') continue;;
+    *) p_dst="${p_src}";;
+  esac
+  p_dst="${DST_DIR}/${p_dst#${SRC_DIR}/}"
+
+  # Compute destination file name (cont'd)
+  f_src="$(basename ${p_src})"
+  d_dst="$(dirname ${p_dst})"
+  f_dst="$(basename ${p_dst})"
+
+  # Check/create destination directory
+  [ ! -d "${d_dst}" ] && mkdir -p "${d_dst}"
+  [ ! -d "${d_dst}" ] && echo "WARNING[$$]: Failed to create destination directory (${d_dst}); skipping..." >&2 && continue
+  [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}); skipping..." >&2 && continue
+
+  # Check destination file
+  atomic_begin
+  [ -e "${p_dst}" ] && atomic_end && continue
+  touch "${p_dst}"
+  atomic_end
+
+  # Import
+  echo "INFO[$$]: Importing ${p_src} -> ${p_dst}"
+  case "${e_src}" in
+    'pdf'|'PDF')
+      pdf2html -d ${IMG_DPI} -D ${PDF_DPI} ${HTML_TMPL:+-h ${HTML_TMPL}} ${PDF_INCL:+-p} "${p_src}" "${d_dst}"
+      ;;
+    *)
+      cp "${p_src}" "${p_dst}"
+      ;;
+  esac
+    
+done
+
+# Finalize
+atomic_begin
+if [ ! -e "${DST_DIR}/.finalized" ]; then
+  touch "${DST_DIR}/.finalized"
+  atomic_end
+
+  echo "INFO[$$]: Fixing browsing menus..."
+  find "${DST_DIR}" -name 'tree_items_*.js' -exec sed -i 's/\.pdf/.html/g' {} \;
+
+  eVFRM_xml="$(find "${DST_DIR}" -name 'eVFRM_list.xml')"
+  if [ -n "${eVFRM_xml}" ]; then
+    echo "INFO[$$]: Creating top-level index..."
+    eVFRM_index="${eVFRM_xml%/*}/index.html"
+    cat << EOF > "${eVFRM_index}"
+<HTML>
+<HEAD>
+<META HTTP-EQUIV="REFRESH" CONTENT="0; url=./$(fgrep -i '<eAip wef=' ${eVFRM_xml} | sort | tail -n 1 | sed 's/.*<eAip wef="//;s/".*//')/index.html" />
+</HEAD>
+</HTML>
+EOF
+  fi
+fi
+atomic_end
+
+# Done
+echo "INFO[$$]: Done"
+exit 0
+

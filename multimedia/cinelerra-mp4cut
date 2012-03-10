@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <edl-file> [<track-nr> <output-file>] [<fps>=25]
+
+SYNOPSIS:
+  Non-destructively cut/assemble MPEG-4 videos according to the given
+  Cinelerra's edit decision list (EDL).
+
+  Of course, none of Cinelerra's effect will apply. This allows to perform
+  a crude video editing without loosing the quality of the source (MPEG-4)
+  material.
+
+  When invoked without any track number, the script will parse Cinelerra's EDL
+  and output all recognized tracks.
+  In order to perform the cut/assembly, you must specify both the desired track
+  number and the output (MPEG-4) file.
+
+NOTE:
+  MPEG-4 files can not be non-destructively cut at any point in the frames
+  stream. Thus, a slight jitter (usually lower than 1 second) will occur
+  compared to the (exact) point specified in Cinelerra's EDL.
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+MY_EDL="$1"
+MY_TRACK="$2"
+MY_OUTPUT="$3"
+[ $# -ge 4 ] && MY_FPS="$4" || MY_FPS=25
+
+# Checks
+[ ! -r "${MY_EDL}" ] && echo "ERROR: Invalid/missing ELD file (${MY_EDL})" && exit 1
+[ -n "${MY_TRACK}" -a -z "${MY_OUTPUT}" ] && echo 'ERROR: Missing argument (<output-file>)' && exit 1
+[ -z "$(which MP4Box)" ] && echo 'ERROR: Missing binary (MP4Box); apt-get install gpac ;-)' && exit 1
+
+# Parse EDL
+my_current_track=0
+my_timeline=""
+IFS=$'\n'; for line in $(grep -A 1000000 '^</VWINDOW_EDL' "${MY_EDL}" | egrep '^</?(TRACK|EDIT)'); do
+  if [ "${line:0:7}" == '<TRACK ' ]; then
+    my_current_track=$(( ${my_current_track} + 1 ))
+    [ -z "${MY_TRACK}" ] && echo "********* Track ${my_current_track} **********" && echo "${line}"
+  fi
+  [ "${line:0:6}" != '<EDIT ' ] && continue
+  if [ -z "${MY_TRACK}" ]; then
+    echo "${line}"
+  else
+    [ "${my_current_track}" == "${MY_TRACK}" ] && my_timeline="${my_timeline}${my_timeline:+$'\n'}$(echo "${line}" | grep 'STARTSOURCE="[^"]*".*LENGTH="[^"]*".*SRC="[^"]*' | sed 's/.*STARTSOURCE="\([^"]*\)".*LENGTH="\([^"]*\)".*SRC="\([^"]*\)".*/\1|\2|\3/')"
+  fi
+done
+[ -z "${MY_TRACK}" ] && exit
+
+# Create splits
+my_index=0
+my_splits=""
+IFS=$'\n'; for line in ${my_timeline}; do
+  [ -z "${line}" ] && continue
+  my_index=$(( ${my_index} + 1 ))
+  my_start=${line%%|*}; line=${line#*|}
+  my_length=${line%%|*}; line=${line#*|}
+  my_source=${line}
+  my_start="$(echo "scale=2; ${my_start}/${MY_FPS}" | bc)"
+  my_length="$(echo "scale=2; ${my_length}/${MY_FPS}" | bc)"
+  my_end="$(echo "scale=2; ${my_start}+${my_length}" | bc)"
+  my_suffix="00000${my_index}"; my_suffix="${my_suffix:${#my_suffix}-5:5}"
+  my_split=split.$$.${my_suffix}.mp4
+  [ ! -r "${my_source}" ] && echo "ERROR: Invalid/missing source file (${my_source}); failed to create split (${my_split})" && continue
+  echo "INFO: Creating split (${my_split})"
+  rm -f "${my_split}"
+  MP4Box -splitx ${my_start}:${my_end} "${my_source}" -out "${my_split}" > /dev/null 2>&1
+  [ $? -ne 0 ] && echo "ERROR: Failed to create split (${my_split})" && continue
+  my_splits="${my_splits}${my_splits:+ }${my_split}"
+done
+
+# Merging splits
+echo "INFO: Creating output file (${MY_OUTPUT})"
+[ -e "${MY_OUTPUT}" ] && rm -i "${MY_OUTPUT}"
+IFS=$' '; for my_split in ${my_splits}; do
+  echo "INFO: Concatenating split (${my_split})"
+  MP4Box -cat "${my_split}" "${MY_OUTPUT}" > /dev/null 2>&1
+  [ $? -ne 0 ] && echo "ERROR: Failed to concatenate split (${my_split})" && continue
+done
+echo "INFO: DONE"
+ls -al "${MY_OUTPUT}"
+
+# Cleaning-up
+rm -f split.$$.*.mp4

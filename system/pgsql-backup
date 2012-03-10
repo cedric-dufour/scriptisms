@@ -1,0 +1,145 @@
+#!/bin/bash
+
+# Command-line
+[ "${1##*-}" == "help" -o $# -lt 1 ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <pgsql-backup.conf|pgsql-backup.d>
+
+SYNOPSIS:
+  Backup a PostgreSQL database according to the connection parameters specified
+  in the configuration file(s).
+
+PERMISSIONS:
+  The backup operator (account) MUST be granted the proper permissions:
+   postgres# createuser -sEP sysbackup
+   postgres# fgrep sysbackup /etc/postgresql/.../pg_hba.conf
+   host[ssl] all sysbackup <ip/mask> md5
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - PGSQL_BACKUP_CNF: the path to the PostgreSQL 'pgpass' file
+   - PGSQL_BACKUP_DST: the directory to store the backup file(s) into
+
+  The configuration file MAY define the following settings:
+   - PGSQL_BACKUP_CMD: the executing command/environment (dflt: bash -c)
+
+  The PostgreSQL 'pgpass' file file MUST define the following parameters:
+    # hostname:port:database:username:password
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -maxdepth 1 -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+PGSQL_BACKUP_CMD="bash -c"
+PGSQL_BACKUP_CNF=
+PGSQL_BACKUP_DST=
+source "${1}"
+[ -z "${PGSQL_BACKUP_CNF}" ] && _ERROR "Missing PostgreSQL configuration parameter (PGSQL_BACKUP_CNF)" && exit 1
+PGSQL_BACKUP_DST="${PGSQL_BACKUP_DST%%/}"
+[ -z "${PGSQL_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (PGSQL_BACKUP_DST)" && exit 1
+echo "INFO: to '${PGSQL_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Import/export PostgreSQL configuration
+PGSQL_BACKUP_DO="[ ! -r '${PGSQL_BACKUP_CNF}' ]"
+${PGSQL_BACKUP_CMD} "${PGSQL_BACKUP_DO}" && _ERROR "Missing/invalid PostgreSQL configuration (${PGSQL_BACKUP_CNF})" && exit 1
+PGSQL_BACKUP_DO="egrep -v '^\s*(#|$)' '${PGSQL_BACKUP_CNF}' | head -n 1 | cut -d':' -f1,2"
+PGSQL_BACKUP_HOSTPORT=$(${PGSQL_BACKUP_CMD} "${PGSQL_BACKUP_DO}")
+
+# Check backup destination
+[ ! -e "${PGSQL_BACKUP_DST}" ] && mkdir -p "${PGSQL_BACKUP_DST}"
+[ ! -d "${PGSQL_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${PGSQL_BACKUP_DST})" && exit 1
+[ ! -w "${PGSQL_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${PGSQL_BACKUP_DST})" && exit 1
+
+# Log
+PGSQL_BACKUP_LOG="${PGSQL_BACKUP_DST%%/}/pgsql-backup.log"
+echo "INFO: with full log in '${PGSQL_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${PGSQL_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${PGSQL_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${PGSQL_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${PGSQL_BACKUP_LOG}"
+MESG:
+EOF
+
+# Retrieve database list
+PGSQL_BACKUP_DO="export PGPASSFILE='${PGSQL_BACKUP_CNF}'; psql -h ${PGSQL_BACKUP_HOSTPORT%%:*} -p ${PGSQL_BACKUP_HOSTPORT##*:} -t -A -l | fgrep '|' | cut -d'|' -f1"
+PGSQL_BACKUP_DBS="$(${PGSQL_BACKUP_CMD} "${PGSQL_BACKUP_DO}" 2> /tmp/$$.stderr)"
+e=$?
+cat /tmp/$$.stderr | tee -a "${PGSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
+[ ${e} -ne 0 ] && _ERROR "Failed to retrieve database list" | tee -a "${PGSQL_BACKUP_LOG}" && exit 1
+
+# Check lock
+PGSQL_BACKUP_LOCK="${PGSQL_BACKUP_DST%%/}/pgsql-backup.lock"
+[ -e "${PGSQL_BACKUP_LOCK}" ] && _ERROR "Process already locked (${PGSQL_BACKUP_LOCK})" | tee -a "${PGSQL_BACKUP_LOG}" && exit 1
+
+# Perform backup
+PGSQL_BACKUP_ERROR=0
+touch "${PGSQL_BACKUP_LOCK}"
+for db in ${PGSQL_BACKUP_DBS}; do
+  [ "${db}" == "template0" ] && continue
+  PGSQL_BACKUP_DO="export PGPASSFILE='${PGSQL_BACKUP_CNF}'; pg_dump -i -h '${PGSQL_BACKUP_HOSTPORT%%:*}' -p '${PGSQL_BACKUP_HOSTPORT##*:}' -c -o '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
+  ${PGSQL_BACKUP_CMD} "${PGSQL_BACKUP_DO}" 2> /tmp/$$.stderr > "${PGSQL_BACKUP_DST}"/${db}.pg_dump.bz2
+  e=$?
+  cat /tmp/$$.stderr | tee -a "${PGSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
+  [ ${e} -ne 0 ] && PGSQL_BACKUP_ERROR=1
+  echo "$(ls -lh "${PGSQL_BACKUP_DST}"/${db}.pg_dump.bz2)" | tee -a "${PGSQL_BACKUP_LOG}"
+done
+rm "${PGSQL_BACKUP_LOCK}"
+
+# End
+if [ ${PGSQL_BACKUP_ERROR} -eq 0 ]; then 
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${PGSQL_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${PGSQL_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${PGSQL_BACKUP_LOG}"
+exit 0
+

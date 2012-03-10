@@ -1,0 +1,257 @@
+#!/bin/bash
+
+# Command-line
+[ "${1##*-}" == "help" -o $# -lt 2 ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} {full|incr(emental)|diff(erential)} <tar-backup.conf|tar-backup.d>
+
+SYNOPSIS:
+  Backup (tar) given directories according to the parameters specified in the
+  configuration file(s).
+
+PERMISSIONS:
+  The backup operator (account) MUST be able to read all files to backup
+  seamlessly.
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - TAR_BACKUP_ROOT: the backup root (absolute) directory
+   - TAR_BACKUP_SRC: the (relative) path to directories to backup
+   - TAR_BACKUP_DST: the backup file (tarball) name (prefix)
+
+  The configuration file MUST define the following settings:
+   - TAR_BACKUP_CMD: the executing command/environment (dflt: bash -c)
+   - TAR_BACKUP_KEEP: the quantity of 'full' tarballs to keep (dflt:1)
+   - TAR_BACKUP_OPT: additional backup (tar) options
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ "${1}" != "full" -a "${1}" != 'incr' -a "${1}" != 'incremental' -a "${1}" != 'diff' -a "${1}" != 'differential' ] && _ERROR "Invalid/missing backup method (${1})" && exit 1
+[ ! -r "${2}" ] && _ERROR "Invalid/missing backup configuration file (${2})" && exit 1
+if [ $# -gt 2 ]; then
+  m="${1}"; shift
+  while [ -n "${1}" ]; do
+    ${0} ${m} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${2}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${2}'"
+  IFS=$'\n'; for f in $(find "${2}" -maxdepth 1 -type f -name "*.conf" | sort); do
+    ${0} ${1} ${f}
+  done
+  exit 0
+fi
+
+# Banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${2}'"
+
+# Parameters
+TAR_BACKUP_CMD="bash -c"
+TAR_BACKUP_ROOT=
+TAR_BACKUP_SRC=
+TAR_BACKUP_DST=
+TAR_BACKUP_KEEP=1
+TAR_BACKUP_OPT=
+source "${2}"
+TAR_BACKUP_DST=${TAR_BACKUP_DST%%/}
+TAR_BACKUP_DO="[ -z '${TAR_BACKUP_ROOT}' -o ! -d '${TAR_BACKUP_ROOT}' ]"
+${TAR_BACKUP_CMD} "${TAR_BACKUP_DO}" && _ERROR "Missing/invalid backup root parameter (TAR_BACKUP_ROOT)" && exit 1
+[ -z "${TAR_BACKUP_SRC}" ] && _ERROR "Missing backup source parameter (TAR_BACKUP_SRC)" && exit 1
+[ -z "${TAR_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (TAR_BACKUP_DST)" && exit 1
+let TAR_BACKUP_KEEP=TAR_BACKUP_KEEP+0
+[ ${TAR_BACKUP_KEEP} -le 0 ] && _ERROR "Invalid backup retention parameter (TAR_BACKUP_KEEP)" && exit 1
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Some useful variables
+TAR_BACKUP_DATE="$(date +'%Y%m%d')"
+TAR_BACKUP_TIME="$(date +'%H%M%S')"
+TAR_BACKUP_NOW="$(date +'%Y-%m-%d') $(date +'%H:%M:%S')"
+
+# Internal settings
+TAR_BACKUP_LBL="Timestamp: ${TAR_BACKUP_DATE}T${TAR_BACKUP_TIME}"
+TAR_BACKUP_RUN="$(dirname ${TAR_BACKUP_DST})"
+
+# Prepare resources
+[ ! -d "${TAR_BACKUP_RUN}" ] && mkdir ${TAR_BACKUP_RUN} && sleep 1
+[ ! -w "${TAR_BACKUP_RUN}" ] && _ERROR "Cannot write to runtime directory (${TAR_BACKUP_RUN})" && exit 1
+TAR_BACKUP_DO="cd '${TAR_BACKUP_ROOT}'; for f in \$(ls -1 -d ${TAR_BACKUP_SRC}); do echo -n \" '\$f'\"; done"
+TAR_BACKUP_SRC="$(${TAR_BACKUP_CMD} "${TAR_BACKUP_DO}")"
+
+# Destination
+case "${1}" in
+
+ full)
+  TAR_BACKUP_FILE="${TAR_BACKUP_DST}.F${TAR_BACKUP_DATE}T${TAR_BACKUP_TIME}"
+  TAR_BACKUP_LBL="[FULL] ${TAR_BACKUP_LBL}"
+  ;;
+
+ incr|incremental)
+  TAR_BACKUP_FILE="${TAR_BACKUP_DST}.I${TAR_BACKUP_DATE}T${TAR_BACKUP_TIME}"
+  TAR_BACKUP_LBL="[INCREMENTAL] ${TAR_BACKUP_LBL}"
+  ;;
+
+ diff|differential)
+  TAR_BACKUP_FILE="${TAR_BACKUP_DST}.D${TAR_BACKUP_DATE}T${TAR_BACKUP_TIME}"
+  TAR_BACKUP_LBL="[DIFFERENTIAL] ${TAR_BACKUP_LBL}"
+  ;;
+
+esac
+TAR_BACKUP_LOG="${TAR_BACKUP_FILE}.log"
+TAR_BACKUP_FILE="${TAR_BACKUP_FILE}.tar.gz"
+echo "INFO: to '${TAR_BACKUP_FILE}'"
+echo "INFO: labeled '${TAR_BACKUP_LBL}'"
+echo "INFO: with full log in '${TAR_BACKUP_LOG}'"
+echo '................................................................................'
+
+# Log
+rm -f "${TAR_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${TAR_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${TAR_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${TAR_BACKUP_LOG}"
+MESG:
+EOF
+
+# Check lock
+TAR_BACKUP_LOCK="${TAR_BACKUP_DST}.tar-backup.lock"
+[ -e "${TAR_BACKUP_LOCK}" ] && _ERROR "Process already locked (${TAR_BACKUP_LOCK})" | tee -a "${TAR_BACKUP_LOG}" && exit 1
+
+# Method
+TAR_BACKUP_ERROR=0
+case "${1}" in
+
+ full)
+  # Remove timestamps
+  rm -f "${TAR_BACKUP_DST}.tar-backup.full.ts"
+  rm -f "${TAR_BACKUP_DST}.tar-backup.incremental.ts"
+
+  # Perform backup
+  touch "${TAR_BACKUP_LOCK}"
+  TAR_BACKUP_DO="tar -cS --label '${TAR_BACKUP_LBL}' --directory '${TAR_BACKUP_ROOT}' ${TAR_BACKUP_OPT} ${TAR_BACKUP_SRC} | gzip -9; exit \${PIPESTATUS[0]}"
+  ${TAR_BACKUP_CMD} "${TAR_BACKUP_DO}" 2> /tmp/$$.stderr > "${TAR_BACKUP_FILE}"
+  e=$?
+  cat /tmp/$$.stderr | tee -a "${TAR_BACKUP_LOG}"; rm /tmp/$$.stderr
+  [ ${e} -ge 2 ] && TAR_BACKUP_ERROR=1
+  [ ${e} -eq 1 ] && _WARNING "Some (non-critical) error occured during the backup process" | tee -a "${TAR_BACKUP_LOG}"
+  echo "$(ls -l "${TAR_BACKUP_FILE}")" | tee -a "${TAR_BACKUP_LOG}"
+  rm "${TAR_BACKUP_LOCK}"
+
+  if [ ${TAR_BACKUP_ERROR} -eq 0 ]; then
+    # Verify
+    tar -tzf "${TAR_BACKUP_FILE}" > /dev/null
+    [ $? -ne 0 ] && _WARNING "Verification failed" | tee -a "${TAR_BACKUP_LOG}"
+
+    # Update timestamps
+    echo "${TAR_BACKUP_NOW}" > "${TAR_BACKUP_DST}.tar-backup.full.ts"
+    echo "${TAR_BACKUP_NOW}" > "${TAR_BACKUP_DST}.tar-backup.incremental.ts"
+
+    # Cleanup former tarballs 
+    if [ ${TAR_BACKUP_KEEP} -gt 0 ]; then
+      i=${TAR_BACKUP_KEEP}
+      for f in $(ls -r1 "${TAR_BACKUP_DST}.F"????????T??????.*); do
+        [ ${i} -ge 0 -a "${f##*F????????T??????.}" != "tar.gz" ] && continue
+        let i=i-1
+        [ ${i} -ge 0 ] && continue
+        rm -f "${f}"
+      done
+    fi  
+    rm -f "${TAR_BACKUP_DST}.I"????????T??????.*
+    rm -f "${TAR_BACKUP_DST}.D"????????T??????.*
+  fi
+  ;;
+
+
+ incr|incremental)
+  # Parameters
+  [ ! -r "${TAR_BACKUP_DST}.tar-backup.incremental.ts" ] && _ERROR "Failed to retrieve last backup parameters (timestamp)" | tee -a "${TAR_BACKUP_LOG}" && TAR_BACKUP_ERROR=1
+
+  if [ ${TAR_BACKUP_ERROR} -eq 0 ]; then
+    # Perform backup
+    touch "${TAR_BACKUP_LOCK}"
+    TAR_BACKUP_LAST="$(cat "${TAR_BACKUP_DST}.tar-backup.incremental.ts")"
+    TAR_BACKUP_DO="tar -cS --label '${TAR_BACKUP_LBL}' --directory '${TAR_BACKUP_ROOT}' --newer '${TAR_BACKUP_LAST}' ${TAR_BACKUP_OPT} ${TAR_BACKUP_SRC} | gzip -9; exit \${PIPESTATUS[0]}"
+    ${TAR_BACKUP_CMD} "${TAR_BACKUP_DO}" 2> /tmp/$$.stderr > "${TAR_BACKUP_FILE}"
+    e=$?
+    cat /tmp/$$.stderr | tee -a "${TAR_BACKUP_LOG}"; rm /tmp/$$.stderr
+    [ ${e} -ge 2 ] && TAR_BACKUP_ERROR=1
+    [ ${e} -eq 1 ] && _WARNING "Some (non-critical) error occured during the backup process" | tee -a "${TAR_BACKUP_LOG}"
+    echo "$(ls -l "${TAR_BACKUP_FILE}")" | tee -a "${TAR_BACKUP_LOG}"
+    rm "${TAR_BACKUP_LOCK}"
+  fi
+
+  if [ ${TAR_BACKUP_ERROR} -eq 0 ]; then
+    # Verify
+    tar -tzf "${TAR_BACKUP_FILE}" > /dev/null
+    [ $? -ne 0 ] && _WARNING "Verification failed" | tee -a "${TAR_BACKUP_LOG}"
+
+    # Update timestamps
+    echo "${TAR_BACKUP_NOW}" > "${TAR_BACKUP_DST}.tar-backup.incremental.ts"
+  fi
+  ;;
+
+
+ diff|differential)
+  # Parameters
+  [ ! -r "${TAR_BACKUP_DST}.tar-backup.full.ts" ] && _ERROR "Failed to retrieve last backup parameters (timestamp)" | tee -a "${TAR_BACKUP_LOG}" && TAR_BACKUP_ERROR=1
+
+  if [ ${TAR_BACKUP_ERROR} -eq 0 ]; then
+    # Perform backup
+    touch "${TAR_BACKUP_LOCK}"
+    TAR_BACKUP_LAST="$(cat "${TAR_BACKUP_DST}.tar-backup.full.ts")"
+    TAR_BACKUP_DO="tar -cS --label '${TAR_BACKUP_LBL}' --directory '${TAR_BACKUP_ROOT}' --newer '${TAR_BACKUP_LAST}' ${TAR_BACKUP_OPT} ${TAR_BACKUP_SRC} | gzip -9; exit \${PIPESTATUS[0]}"
+    ${TAR_BACKUP_CMD} "${TAR_BACKUP_DO}" 2> /tmp/$$.stderr > "${TAR_BACKUP_FILE}"
+    e=$?
+    cat /tmp/$$.stderr | tee -a "${TAR_BACKUP_LOG}"; rm /tmp/$$.stderr
+    [ ${e} -ge 2 ] && TAR_BACKUP_ERROR=1
+    [ ${e} -eq 1 ] && _WARNING "Some (non-critical) error occured during the backup process" | tee -a "${TAR_BACKUP_LOG}"
+    echo "$(ls -l "${TAR_BACKUP_FILE}")" | tee -a "${TAR_BACKUP_LOG}"
+    rm "${TAR_BACKUP_LOCK}"
+  fi
+
+  if [ ${TAR_BACKUP_ERROR} -eq 0 ]; then
+    # Verify
+    tar -tzf "${TAR_BACKUP_FILE}" > /dev/null
+    [ $? -ne 0 ] && _WARNING "Verification failed" | tee -a "${TAR_BACKUP_LOG}"
+  fi
+  ;;
+
+esac
+
+# End
+if [ ${TAR_BACKUP_ERROR} -eq 0 ]; then 
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${TAR_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${TAR_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${TAR_BACKUP_LOG}"
+exit 0
