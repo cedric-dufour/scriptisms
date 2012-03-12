@@ -1,0 +1,231 @@
+#!/bin/bash
+
+# Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF >&2 && exit 3
+USAGE: ${0##*/} [<option> ...] <directory> [<directory> ...]
+
+SYSNOPSIS:
+  Recursively compute and save/verify the checksum for the given directory.
+  The checksum information will be saved in the '.dircksum' file within that
+  directory.
+
+OPTIONS:
+  -v, --verbose :
+    Display computing progress (on 'stdout').
+
+  -s, --silent :
+    Display only warnings and errors (on 'stderr').
+
+  -t, --trust :
+    Trust and use existing checksums ('.dircksum' contents) without verification
+    (existing checksums will not be compared to the re-computed checksums).
+    This mode is useful to complete an interrupted checksumming.
+    WARNING: If the corresponding directory has become corrupted, it will NOT
+             be detected!
+
+  -r, --read-only :
+    Perform a read-only checksum verification, without saving new/missing
+    checksums.
+
+  -d, --delete
+    Delete the checksum file from the given directory and all the parent arbo-
+    rescence.
+    This command is useful when a directory has been modified and its checksum
+    must be computed again (using the 'trust' mode).
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+EXIT=0
+VERBOSE=
+SILENT=
+TRUST=
+READONLY=
+DELETE=
+
+# Checks
+[ -z "$(which cksum)" ] && echo 'ERROR: Missing checksumming binary (cksum)' >&2 && exit 2
+
+# Trap signals
+# ... SIGINT (CTRL-C)
+trap 'echo "WARNING: Caught SIGINT!" >&2; exit 1' INT
+# ... SIGTERM (kill)
+trap 'echo "WARNING: Caught SIGTERM!" >&2; exit 1' TERM
+# ... SIGUSR1, SIGUSR2
+trap 'echo "INFO: Computing checksum for directory (${DIRECTORY})..."' USR1 USR2
+
+
+## Functions
+
+# Exit
+function _exit {
+  [ ${1} -gt ${EXIT} ] && EXIT=${1}
+}
+
+# Directory checksum
+function _dircksum {
+  # Arguments
+  local DIRECTORY="${1}"
+
+  # Compute checksum
+  [ -n "${VERBOSE}" ] && echo "INFO: Computing checksum for directory (${DIRECTORY})..."
+  local __dircksum; local __cksum=''; local __dirs=0; local __files=0; local __size=0; local __exit=0
+  IFS=$'\n'
+
+  # ... recurse sub-directories
+  local __subdir
+  for __subdir in $(find "${DIRECTORY}" -mindepth 1 -maxdepth 1 -type d | sort); do
+    if [ -e "${__subdir}/.dircksum" ] && [ -n "${TRUST}" ]; then
+      [ -z "${SILENT}" ] && echo "INFO: Trusting/using existing checksum WITHOUT VERIFICATION (${__subdir})"
+      continue
+    fi
+    _dircksum "${__subdir}"
+    [ ${EXIT} -ne 0 ] && [ -z "${READONLY}" ] && return ${EXIT}
+  done
+
+  # ... necessary to loose CPU cycles?
+  if [ -n "${READONLY}" ]; then
+    if [ ! -e "${DIRECTORY}/.dircksum" ]; then
+      echo "WARNING: Missing checksum file; can not verify checksum (${DIRECTORY})" >&2
+      _exit 1; return ${EXIT}
+    elif [ ! -r "${DIRECTORY}/.dircksum" ]; then
+      echo "WARNING: Unreadable checksum file; can not verify checksum (${DIRECTORY})" >&2
+      _exit 1; return ${EXIT}
+    fi
+  fi
+
+  # ... extract checksum from sub-directories 'dircksum' file
+  __dircksum=$( ( find "${DIRECTORY}" -mindepth 1 -maxdepth 1 -type d | sort | sed 's/\/*$/\/.dircksum/' | xargs -d'\n' -r -n 1000 fgrep -h 'DIRCKSUM' ) | awk '{ if (NR==1) { CKSUM=$1; SIZE=$2; DIRS=$3+1; FILES=$4 } else { CKSUM=CKSUM":"$1; SIZE+=$2; DIRS+=$3+1; FILES+=$4 } }; END { if (NR>0) { printf "%s %.f %.f %.f\n",CKSUM,SIZE,DIRS,FILES } }'; exit ${PIPESTATUS[0]} ); __exit=$?
+  if [ ${__exit} -ne 0 ]; then
+    echo "ERROR: An error occured while reading the sub-directories checksum (${__exit})" >&2
+    if [ -z "${READONLY}" ]; then
+      _exit 2; return ${EXIT}
+    fi
+  fi
+  if [ -n "${__dircksum}" ]; then
+    #echo "DEBUG: ${__dircksum}"
+    __cksum=${__cksum}${__cksum:+:}${__dircksum%% *}; __dircksum=${__dircksum#* }
+    __size=$(( ${__size} + ${__dircksum%% *} )); __dircksum=${__dircksum#* }
+    __dirs=$(( ${__dirs} + ${__dircksum%% *} )); __dircksum=${__dircksum#* }
+    __files=$(( ${__files} + ${__dircksum%% *} ))
+  fi
+
+  # ... compute checksum for files in current directory
+  __filecksum="$( ( find "${DIRECTORY}" -mindepth 1 -maxdepth 1 -type f -not -name '.dircksum' | sort | xargs -d'\n' -r -n 1000 cksum ) | sed 's|^\([^ ]*\) \([^ ]*\) \(.*\/\)\([^/]*\)$|\1 \2 \4|'; exit ${PIPESTATUS[0]} )"; __exit=$?
+  if [ ${__exit} -ne 0 ]; then
+    echo "ERROR: An error occured while performing the files checksum (${__exit})" >&2
+    if [ -z "${READONLY}" ]; then
+      _exit 2; return ${EXIT}
+    fi
+  fi
+  if [ -n "${__filecksum}" ]; then
+    __dircksum=$( echo "${__filecksum}" | awk '{ if (NR==1) { CKSUM=$1; SIZE=$2; FILES=1 } else { CKSUM=CKSUM":"$1; SIZE+=$2; FILES+=1 } }; END { if (NR>0) { printf "%s %.f %.f\n",CKSUM,SIZE,FILES } }' )
+    #echo "DEBUG: ${__dircksum}"
+    __cksum=${__cksum}${__cksum:+:}${__dircksum%% *}; __dircksum=${__dircksum#* }
+    __size=$(( ${__size} + ${__dircksum%% *} )); __dircksum=${__dircksum#* }
+    __files=$(( ${__files} + ${__dircksum%% *} ))
+  fi
+
+  # ... check/save checksum
+  __cksum=$(echo "${__cksum}" | cksum | cut -d' ' -f1)
+  if [ ! -e "${DIRECTORY}/.dircksum" ]; then
+    [ -z "${SILENT}" ] && echo "INFO: Checksum saved (${DIRECTORY})"
+     cat << EOF > "${DIRECTORY}/.dircksum"
+# CKSUM[cksum] SIZE[bytes] DIRS[count] FILES[count] DATE[iso]
+${__cksum} ${__size} ${__dirs} ${__files} $(date +'%Y%m%dT%H%M%S') # DIRCKSUM
+# CKSUK[cksum] SIZE[bytes] FILE[name]
+${__filecksum}
+EOF
+    [ $? -ne 0 ] && echo "ERROR: Failed to save checksum file (${DIRECTORY}/.dircksum)" >&2 && _exit 2 && return ${EXIT}
+  elif [ ! -r "${DIRECTORY}/.dircksum" ]; then
+    echo "WARNING: Unreadable checksum file (${DIRECTORY}/.dircksum)" >&2
+    _exit 1; return ${EXIT}
+  else
+    __dircksum=$(fgrep -h 'DIRCKSUM' "${DIRECTORY}/.dircksum")
+    local __cksum_check=${__dircksum%% *}; __dircksum=${__dircksum#* }
+    local __size_check=${__dircksum%% *}; __dircksum=${__dircksum#* }
+    local __dirs_check=${__dircksum%% *}; __dircksum=${__dircksum#* }
+    local __files_check=${__dircksum%% *}
+    if [ "${__cksum_check}" != "${__cksum}" -o "${__size_check}" != "${__size}" -o "${__dirs_check}" != "${__dirs}" -o "${__files_check}" != "${__files}" ]; then
+      #echo "DEBUG: ${__cksum} ${__size} ${__dirs} ${__files} <-> ${__cksum_check} ${__size_check} ${__dirs_check} ${__files_check}" >&2
+      echo "ERROR: Checksum MISMATCH (${DIRECTORY})" >&2 && _exit 2; return ${EXIT}
+    else
+      [ -z "${SILENT}" ] && echo "INFO: Checksum OK (${DIRECTORY})"
+    fi
+  fi
+
+  # Done
+  return ${EXIT}
+}
+
+# Delete checksum
+function _delete {
+  # Arguments
+  local DIRECTORY="${1}"
+
+  # Delete checksum
+  if [ -e "${DIRECTORY}/.dircksum" ]; then
+    [ -z "${SILENT}" ] && echo "INFO: Checksum deleted (${DIRECTORY})"
+    rm "${DIRECTORY}/.dircksum"
+  fi
+  [ -e "${DIRECTORY}/.dircksum" ] && echo 'ERROR: Failed to delete existing checksum (${DIRECTORY})' >&2 && _exit 2
+
+  # Crawl up
+  local DIRECTORY_NEW="$(dirname "${DIRECTORY}")"
+  [ "${DIRECTORY_NEW}" != "${DIRECTORY}" ] && _delete "${DIRECTORY_NEW}"
+}
+
+# Main
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-v'|'--verbose')
+      VERBOSE='yes'
+      SILENT=
+      ;;
+    '-s'|'--silent')
+      SILENT='yes'
+      VERBOSE=
+      ;;
+    '-t'|'--trust')
+      TRUST='yes'
+      READONLY=
+      DELETE=
+      ;;
+    '-r'|'--read-only')
+      READONLY='yes'
+      TRUST=
+      DELETE=
+      ;;
+    '-d'|'--delete')
+      DELETE='yes'
+      TRUST=
+      READONLY=
+      ;;
+    *)
+      if [ "${1:0:1}" == '-' ]; then
+        echo "WARNING: Invalid option (${1})" >&2
+      else
+        DIRECTORY="${1%%/}"
+        [ -z "${DIRECTORY}" ] && echo 'ERROR: Please specify a directory' >&2 && exit 2
+        [ ! -d "${DIRECTORY}" ] && echo "ERROR: Missing/invalid directory (${DIRECTORY})" >&2 && exit 2
+        if [ -n "${DELETE}" ]; then
+          pushd "${DIRECTORY}" >/dev/null
+          DIRECTORY="$(pwd)"
+          popd >/dev/null
+          _delete "${DIRECTORY}"
+        else
+          _dircksum "${DIRECTORY}"
+        fi
+        [ ${EXIT} -ne 0 ] && [ -z "${READONLY}" -a -z "${DELETE}" ] && exit ${EXIT}
+      fi
+      ;;
+  esac
+  shift
+done
+
+# Done
+[ ${EXIT} -ne 0 ] && echo "WARNING: Non-zero exit code (${EXIT})" >&2
+exit ${EXIT}
+

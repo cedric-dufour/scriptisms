@@ -1,6 +1,12 @@
 Utilities for Linux Systems Administration and Daily Use
 ========================================================
 
+dircksum
+--------
+Recursively compute and save/verify the checksum for the given directory.
+The checksum information will be saved in the '.dircksum' file within that
+directory.
+
 kvm-helper
 ----------
 Launch a KVM virtual server (guest) with appropriate options for the
