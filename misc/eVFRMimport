@@ -18,13 +18,18 @@ OPTIONS:
       the output image resolution allows over-sampling of the input image
       and anti-aliasing to kick in the conversion process.
 
-  -h, --html-template  HTML template used to replace the PDF file
-      Any included '%FILE%' and '%PAGES%' anchors will be replaced with the
-      approriate corresponding values.
-      If not specified, the built-in template will be used.
-
   -p, --include-pdf    Include original PDF file along the HTML/PNG output
 
+  -cs, --charset       Filesystem character encoding [default:UTF-8]
+
+  -nf, --no-frameset   Do not use FRAMESET in generated HTML
+
+  -h, --html-template  HTML template used to replace the PDF file
+      Any included '%FILE%', '%ID%' and '%PAGES%' anchors will be replaced
+      with the approriate corresponding values.
+      If not specified, the built-in template will be used.
+
+  -l, --lean-ui        Use custom 'left-hand' HTML for a leaner user-interface
 AUTHOR:
   Cedric Dufour - http://cedric.dufour.name
 EOF
@@ -33,21 +38,32 @@ EOF
 IMG_DPI=120
 PDF_DPI=
 PDF_INCL=
+CHARSET='UTF-8'
+HTML_NOFRM=
 HTML_TMPL=
+HTML_LEAN=
+SRC_DIR=
+DST_DIR=
 while [ -n "${1}" ]; do
   case "${1}" in
     '-d'|'--output-dpi')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-d)' >&2 && exit 1; IMG_DPI="${1}";;
     '-D'|'--input-dpi')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-D)' >&2 && exit 1; PDF_DPI="${1}";;
-    '-h'|'--html-template')
-      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-h)' >&2 && exit 1; HTML_TMPL="${1}";;
     '-p'|'--include-pdf')
       PDF_INCL='yes';;
+    '-cs'|'--charset')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-cs)' >&2 && exit 1; CHARSET="${1}";;
+    '-nf'|'--no-frameset')
+      HTML_NOFRM='yes';;
+    '-h'|'--html-template')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-h)' >&2 && exit 1; HTML_TMPL="${1}";;
+    '-l'|'--lean-ui')
+      HTML_LEAN='yes';;
     *)
       if [ -z "${SRC_DIR}" ]; then SRC_DIR="${1}"
       elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
-      else echo 'ERROR: Invalid (extra) argument' >&2 && exit 1
+      else echo 'ERROR: Invalid (extra) argument (${1})' >&2 && exit 1
       fi
       ;;
   esac
@@ -64,6 +80,7 @@ SRC_DIR=${SRC_DIR%%/}
 DST_DIR=${DST_DIR%%/}
 [ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid source directory (${SRC_DIR})" >&2 && exit 1
 [ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unable to read from source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -e "${SRC_DIR}/eVFRM_list.xml" ] && echo "ERROR[$$]: Missing 'eVFRM_list.xml' in source directory (${SRC_DIR})" >&2 && exit 1
 [ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
 [ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
 
@@ -117,7 +134,7 @@ IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -type f | sort); do
   echo "INFO[$$]: Importing ${p_src} -> ${p_dst}"
   case "${e_src}" in
     'pdf'|'PDF')
-      pdf2html -d ${IMG_DPI} -D ${PDF_DPI} ${HTML_TMPL:+-h ${HTML_TMPL}} ${PDF_INCL:+-p} "${p_src}" "${d_dst}"
+      pdf2html -d ${IMG_DPI} -D ${PDF_DPI} ${PDF_INCL:+-p} ${CHARSET:+-cs} ${CHARSET:+${CHARSET}} ${HTML_NOFRM:+-nf} ${HTML_TMPL:+-h} ${HTML_TMPL:+${HTML_TMPL}} "${p_src}" "${d_dst}"
       ;;
     *)
       cp "${p_src}" "${p_dst}"
@@ -128,22 +145,39 @@ done
 
 # Finalize
 atomic_begin
-if [ ! -e "${DST_DIR}/.finalized" ]; then
-  touch "${DST_DIR}/.finalized"
+if [ ! -e "${DST_DIR}/index.html" ]; then
+  touch "${DST_DIR}/index.html"
   atomic_end
 
   echo "INFO[$$]: Fixing browsing menus..."
   find "${DST_DIR}" -name 'tree_items_*.js' -exec sed -i 's/\.pdf/.html/g' {} \;
 
-  eVFRM_xml="$(find "${DST_DIR}" -name 'eVFRM_list.xml')"
-  if [ -n "${eVFRM_xml}" ]; then
-    echo "INFO[$$]: Creating top-level index..."
-    eVFRM_index="${eVFRM_xml%/*}/index.html"
-    cat << EOF > "${eVFRM_index}"
+  echo "INFO[$$]: Creating top-level index..."
+  subdir="$(fgrep -i '<eAip wef=' "${SRC_DIR}/eVFRM_list.xml" | sort | tail -n 1 | sed 's/.*<eAip wef="//;s/".*//')"
+  cat << EOF > "${DST_DIR}/index.html"
 <HTML>
 <HEAD>
-<META HTTP-EQUIV="REFRESH" CONTENT="0; url=./$(fgrep -i '<eAip wef=' ${eVFRM_xml} | sort | tail -n 1 | sed 's/.*<eAip wef="//;s/".*//')/index.html" />
+<META HTTP-EQUIV="REFRESH" CONTENT="0; url=./${subdir}/index.html" />
 </HEAD>
+</HTML>
+EOF
+
+  if [ -n "${HTML_LEAN}" ]; then
+    echo "INFO[$$]: Creating lean index..."
+    cat << EOF > "${DST_DIR}/${subdir}/index.html"
+<HTML>
+<HEAD>
+  <META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8" />
+  <TITLE>eVFR Manual (${subdir})</title>
+</HEAD>
+<FRAMESET COLS="240,*">
+<FRAMESET ROWS="0,23,*" BORDER="0">
+<FRAME NAME="eAISCommands" SRC="./html/commands.html" SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
+<FRAME NAME="menu" ID="menu" SRC="./html/menu.html" SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
+<FRAME NAME="navigation" ID="navigation" SRC="./html/navigation.html" SCROLLING="yes" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
+</FRAMESET>
+<FRAME NAME="VfrmMain" ID="VfrmMain" SRC="./html/cover.html"/>
+</FRAMESET>
 </HTML>
 EOF
   fi
