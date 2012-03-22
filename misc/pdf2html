@@ -15,12 +15,16 @@ OPTIONS:
       the output image resolution allows over-sampling of the input image
       and anti-aliasing to kick in the conversion process.
 
-  -h, --html-template  HTML template used to replace the PDF file
-      Any included '%FILE%' and '%PAGES%' anchors will be replaced with the
-      approriate corresponding values.
-      If not specified, the built-in template will be used.
-
   -p, --include-pdf    Include original PDF file along the HTML/PNG output
+
+  -cs, --charset       Filesystem character encoding [default:UTF-8]
+
+  -nf, --no-frameset   Do not use FRAMESET in generated HTML
+
+  -h, --html-template  HTML template used to replace the PDF file
+      Any included '%FILE%', '%ID%' and '%PAGES%' anchors will be replaced with
+      the approriate corresponding values.
+      If not specified, the built-in template will be used.
 
 AUTHOR:
   Cedric Dufour - http://cedric.dufour.name
@@ -30,21 +34,29 @@ EOF
 IMG_DPI=120
 PDF_DPI=
 PDF_INCL=
+CHARSET='UTF-8'
+HTML_NOFRM=
 HTML_TMPL=
+SRC_PDF=
+DST_DIR=
 while [ -n "${1}" ]; do
   case "${1}" in
     '-d'|'--output-dpi')  
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-d)' >&2 && exit 1; IMG_DPI="${1}";;
     '-D'|'--input-dpi')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-D)' >&2 && exit 1; PDF_DPI="${1}";;
-    '-h'|'--html-template')
-      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-h)' >&2 && exit 1; HTML_TMPL="${1}";;
     '-p'|'--include-pdf')
       PDF_INCL='yes';;
+    '-cs'|'--charset')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-cs)' >&2 && exit 1; CHARSET="${1}";;
+    '-nf'|'--no-frameset')
+      HTML_NOFRM='yes';;
+    '-h'|'--html-template')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-h)' >&2 && exit 1; HTML_TMPL="${1}";;
     *)
       if [ -z "${SRC_PDF}" ]; then SRC_PDF="${1}"
       elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
-      else echo 'ERROR: Invalid (extra) argument' >&2 && exit 1
+      else echo "ERROR: Invalid (extra) argument (${1})" >&2 && exit 1
       fi
       ;;
   esac
@@ -66,6 +78,7 @@ DST_DIR="${DST_DIR%%/}"
 f_dst="${SRC_PDF##*/}"
 p_dst="${DST_DIR}/${f_dst}"
 f_dst_prefix="${f_dst%.*}"
+f_dst_id="$(echo ${f_dst_prefix} | cksum | cut -d' ' -f1)"
 p_dst_prefix="${DST_DIR}/${f_dst_prefix}"
 [ "${PDF_INCL}" == 'yes' ] && cp "${SRC_PDF}" "${p_dst}"
 [ ! -e "${p_dst_prefix}" ] && mkdir "${p_dst_prefix}"
@@ -78,15 +91,17 @@ convert -density ${PDF_DPI} "${SRC_PDF}" -filter blackman ${resize} -define png:
 pages_pdf="$(ls -1 "${p_dst_prefix}"/*.png | wc -l)"
 if [ -n "${HTML_TMPL}" ]; then
   cp "${HTML_TMPL}" "${p_dst_prefix}.html"
-  sed -i "s|%FILE%|${f_dst_prefix}|g;s|%PAGES%|${pages_pdf}|g" "${p_dst_prefix}.html"
-else
+  sed -i "s|%FILE%|${f_dst_prefix}|g;s|%ID%|${f_dst_id}|g;s|%PAGES%|${pages_pdf}|g" "${p_dst_prefix}.html"
+elif [ -n "${HTML_NOFRM}" ]; then
   cat << EOF > "${p_dst_prefix}.html"
 <HTML>
 <HEAD>
+<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=${CHARSET}" />
+<TITLE>${f_dst_prefix}</TITLE>
 <STYLE TYPE="text/css">
-BODY {WIDTH:100%;MARGIN:5px;}
-TABLE {MARGIN:auto;FONT:12px sans-serif;}
-TD {PADDING:0px 1px;TEXT-ALIGN:center;}
+BODY {MARGIN:5px;}
+TABLE {FONT:12px sans-serif;}
+TD {PADDING:0px 1px;}
 SELECT {FONT:12px sans-serif;BORDER:solid 1px #000000;}
 A {COLOR:#000000;TEXT-DECORATION:none;}
 A:hover {FONT-WEIGHT:bold;}
@@ -121,6 +136,63 @@ ${PDF_INCL/yes/<TD>&nbsp;</TD><TD>(<A HREF="${f_dst}">pdf</A>)</TD>}
 </TR></TABLE>
 <TABLE CELLSPACING="0" BORDER="0"><TR>
 <TD><IMG ID="page"/></TD>
+</TR></TABLE>
+</BODY>
+</HTML>
+EOF
+else
+  cat << EOF > "${p_dst_prefix}.html"
+<HTML>
+<HEAD>
+<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=${CHARSET}" />
+<TITLE>${f_dst_prefix}</TITLE>
+</HEAD>
+<FRAMESET ROWS="25,*" BORDER="0">
+<FRAME FRAMEBORDER="0" SCROLLING="no" NORESIZE SRC="${f_dst_prefix}_top.html" />
+<FRAME NAME="PDF_${f_dst_id}_page" FRAMEBORDER="0" SCROLLING="auto" />
+</FRAMESET>
+</HTML>
+EOF
+  cat << EOF > "${p_dst_prefix}_top.html"
+<HTML>
+<HEAD>
+<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=${CHARSET}" />
+<TITLE>${f_dst_prefix}</TITLE>
+<STYLE TYPE="text/css">
+BODY {MARGIN:5px;}
+TABLE {FONT:12px sans-serif;}
+TD {PADDING:0px 1px;}
+SELECT {FONT:12px sans-serif;BORDER:solid 1px #000000;}
+A {COLOR:#000000;TEXT-DECORATION:none;}
+A:hover {FONT-WEIGHT:bold;}
+A:visited {COLOR:#000000;}
+</STYLE>
+<SCRIPT TYPE="text/javascript">
+var pFile='${f_dst_prefix}/img';
+var pPages=${pages_pdf};
+var oGoto=null;
+var oImg=null;
+function init() {
+  oGoto=document.getElementById('goto');
+  oPage=parent.PDF_${f_dst_id}_page;
+  for(i=0;i<pPages;i++) oGoto.options[i]=new Option(i+1);
+}
+function show(p) {
+  if(p<0) p=0; else if(p>=pPages) p=pPages-1;
+  oPage.location.replace( pPages>1 ? pFile+'-'+p+'.png' : pFile+'.png' );
+  oGoto.selectedIndex=p;
+}
+</SCRIPT>
+</HEAD>
+<BODY ONLOAD="javascript:init();show(0);">
+<TABLE CELLSPACING="0" BORDER="0"><TR>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(0);">&lt;&lt;</A></TD>
+<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex-1);">&lt;</A></TD>
+<TD>&nbsp;</TD><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD>
+<TD>/</TD><TD>${pages_pdf}</TD>
+<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&gt;</A></TD>
+<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&gt;&gt;</A></TD>
+${PDF_INCL/yes/<TD>&nbsp;</TD><TD>(<A HREF="${f_dst}">pdf</A>)</TD>}
 </TR></TABLE>
 </BODY>
 </HTML>
