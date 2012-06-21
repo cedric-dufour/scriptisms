@@ -36,8 +36,6 @@ while [ -n "${1}" ]; do
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--lameopts)' >&2 && exit 1; LAME_OPTS="${1}";;
     '-c'|'--comment')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--comment)' >&2 && exit 1; LAME_COMMENT="${1}";;
-    '-p'|'--include-pdf')
-      PDF_INCL='yes';;
     *)
       if [ -z "${SRC_DIR}" ]; then SRC_DIR="${1}"
       elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
