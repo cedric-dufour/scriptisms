@@ -181,6 +181,9 @@ EOF
 </HTML>
 EOF
   fi
+
+  echo "INFO[$$]: Tagging folder as non-media content for Android"
+  touch "${DST_DIR}/.nomedia"
 fi
 atomic_end
 
