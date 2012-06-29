@@ -100,12 +100,14 @@ elif [ -n "${HTML_NOFRM}" ]; then
 <TITLE>${f_dst_prefix}</TITLE>
 <STYLE TYPE="text/css">
 BODY {MARGIN:5px;}
-TABLE {FONT:12px sans-serif;}
-TD {PADDING:0px 1px;}
-SELECT {FONT:12px sans-serif;BORDER:solid 1px #000000;}
-A {COLOR:#000000;TEXT-DECORATION:none;}
-A:hover {FONT-WEIGHT:bold;}
-A:visited {COLOR:#000000;}
+DIV.pdf TABLE {MARGIN:0px;FONT:12px sans-serif;BORDER:none;BORDER-COLLAPSE:collapse;}
+DIV.pdf TD {PADDING:0px;}
+DIV.pdf TABLE.nav TD {PADDING:0px 10px;FONT-SIZE:20px;}
+DIV.pdf TABLE.sel TD {PADDING:0px 2px;FONT-SIZE:16px;}
+DIV.pdf SELECT {FONT:16px sans-serif;BORDER:solid 1px #000000;}
+DIV.pdf A {PADDING:0px 10px;COLOR:#000000;TEXT-DECORATION:none;}
+DIV.pdf A:hover {FONT-WEIGHT:bold;}
+DIV.pdf A:visited {COLOR:#000000;}
 </STYLE>
 <SCRIPT TYPE="text/javascript">
 var pFile='${f_dst_prefix}/img';
@@ -125,18 +127,17 @@ function show(p) {
 </SCRIPT>
 </HEAD>
 <BODY ONLOAD="javascript:init();show(0);">
-<TABLE CELLSPACING="0" BORDER="0"><TR>
-<TD><A HREF="javascript:;" ONCLICK="javascript:show(0);">&lt;&lt;</A></TD>
-<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex-1);">&lt;</A></TD>
-<TD>&nbsp;</TD><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD>
-<TD>/</TD><TD>${pages_pdf}</TD>
-<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&gt;</A></TD>
-<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&gt;&gt;</A></TD>
-${PDF_INCL/yes/<TD>&nbsp;</TD><TD>(<A HREF="${f_dst}">pdf</A>)</TD>}
+<DIV CLASS="pdf">
+<TABLE CLASS="nav"><TR>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(0);">&laquo;</A></TD>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex-1);">&lsaquo;</A></TD>
+<TD><TABLE CLASS="sel"><TR><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD><TD>/</TD><TD>${pages_pdf}</TD></TR></TABLE></TD>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&rsaquo;</A></TD>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&raquo;</A></TD>
+${PDF_INCL/yes/<TD><A HREF="${f_dst}">&nabla;</A></TD>}
 </TR></TABLE>
-<TABLE CELLSPACING="0" BORDER="0"><TR>
-<TD><IMG ID="page"/></TD>
-</TR></TABLE>
+<TABLE><TR><TD><IMG ID="page"/></TD></TR></TABLE>
+</DIV>
 </BODY>
 </HTML>
 EOF
@@ -147,7 +148,7 @@ else
 <META HTTP-EQUIV="content-type" CONTENT="text/html; charset=${CHARSET}" />
 <TITLE>${f_dst_prefix}</TITLE>
 </HEAD>
-<FRAMESET ROWS="25,*" BORDER="0">
+<FRAMESET ROWS="30,*" BORDER="0">
 <FRAME FRAMEBORDER="0" SCROLLING="no" NORESIZE SRC="${f_dst_prefix}_top.html" />
 <FRAME NAME="PDF_${f_dst_id}_page" FRAMEBORDER="0" SCROLLING="auto" />
 </FRAMESET>
@@ -160,12 +161,14 @@ EOF
 <TITLE>${f_dst_prefix}</TITLE>
 <STYLE TYPE="text/css">
 BODY {MARGIN:5px;}
-TABLE {FONT:12px sans-serif;}
-TD {PADDING:0px 1px;}
-SELECT {FONT:12px sans-serif;BORDER:solid 1px #000000;}
-A {COLOR:#000000;TEXT-DECORATION:none;}
-A:hover {FONT-WEIGHT:bold;}
-A:visited {COLOR:#000000;}
+DIV.pdf TABLE {MARGIN:0px;FONT:12px sans-serif;BORDER:none;BORDER-COLLAPSE:collapse;}
+DIV.pdf TD {PADDING:0px;}
+DIV.pdf TABLE.nav TD {PADDING:0px 10px;FONT-SIZE:20px;}
+DIV.pdf TABLE.sel TD {PADDING:0px 2px;FONT-SIZE:16px;}
+DIV.pdf SELECT {FONT:16px sans-serif;BORDER:solid 1px #000000;}
+DIV.pdf A {PADDING:0px 10px;COLOR:#000000;TEXT-DECORATION:none;}
+DIV.pdf A:hover {FONT-WEIGHT:bold;}
+DIV.pdf A:visited {COLOR:#000000;}
 </STYLE>
 <SCRIPT TYPE="text/javascript">
 var pFile='${f_dst_prefix}/img';
@@ -185,15 +188,16 @@ function show(p) {
 </SCRIPT>
 </HEAD>
 <BODY ONLOAD="javascript:init();show(0);">
-<TABLE CELLSPACING="0" BORDER="0"><TR>
-<TD><A HREF="javascript:;" ONCLICK="javascript:show(0);">&lt;&lt;</A></TD>
-<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex-1);">&lt;</A></TD>
-<TD>&nbsp;</TD><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD>
-<TD>/</TD><TD>${pages_pdf}</TD>
-<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&gt;</A></TD>
-<TD>&nbsp;</TD><TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&gt;&gt;</A></TD>
-${PDF_INCL/yes/<TD>&nbsp;</TD><TD>(<A HREF="${f_dst}">pdf</A>)</TD>}
+<DIV CLASS="pdf">
+<TABLE CLASS=nav><TR>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(0);">&laquo;</A></TD>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex-1);">&lsaquo;</A></TD>
+<TD><TABLE CLASS="sel"><TR><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD><TD>/</TD><TD>${pages_pdf}</TD></TR></TABLE></TD>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&rsaquo;</A></TD>
+<TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&raquo;</A></TD>
+${PDF_INCL/yes/<TD><A HREF="${f_dst}">&nabla;</A></TD>}
 </TR></TABLE>
+</DIV>
 </BODY>
 </HTML>
 EOF
