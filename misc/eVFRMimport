@@ -149,11 +149,15 @@ if [ ! -e "${DST_DIR}/index.html" ]; then
   touch "${DST_DIR}/index.html"
   atomic_end
 
+  subdir="$(fgrep -i '<eAip wef=' "${SRC_DIR}/eVFRM_list.xml" | sort | tail -n 1 | sed 's/.*<eAip wef="//;s/".*//')"
+
+  echo "INFO[$$]: Fixing broken links..."
+  sed -i 's|href="../../../index.html" target="_top"|href="http://www.skyguide.ch/" target="_top"|' "${DST_DIR}/${subdir}/html/commands.html"
+
   echo "INFO[$$]: Fixing browsing menus..."
   find "${DST_DIR}" -name 'tree_items_*.js' -exec sed -i 's/\.pdf/.html/g' {} \;
 
   echo "INFO[$$]: Creating top-level index..."
-  subdir="$(fgrep -i '<eAip wef=' "${SRC_DIR}/eVFRM_list.xml" | sort | tail -n 1 | sed 's/.*<eAip wef="//;s/".*//')"
   cat << EOF > "${DST_DIR}/index.html"
 <HTML>
 <HEAD>
@@ -174,11 +178,14 @@ EOF
 <FRAMESET ROWS="0,23,*" BORDER="0">
 <FRAME NAME="eAISCommands" SRC="./html/commands.html" SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
 <FRAME NAME="menu" ID="menu" SRC="./html/menu.html" SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
-<FRAME NAME="navigation" ID="navigation" SRC="./html/navigation.html" SCROLLING="yes" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
+<FRAME NAME="navigation" ID="navigation" SRC="./html/navigation.html" SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
 </FRAMESET>
 <FRAME NAME="VfrmMain" ID="VfrmMain" SRC="./html/cover.html"/>
 </FRAMESET>
 </HTML>
+EOF
+    cat << EOF >> "${DST_DIR}/${subdir}/styles/commands.css"
+BODY.commands TABLE { VISIBILITY:hidden; }
 EOF
   fi
 
