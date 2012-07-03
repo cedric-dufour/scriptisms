@@ -1,6 +1,11 @@
 Miscellaneous (Uncategorized) Stuff
 ===================================
 
+eVFRManual.apk
+--------------
+Android project tree used by eVFRMimport (see below) for packaging Skyguide
+eVFR Manual.
+
 eVFRMimport
 -----------
 Copy Skyguide eVFR Manual to the given destination directory, converting

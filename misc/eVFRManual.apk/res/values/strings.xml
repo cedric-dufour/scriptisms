@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">eVFR Manual</string>
+  <string name="menu_home">Home</string>
+  <string name="menu_version">Version</string>
+  <string name="menu_exit">Exit</string>
+</resources>
