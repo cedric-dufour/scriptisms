@@ -1,7 +1,9 @@
 package ch.skyguide.eVFRManual;
 
-import android.app.Activity;
+import android.os.Build;
 import android.os.Bundle;
+import android.app.Activity;
+import android.content.pm.ActivityInfo;
 import android.webkit.WebView;
 import android.webkit.WebSettings;
 import android.webkit.WebChromeClient;
@@ -25,9 +27,9 @@ public class eVFRManualActivity extends Activity
     myWebSettings = myWebView.getSettings();
     myWebSettings.setCacheMode( WebSettings.LOAD_NO_CACHE );
     myWebSettings.setJavaScriptEnabled( true );
-    //myWebSettings.setAllowFileAccessFromFileURLs( true ); // API >= 16
+    if( Build.VERSION.SDK_INT >= 16 ) myWebSettings.setAllowFileAccessFromFileURLs( true );
     myWebSettings.setLayoutAlgorithm( WebSettings.LayoutAlgorithm.NORMAL );
-    myWebSettings.setBuiltInZoomControls( true );
+    if( Build.VERSION.SDK_INT >= 3 ) myWebSettings.setBuiltInZoomControls( true );
     myWebSettings.setUseWideViewPort( true );
     myWebView.setWebChromeClient( new WebChromeClient() );
     myWebView.setWebViewClient( new WebViewClient() );
@@ -77,7 +79,13 @@ public class eVFRManualActivity extends Activity
       String version = "unknown";
       try { version = this.getPackageManager().getPackageInfo( this.getPackageName(), 0 ).versionName; }
       catch( android.content.pm.PackageManager.NameNotFoundException e ) {}
-      Toast.makeText( this, version, Toast.LENGTH_SHORT ).show();
+      Toast.makeText( this, "Skyguide eVFR Manual\nVersion: "+version, Toast.LENGTH_SHORT ).show();
+      return true;
+
+    case R.id.rotate:
+      this.setRequestedOrientation( this.getRequestedOrientation() == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ?
+                                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT :
+                                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE );
       return true;
 
     case R.id.exit:
