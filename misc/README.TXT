@@ -15,3 +15,7 @@ pdf2html
 --------
 Convert the given PDF file to HTML and PNG images for easier/faster browsing.
 
+xps2str
+-------
+Extract strings from given XPS file, located within given bounding frame.
+
