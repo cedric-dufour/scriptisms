@@ -8,12 +8,11 @@ SYNOPSIS:
   Convert the given PDF file to HTML and PNG images for easier/faster browsing.
 
 OPTIONS:
-  -d, --output-dpi     Output PNG images resolution (DPI) [default:120]
+  -d, --output-dpi     Output PNG images resolution (DPI) [default:150]
 
-  -D, --input-dpi      Input PDF resolution (DPI) [default:image-dpi]
-      For PDF document containing bitmap images, setting this option to 2-4x
-      the output image resolution allows over-sampling of the input image
-      and anti-aliasing to kick in the conversion process.
+  -s, --size           Output PNG images maximum width/height (pixels) [default:none]
+  -sx, --size-x        Output PNG images maximum width (pixels) [default:none]
+  -sy, --size-y        Output PNG images maximum height (pixels) [default:none]
 
   -p, --include-pdf    Include original PDF file along the HTML/PNG output
 
@@ -31,8 +30,9 @@ AUTHOR:
 EOF
 
 # Arguments
-IMG_DPI=120
-PDF_DPI=
+IMG_DPI=150
+IMG_X=
+IMG_Y=
 PDF_INCL=
 CHARSET='UTF-8'
 HTML_NOFRM=
@@ -43,8 +43,12 @@ while [ -n "${1}" ]; do
   case "${1}" in
     '-d'|'--output-dpi')  
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-d)' >&2 && exit 1; IMG_DPI="${1}";;
-    '-D'|'--input-dpi')
-      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-D)' >&2 && exit 1; PDF_DPI="${1}";;
+    '-s'|'--size')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-s)' >&2 && exit 1; IMG_X="${1}"; IMG_Y="${1}";;
+    '-sx'|'--size-x')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-sx)' >&2 && exit 1; IMG_X="${1}";;
+    '-sy'|'--size-y')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-sx)' >&2 && exit 1; IMG_Y="${1}";;
     '-p'|'--include-pdf')
       PDF_INCL='yes';;
     '-cs'|'--charset')
@@ -62,7 +66,6 @@ while [ -n "${1}" ]; do
   esac
   shift
 done
-[ -z "${PDF_DPI}" ] && PDF_DPI=${IMG_DPI}
 
 # Check dependencies
 [ -z "$(which convert)" ] && echo "ERROR[$$]: 'convert' cannot be found (ImageMagick)" >&2 && exit 1
@@ -84,10 +87,25 @@ p_dst_prefix="${DST_DIR}/${f_dst_prefix}"
 [ ! -e "${p_dst_prefix}" ] && mkdir "${p_dst_prefix}"
 [ ! -d "${p_dst_prefix}" ] && echo "ERROR[$$]: Failed to create destination directory (${p_dst_prefix})" >&2 && exit 1
 # NOTE:
-#  - Let's use and 8-bit palette and highest Zlib compression (with no adaptive filtering), which gives the best size/quality ratio for eVFRM PDF files
-#  - Let's allow over-sampling in order to cope with PDF containing bitmap images (and thus allow anti-aliasing nonetheless)
-[ ${PDF_DPI} == ${IMG_DPI} ] && resize='' || resize="-resize $(( 100 * ${IMG_DPI} / ${PDF_DPI} ))%"
-convert -density ${PDF_DPI} "${SRC_PDF}" -filter blackman ${resize} -define png:color-type=3 -define png:bit-depth=8 -type palette -quality 90 "${p_dst_prefix}/img.png" 2>/dev/null
+#  - Let's use Poppler 'pdftoppm' utility instead of 'convert' to perform PDF-to-image conversion (less buggy)
+#  - Let's use 'convert' to generate optimized PNG images based on 'pdftoppm' PPM output
+#  - Let's use and 8-bit palette and highest Zlib compression (with no adaptive filtering), which gives the best size/quality ratio for most PDF files
+resize=
+if [ -n "${IMG_X}" -o -n "${IMG_Y}" ]; then
+  if [ -n "${IMG_X}" -a -n "${IMG_Y}" ]; then
+    resize="-filter blackman -resize ${IMG_X}x${IMG_Y}>"
+  elif [ -n "${IMG_X}" ]; then
+    resize="-filter blackman -resize ${IMG_X}x999999>"
+  else
+    resize="-filter blackman -resize 999999x${IMG_Y}>"
+  fi
+fi
+pdftoppm -r ${IMG_DPI} -tiff -tiffcompression deflate "${SRC_PDF}" "${p_dst_prefix}/img" 2>/dev/null
+for src_img in "${p_dst_prefix}/img"*.tif; do
+  dst_img="$(echo "${src_img}" | sed 's/img-0*\([1-9][0-9]*\)\.tif/img-\1.png/')"
+  convert "${src_img}" -trim -fuzz 10% ${resize} -define png:color-type=3 -define png:bit-depth=8 -type palette -quality 90 "${dst_img}"
+  rm "${src_img}"
+done
 pages_pdf="$(ls -1 "${p_dst_prefix}"/*.png | wc -l)"
 if [ -n "${HTML_TMPL}" ]; then
   cp "${HTML_TMPL}" "${p_dst_prefix}.html"
@@ -121,7 +139,7 @@ function init() {
 }
 function show(p) {
   if(p<0) p=0; else if(p>=pPages) p=pPages-1;
-  oPage.src=( pPages>1 ? pFile+'-'+p+'.png' : pFile+'.png' );
+  oPage.src=( pFile+'-'+(p+1)+'.png' );
   oGoto.selectedIndex=p;
 }
 </SCRIPT>
@@ -182,7 +200,7 @@ function init() {
 }
 function show(p) {
   if(p<0) p=0; else if(p>=pPages) p=pPages-1;
-  oPage.location.replace( pPages>1 ? pFile+'-'+p+'.png' : pFile+'.png' );
+  oPage.location.replace( pFile+'-'+(p+1)+'.png' );
   oGoto.selectedIndex=p;
 }
 </SCRIPT>
@@ -195,7 +213,7 @@ function show(p) {
 <TD><TABLE CLASS="sel"><TR><TD><SELECT ID="goto" ONCHANGE="javascript:show(oGoto.selectedIndex);"></SELECT></TD><TD>/</TD><TD>${pages_pdf}</TD></TR></TABLE></TD>
 <TD><A HREF="javascript:;" ONCLICK="javascript:show(oGoto.selectedIndex+1);">&rsaquo;</A></TD>
 <TD><A HREF="javascript:;" ONCLICK="javascript:show(999999);">&raquo;</A></TD>
-${PDF_INCL/yes/<TD><A HREF="${f_dst}">&nabla;</A></TD>}
+${PDF_INCL/yes/<TD><A HREF="${f_dst}" TARGET="PDF_${f_dst_id}_page">&nabla;</A></TD>}
 </TR></TABLE>
 </DIV>
 </BODY>
