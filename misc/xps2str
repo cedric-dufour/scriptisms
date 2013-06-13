@@ -1,0 +1,66 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 5 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <xps-file> <X-min> <Y-min> <X-max> <Y-max>
+
+SYNOPSIS:
+  Extract the UnicodeString from the given XPS file, located within the
+  given OriginX and OriginY frame boundaries.
+
+  Output is a CSV file formatted as:
+      DOCUMENT | PAGE | INDEX | ORIGIN_X | ORIGIN_Y | UNICODE_STRING
+EOF
+
+
+## Arguments
+MY_XPS="${1}"; shift
+MY_X_MIN=$((${1}+0)); shift
+MY_Y_MIN=$((${1}+0)); shift
+MY_X_MAX=$((${1}+0)); shift
+MY_Y_MAX=$((${1}+0)); shift
+MY_TMPDIR=
+
+
+## Check
+[ ! -r "${MY_XPS}" ] && echo "ERROR: Invalid/unreadable XPS file (${MY_XPS})" >&2 && exit 1
+[ ${MY_X_MAX} -lt ${MY_X_MIN} -o ${MY_Y_MAX} -lt ${MY_Y_MIN} ] && echo "ERROR: Invalid frame boundaries (${MY_X_MIN} ${MY_Y_MIN} ${MY_X_MAX} ${MY_Y_MAX})" >&2 && exit 1 
+[ -z "$(which unzip)" ] && echo "ERROR: Missing 'unzip' utility" >&2 && exit 1
+[ -z "$(which xmllint)" ] && echo "ERROR: Missing 'xmllint' utility" >&2 && exit 1
+
+
+## Temporary directory
+MY_TMPDIR="$(mktemp -d)"
+[ ! -d "${MY_TMPDIR}" ] && echo 'ERROR: Failed to create temporary directory' >&2 && exit 1
+function __cleanup {
+  [ -n "${MY_TMPDIR}" ] && rm -rf "${MY_TMPDIR}"
+}
+
+## Trap signals
+trap '__cleanup; exit 1' INT TERM
+
+
+## Analyze XPS document
+IFS=$'\n'
+unzip -qq "${MY_XPS}" -d "${MY_TMPDIR}"
+[ $? -ne 0 ] && echo 'ERROR: Failed to decompress XPS file' && __cleanup && exit 1
+[ ! -d "${MY_TMPDIR}/Documents" ] && echo 'ERROR: Unexpected XPS content' && __cleanup && exit 1
+pushd "${MY_TMPDIR}/Documents" >/dev/null
+[ $? -ne 0 ] && echo 'ERROR: Failed to switch to XPS data directory (Documents)' && __cleanup && exit 1
+for document in *; do
+  pushd "${document}/Pages" >/dev/null
+  [ $? -ne 0 ] && echo 'ERROR: Failed to switch to XPS data directory (Pages)' && continue
+  for page in *.fpage; do
+    xmllint --xpath "//*[local-name()='Glyphs']" "${page}" | sed 's/\/>/\/>\n/g' | grep ' OriginX=.* OriginY=.* UnicodeString=' | sed 's/.*OriginX="\([^"]*\)".*OriginY="\([^"]*\)".*UnicodeString="\([^"]*\)".*/\1|\2|\3/' | awk -F'|' "BEGIN { OFS=\"|\"; PAGE=-1 }; { if( PAGE!=\"${page%.fpage}\" ) INDEX=1; PAGE=\"${page%.fpage}\"; if( \$1>=${MY_X_MIN} && \$1<${MY_X_MAX} && \$2>=${MY_Y_MIN} && \$2<=${MY_Y_MAX} ) { print \"${document}\",\"${page%.fpage}\",INDEX,\$1,\$2,\$3; INDEX=INDEX+1 } }"
+  done \
+    | sort -t'|' -n -k2,2 -k3,3
+  popd >/dev/null
+done
+popd >/dev/null
+
+
+## Done
+__cleanup
+exit 0
+
