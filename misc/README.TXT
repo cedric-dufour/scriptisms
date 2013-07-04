@@ -15,7 +15,16 @@ pdf2html
 --------
 Convert the given PDF file to HTML and PNG images for easier/faster browsing.
 
-xps2str
--------
+xps-index
+---------
 Extract strings from given XPS file, located within given bounding frame.
 
+xps-id2pdf
+----------
+Extract pages from the given XPS file matching the same tagged identifier to
+individual PDF documents.
+
+edoc-mailer
+-----------
+Parse a recipients list and send them the matching documents located in the
+various given directories.

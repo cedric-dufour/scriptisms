@@ -1,0 +1,134 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [options] <recipients-file>
+
+SYNOPSIS:
+  Parse the provided recipients file (standard input if '-') and sends an
+  e-mail message (using 'mutt') with the matching document(s) found in the
+  given directory(ies).
+
+  The recipients list must be CSV formatted as:
+    IDENTIFIER | E-MAIL
+
+  While the document(s) must be named as:
+    1-IDENTIFIER.pdf
+
+OPTIONS:
+  -S --subject  Message subject
+  -B --body     Message body file
+  -d1           First document directory
+  ...           ...
+  -d5           Fifth document directory
+  -n1           First document name
+  ...           ...
+  -n5           Fifth document name
+  --            Treat all subsequent options as 'mutt' options
+EOF
+
+
+## Arguments
+MY_SUBJECT='E-document(s)'
+MY_BODY=/dev/null
+for my_dir in {1..5}; do
+  MY_DIR[${my_dir}]=
+  MY_NAME[${my_dir}]=
+done
+while [ -n "${1}" ]; do
+  case "${1}" in
+    -S|--subject)
+      shift; MY_SUBJECT="${1}"
+      ;;
+    -B|--body)
+      shift; MY_BODY="${1}"
+      ;;
+    -d1|-d2|-d3|-d4|-d5)
+      my_dir=${1#-d}
+      shift; MY_DIR[${my_dir}]="${1}"
+      ;;
+    -n1|-n2|-n3|-n4|-n5)
+      my_dir=${1#-n}
+      shift; MY_NAME[${my_dir}]="${1}"
+      ;;
+    --)
+      shift; break
+      ;;
+    -)
+      if [ -z "${MY_RCPT}" ]; then
+        MY_RCPT="${1}"
+      else
+      	echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      fi
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+    *)
+      if [ -z "${MY_RCPT}" ]; then
+        MY_RCPT="${1}"
+      else
+      	echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      fi
+  esac
+  shift
+done
+[ -z "${MY_RCPT}" ] && echo 'ERROR: Missing recipients file' >&2 && exit 1
+MY_TMPDIR=
+
+
+## Checks
+[ -z "$(which mutt)" ] && echo "ERROR: Missing 'mutt' utility" >&2 && exit 1
+[ -n "${MY_BODY}" -a ! -r "${MY_BODY}" ] && echo "ERROR: Unreadable message body file (${MY_BODY})" >&2 && exit 1
+[ -n "${MY_RCPT}" -a "${MY_RCPT}" != '-' -a ! -r "${MY_RCPT}" ] && echo "ERROR: Unreadable recipients file (${MY_RCPT})" >&2 && exit 1
+MY_DIRS=
+for my_dir in {1..5}; do
+  [ -z "${MY_DIR[${my_dir}]}" ] && continue
+  [ ! -d "${MY_DIR[${my_dir}]}" ] && echo "ERROR: Invalid directory (${MY_DIR[${my_dir}]})" >&2 && exit 1
+  [ ! -r "${MY_DIR[${my_dir}]}" ] && echo "ERROR: Unreadable directory (${MY_DIR[${my_dir}]})" >&2 && exit 1
+  MY_DIRS="${MY_DIRS}${MY_DIRS:+\n}${my_dir}"
+  if [ -n "${MY_NAME[${my_dir}]}" ]; then
+    MY_NAME[${my_dir}]="${MY_NAME[${my_dir}]##*/}"
+    MY_NAME[${my_dir}]="${MY_NAME[${my_dir}]%.pdf}.pdf"
+  fi
+done
+
+
+## Temporary directory
+MY_TMPDIR="$(mktemp -d)"
+[ ! -d "${MY_TMPDIR}" ] && echo 'ERROR: Failed to create temporary directory' >&2 && exit 1
+function __cleanup {
+  [ -n "${MY_TMPDIR}" ] && rm -rf "${MY_TMPDIR}"
+}
+
+
+## Trap signals
+trap '__cleanup; exit 1' INT TERM
+
+
+## Process recipients
+IFS=$'\n'; for my_rcpt in $(cat "${MY_RCPT}"); do
+  my_rcpt_id=${my_rcpt%|*}
+  my_rcpt_email=${my_rcpt#*|}
+  my_rcpt_files=
+  echo "INFO: Sending documents to '${my_rcpt_email}' (${my_rcpt_id})"
+  for my_dir in $(echo -e ${MY_DIRS}); do
+    my_file="${MY_DIR[${my_dir}]%%/}/1-${my_rcpt_id}.pdf"
+    [ ! -e "${my_file}" ] && echo "WARNING: No matching file found (${my_file})" >&2 && continue
+    [ ! -r "${my_file}" ] && echo "ERROR: Unreadable file (${my_file})" >&2 && continue
+    if [ -n "${MY_NAME[${my_dir}]}" ]; then
+      cp -p "${my_file}" "${MY_TMPDIR}/${MY_NAME[${my_dir}]}"
+      [ $? -ne 0 ] && echo "ERROR: Failed to copy file (${my_file} -> ${MY_TMPDIR}/${MY_NAME[${my_dir}]})" >&2 && continue
+      my_file="${MY_TMPDIR}/${MY_NAME[${my_dir}]}"
+    fi
+    my_rcpt_files="${my_rcpt_files}${my_rcpt_files:+ }'${my_file}'"
+  done
+  eval mutt -s "'${MY_SUBJECT}'" "$@" ${my_rcpt_files:+-a} ${my_rcpt_files} ${my_rcpt_files:+--} ${my_rcpt_email} < "${MY_BODY}"
+done
+
+
+## Done
+__cleanup
+exit 0
+

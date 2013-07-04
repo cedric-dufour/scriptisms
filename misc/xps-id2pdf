@@ -1,0 +1,129 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [options] <xps-file> <output-dir>
+
+SYNOPSIS:
+  Parse the provided XPS file and output the individual PDF document
+  corresponding to each tagged identifier in the specified directory.
+
+OPTIONS:
+  -T --tag      Identifier tag
+                [default:%ID%]
+  -F --frame    Identifier frame (X-min Y-min X-max Y-max)
+                [default:0 0 9999 9999]
+  -I --id       Dump only given identifier
+EOF
+
+
+## Arguments
+MY_TAG='%ID%'
+MY_FRAME_Xmin=0
+MY_FRAME_Ymin=0
+MY_FRAME_Xmax=9999
+MY_FRAME_Ymax=9999
+MY_ID=
+MY_XPS=
+MY_DIR=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    -S|--summary)
+      shift; MY_XPS_SUMMARY="${1}"
+      ;;
+    -T|--tag)
+      shift; MY_TAG="${1}"
+      ;;
+    -F|--frame)
+      shift; MY_FRAME_Xmin=$(( 0+${1} ))
+      shift; MY_FRAME_Ymin=$(( 0+${1} ))
+      shift; MY_FRAME_Xmax=$(( 0+${1} ))
+      shift; MY_FRAME_Ymax=$(( 0+${1} ))
+      ;;
+    -I|--id)
+      shift; MY_ID="${1}"
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+    *)
+      if [ -z "${MY_XPS}" ]; then
+        MY_XPS="${1}"
+      elif [ -z "${MY_DIR}" ]; then
+        MY_DIR="${1}"
+      else
+      	echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      fi
+  esac
+  shift
+done
+[ -z "${MY_XPS}" ] && echo 'ERROR: Missing XPS file' >&2 && exit 1
+[ -z "${MY_DIR}" ] && echo 'ERROR: Missing output directory' >&2 && exit 1
+
+
+## Checks
+[ -z "$(which xps-index)" ] && echo "ERROR: Missing 'xps-index' utility" >&2 && exit 1
+[ -z "$(which xpstopdf)" ] && echo "ERROR: Missing 'xpstopdf' utility" >&2 && exit 1
+[ -z "$(which pdftotext)" ] && echo "ERROR: Missing 'pdftotext' utility" >&2 && exit 1
+[ -n "${MY_XPS}" -a ! -r "${MY_XPS}" ] && echo "ERROR: Unreadable XPS file (${MY_XPS})" >&2 && exit 1
+[ ! -e "${MY_DIR}" ] && mkdir "${MY_DIR}"
+[ ! -d "${MY_DIR}" ] && echo "ERROR: Invalid/unwritable output directory (${MY_DIR})" >&2 && exit 1
+
+
+## Process XPS file
+if [ -n "${MY_XPS}" ]; then
+  echo "INFO: processing '${MY_XPS}'"
+  my_index="${MY_DIR}/${MY_XPS##*/}.index"
+  if [ ! -e "${my_index}" ]; then
+    xps-index --frame ${MY_FRAME_Xmin} ${MY_FRAME_Ymin} ${MY_FRAME_Xmax} ${MY_FRAME_Ymax} "${MY_XPS}" > "${my_index}"
+    join -t':' -e'%NOID%' \
+      <(awk -F'|' "{ if( \$6~\"${MY_TAG}\" ) print \$1\".\"\$2 }" "${my_index}") \
+      <(awk -F'|' '{ print $1"."$2":"$6 }' "${my_index}" | sed "s|${MY_TAG}||g") \
+      | fgrep -v '%NOID%' \
+      > "${my_index}.tmp"
+    join -t ':' -v 1 \
+      <(awk -F'|' '{ print $1"."$2}' "${my_index}" | sort) \
+      <(awk -F':' '{ print $1}' "${my_index}.tmp" | sort) \
+      | sort -n -t'.' -k1,1 -k2,2 \
+      > "${my_index}.invalid"
+    if [ -s "${my_index}.invalid" ]; then
+      echo 'WARNING: The following documents/pages have no identifier:' >&2
+      cat "${my_index}.invalid" >&2
+    else
+      rm "${my_index}.invalid"
+    fi
+    mv "${my_index}.tmp" "${my_index}"
+  fi
+  my_proc_id=
+  my_proc_doc=
+  my_proc_start=
+  my_proc_stop=
+  IFS=$'\n'; for index in $(cat "${my_index}") '%END%'; do
+    my_cur_id=${index#*:}
+    [ -n "${MY_ID}" -a "${my_cur_id}" != "${MY_ID}" ] && continue
+    my_cur_index=${index%:*}
+    my_cur_doc=${my_cur_index%.*}
+    my_cur_page=${my_cur_index#*.}
+    if [ "${my_cur_doc}" == "${my_proc_doc}" -a "${my_cur_id}" == "${my_proc_id}" ]; then
+      my_proc_stop=${my_cur_page}
+    else
+      if [ -n "${my_proc_id}" ]; then
+        my_pdf="${MY_DIR}/${my_proc_doc}-${my_proc_id}.pdf"
+        if [ ! -e "${my_pdf}" ]; then
+          echo "INFO: Exporting document ${my_proc_doc} for identifier '${my_proc_id}'"
+          xpstopdf -d ${my_proc_doc} -f ${my_proc_start} -l ${my_proc_stop} "${MY_XPS}" "${my_pdf}"
+          if [ -z "$(pdftotext "${my_pdf}" - | egrep "${MY_TAG}\s*${my_proc_id}(\W|\$)")" ]; then
+            echo "ERROR: Failed to verify identifier" >&2
+            rm -f "${my_pdf}"
+          fi
+        fi
+      fi
+      my_proc_id=${my_cur_id}
+      my_proc_doc=${my_cur_doc}
+      my_proc_start=${my_cur_page}
+      my_proc_stop=${my_cur_page}
+    fi
+  done
+fi
+
