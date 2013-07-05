@@ -49,10 +49,10 @@ MY_TMPDIR=
 
 
 ## Check
-[ ! -r "${MY_XPS}" ] && echo "ERROR: Invalid/unreadable XPS file (${MY_XPS})" >&2 && exit 1
-[ ${MY_FRAME_Xmax} -lt ${MY_FRAME_Xmin} -o ${MY_FRAME_Ymax} -lt ${MY_FRAME_Ymin} ] && echo "ERROR: Invalid frame boundaries (${MY_FRAME_Xmin} ${MY_FRAME_Ymin} ${MY_FRAME_Xmax} ${MY_FRAME_Ymax})" >&2 && exit 1 
 [ -z "$(which unzip)" ] && echo "ERROR: Missing 'unzip' utility" >&2 && exit 1
 [ -z "$(which xmllint)" ] && echo "ERROR: Missing 'xmllint' utility" >&2 && exit 1
+[ ! -r "${MY_XPS}" ] && echo "ERROR: Invalid/unreadable XPS file (${MY_XPS})" >&2 && exit 1
+[ ${MY_FRAME_Xmax} -lt ${MY_FRAME_Xmin} -o ${MY_FRAME_Ymax} -lt ${MY_FRAME_Ymin} ] && echo "ERROR: Invalid frame boundaries (${MY_FRAME_Xmin} ${MY_FRAME_Ymin} ${MY_FRAME_Xmax} ${MY_FRAME_Ymax})" >&2 && exit 1 
 
 
 ## Temporary directory

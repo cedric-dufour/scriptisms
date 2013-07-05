@@ -94,7 +94,7 @@ my_proc_start=
 my_proc_stop=
 IFS=$'\n'; for index in $(cat "${my_index}") '%END%'; do
   my_cur_id=${index#*:}
-  [ -n "${MY_ID}" -a "${my_cur_id}" != "${MY_ID}" ] && continue
+  [ -n "${MY_ID}" -a "${my_cur_id}" != '%END%' -a "${my_cur_id}" != "${MY_ID}" ] && continue
   my_cur_index=${index%:*}
   my_cur_doc=${my_cur_index%.*}
   my_cur_page=${my_cur_index#*.}
