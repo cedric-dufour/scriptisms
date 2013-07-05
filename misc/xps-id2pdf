@@ -72,58 +72,55 @@ done
 
 
 ## Process XPS file
-if [ -n "${MY_XPS}" ]; then
-  echo "INFO: processing '${MY_XPS}'"
-  my_index="${MY_DIR}/${MY_XPS##*/}.index"
-  if [ ! -e "${my_index}" ]; then
-    xps-index --frame ${MY_FRAME_Xmin} ${MY_FRAME_Ymin} ${MY_FRAME_Xmax} ${MY_FRAME_Ymax} "${MY_XPS}" > "${my_index}"
-    join -t':' -e'%NOID%' \
-      <(awk -F'|' "{ if( \$6~\"${MY_TAG}\" ) print \$1\".\"\$2 }" "${my_index}") \
-      <(awk -F'|' '{ print $1"."$2":"$6 }' "${my_index}" | sed "s|${MY_TAG}||g") \
-      | fgrep -v '%NOID%' \
-      > "${my_index}.tmp"
-    join -t ':' -v 1 \
-      <(awk -F'|' '{ print $1"."$2}' "${my_index}" | sort) \
-      <(awk -F':' '{ print $1}' "${my_index}.tmp" | sort) \
-      | sort -n -t'.' -k1,1 -k2,2 \
-      > "${my_index}.invalid"
-    if [ -s "${my_index}.invalid" ]; then
-      echo 'WARNING: The following documents/pages have no identifier:' >&2
-      cat "${my_index}.invalid" >&2
-    else
-      rm "${my_index}.invalid"
-    fi
-    mv "${my_index}.tmp" "${my_index}"
-  fi
-  my_proc_id=
-  my_proc_doc=
-  my_proc_start=
-  my_proc_stop=
-  IFS=$'\n'; for index in $(cat "${my_index}") '%END%'; do
-    my_cur_id=${index#*:}
-    [ -n "${MY_ID}" -a "${my_cur_id}" != "${MY_ID}" ] && continue
-    my_cur_index=${index%:*}
-    my_cur_doc=${my_cur_index%.*}
-    my_cur_page=${my_cur_index#*.}
-    if [ "${my_cur_doc}" == "${my_proc_doc}" -a "${my_cur_id}" == "${my_proc_id}" ]; then
-      my_proc_stop=${my_cur_page}
-    else
-      if [ -n "${my_proc_id}" ]; then
-        my_pdf="${MY_DIR}/${my_proc_doc}-${my_proc_id}.pdf"
-        if [ ! -e "${my_pdf}" ]; then
-          echo "INFO: Exporting document ${my_proc_doc} for identifier '${my_proc_id}'"
-          xpstopdf -d ${my_proc_doc} -f ${my_proc_start} -l ${my_proc_stop} "${MY_XPS}" "${my_pdf}"
-          if [ -z "$(pdftotext "${my_pdf}" - | egrep "${MY_TAG}\s*${my_proc_id}(\W|\$)")" ]; then
-            echo "ERROR: Failed to verify identifier" >&2
-            rm -f "${my_pdf}"
-          fi
+echo "INFO: processing '${MY_XPS}'"
+my_index="${MY_DIR}/${MY_XPS##*/}.index"
+if [ ! -e "${my_index}" ]; then
+  xps-index --frame ${MY_FRAME_Xmin} ${MY_FRAME_Ymin} ${MY_FRAME_Xmax} ${MY_FRAME_Ymax} "${MY_XPS}" > "${my_index}"
+  join -t':' -e'%NOID%' \
+    <(awk -F'|' "{ if( \$6~\"${MY_TAG}\" ) print \$1\".\"\$2 }" "${my_index}") \
+    <(awk -F'|' '{ print $1"."$2":"$6 }' "${my_index}" | sed "s|${MY_TAG}||g") \
+    | fgrep -v '%NOID%' \
+    > "${my_index}.tmp"
+  join -t ':' -v 1 \
+    <(awk -F'|' '{ print $1"."$2}' "${my_index}" | sort) \
+    <(awk -F':' '{ print $1}' "${my_index}.tmp" | sort) \
+    | sort -n -t'.' -k1,1 -k2,2 \
+    > "${my_index}.invalid"
+  mv "${my_index}.tmp" "${my_index}"
+fi
+my_proc_id=
+my_proc_doc=
+my_proc_start=
+my_proc_stop=
+IFS=$'\n'; for index in $(cat "${my_index}") '%END%'; do
+  my_cur_id=${index#*:}
+  [ -n "${MY_ID}" -a "${my_cur_id}" != "${MY_ID}" ] && continue
+  my_cur_index=${index%:*}
+  my_cur_doc=${my_cur_index%.*}
+  my_cur_page=${my_cur_index#*.}
+  if [ "${my_cur_doc}" == "${my_proc_doc}" -a "${my_cur_id}" == "${my_proc_id}" ]; then
+    my_proc_stop=${my_cur_page}
+  else
+    if [ -n "${my_proc_id}" ]; then
+      my_pdf="${MY_DIR}/${my_proc_doc}-${my_proc_id}.pdf"
+      if [ ! -e "${my_pdf}" ]; then
+        echo "INFO: Exporting document/pages ${my_proc_doc}.${my_proc_start}-${my_proc_stop} ($(( ${my_proc_stop}-${my_proc_start}+1 ))) for identifier '${my_proc_id}'"
+        xpstopdf -d ${my_proc_doc} -f ${my_proc_start} -l ${my_proc_stop} "${MY_XPS}" "${my_pdf}"
+        if [ -z "$(pdftotext "${my_pdf}" - | egrep "${MY_TAG}\s*${my_proc_id}(\W|\$)")" ]; then
+          echo "ERROR: Failed to verify identifier" >&2
+          rm -f "${my_pdf}"
         fi
       fi
-      my_proc_id=${my_cur_id}
-      my_proc_doc=${my_cur_doc}
-      my_proc_start=${my_cur_page}
-      my_proc_stop=${my_cur_page}
     fi
-  done
+    my_proc_id=${my_cur_id}
+    my_proc_doc=${my_cur_doc}
+    my_proc_start=${my_cur_page}
+    my_proc_stop=${my_cur_page}
+  fi
+done
+if [ -s "${my_index}.invalid" ]; then
+  sed 's/^/WARNING: Document\/page /;s/$/ has no valid identifier/' "${my_index}.invalid" >&2
+else
+  rm "${my_index}.invalid"
 fi
 

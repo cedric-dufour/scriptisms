@@ -14,11 +14,13 @@ SYNOPSIS:
     IDENTIFIER | E-MAIL
 
   While the document(s) must be named as:
-    1-IDENTIFIER.pdf
+    <prefix>IDENTIFIER<suffix>
 
 OPTIONS:
   -S --subject  Message subject
   -B --body     Message body file
+  -P --prefix   Document name prefix [default:none]
+  -X --suffix   Document name suffix [default:'.pdf']
   -d1           First document directory
   ...           ...
   -d5           Fifth document directory
@@ -32,6 +34,8 @@ EOF
 ## Arguments
 MY_SUBJECT='E-document(s)'
 MY_BODY=/dev/null
+MY_PREFIX=
+MY_SUFFIX='.pdf'
 for my_dir in {1..5}; do
   MY_DIR[${my_dir}]=
   MY_NAME[${my_dir}]=
@@ -44,9 +48,15 @@ while [ -n "${1}" ]; do
     -B|--body)
       shift; MY_BODY="${1}"
       ;;
+    -P|--prefix)
+      shift; MY_PREFIX="${1}"
+      ;;
+    -X|--suffix)
+      shift; MY_SUFFIX="${1}"
+      ;;
     -d1|-d2|-d3|-d4|-d5)
       my_dir=${1#-d}
-      shift; MY_DIR[${my_dir}]="${1}"
+      shift; MY_DIR[${my_dir}]="${1%%/}"
       ;;
     -n1|-n2|-n3|-n4|-n5)
       my_dir=${1#-n}
@@ -90,7 +100,6 @@ for my_dir in {1..5}; do
   MY_DIRS="${MY_DIRS}${MY_DIRS:+\n}${my_dir}"
   if [ -n "${MY_NAME[${my_dir}]}" ]; then
     MY_NAME[${my_dir}]="${MY_NAME[${my_dir}]##*/}"
-    MY_NAME[${my_dir}]="${MY_NAME[${my_dir}]%.pdf}.pdf"
   fi
 done
 
@@ -114,7 +123,7 @@ IFS=$'\n'; for my_rcpt in $(cat "${MY_RCPT}"); do
   my_rcpt_files=
   echo "INFO: Sending documents to '${my_rcpt_email}' (${my_rcpt_id})"
   for my_dir in $(echo -e ${MY_DIRS}); do
-    my_file="${MY_DIR[${my_dir}]%%/}/1-${my_rcpt_id}.pdf"
+    my_file="${MY_DIR[${my_dir}]%%/}/${MY_PREFIX}${my_rcpt_id}${MY_SUFFIX}"
     [ ! -e "${my_file}" ] && echo "WARNING: No matching file found (${my_file})" >&2 && continue
     [ ! -r "${my_file}" ] && echo "ERROR: Unreadable file (${my_file})" >&2 && continue
     if [ -n "${MY_NAME[${my_dir}]}" ]; then
