@@ -17,24 +17,26 @@ SYNOPSIS:
     <prefix>IDENTIFIER<suffix>
 
 OPTIONS:
-  -S --subject  Message subject
-  -B --body     Message body file
-  -P --prefix   Document name prefix [default:none]
-  -X --suffix   Document name suffix [default:'.pdf']
-  -d1           First document directory
-  ...           ...
-  -d5           Fifth document directory
-  -n1           First document name
-  ...           ...
-  -n5           Fifth document name
-  -r1           First document required (for sending)
-  ...           ...
-  -r5           Fifth document required (for sending)
-  --            Treat all subsequent options as 'mutt' options
+  -s --simulate  Simulate mailing (without actually sending messages)
+  -S --subject   Message subject
+  -B --body      Message body file
+  -P --prefix    Document name prefix [default:none]
+  -X --suffix    Document name suffix [default:'.pdf']
+  -d1            First document directory
+  ...            ...
+  -d5            Fifth document directory
+  -n1            First document name
+  ...            ...
+  -n5            Fifth document name
+  -r1            First document required (for sending)
+  ...            ...
+  -r5            Fifth document required (for sending)
+  --             Treat all subsequent options as 'mutt' options
 EOF
 
 
 ## Arguments
+MY_SIMULATE=
 MY_SUBJECT='E-document(s)'
 MY_BODY=/dev/null
 MY_PREFIX=
@@ -46,6 +48,9 @@ for my_dir in {1..5}; do
 done
 while [ -n "${1}" ]; do
   case "${1}" in
+    -s|--simulate)
+      MY_SIMULATE='yes'
+      ;;
     -S|--subject)
       shift; MY_SUBJECT="${1}"
       ;;
@@ -125,9 +130,14 @@ trap '__cleanup; exit 1' INT TERM
 
 
 ## Process recipients
+[ -n "${MY_SIMULATE}" ] && echo "INFO: SIMULATION; NO MESSAGES ARE ACTUALLY SENT!"
 IFS=$'\n'; for my_rcpt in $(cat "${MY_RCPT}"); do
   my_rcpt_id=${my_rcpt%|*}
   my_rcpt_email=${my_rcpt#*|}
+  if ! [[ "${my_rcpt_email}" =~ [-_.a-zA-Z0-9]+@[-_a-zA-Z0-9]+(.[-_a-zA-Z0-9])+ ]]; then
+    echo "ERROR: Invalid e-mail address '${my_rcpt_email}' (${my_rcpt_id})" >&2
+    continue
+  fi
   my_rcpt_files=
   my_rcpt_skip=
   echo "INFO: Sending documents to '${my_rcpt_email}' (${my_rcpt_id})"
@@ -136,20 +146,23 @@ IFS=$'\n'; for my_rcpt in $(cat "${MY_RCPT}"); do
     if [ ! -e "${my_file}" ]; then
       echo "WARNING: No matching file found (${my_file})" >&2
       if [ -n "${MY_REQD[${my_dir}]}" ]; then
-        echo "WARNING: File is required for sending; skipping recipient" >&2
+        echo "ERROR: File is required for sending; skipping recipient" >&2
         my_rcpt_skip='yes'
         break
       fi
       continue
     fi
     [ ! -r "${my_file}" ] && echo "ERROR: Unreadable file (${my_file})" >&2 && continue
+    [ -n "${MY_SIMULATE}" ] && continue
     if [ -n "${MY_NAME[${my_dir}]}" ]; then
-      cp -p "${my_file}" "${MY_TMPDIR}/${MY_NAME[${my_dir}]}"
-      [ $? -ne 0 ] && echo "ERROR: Failed to copy file (${my_file} -> ${MY_TMPDIR}/${MY_NAME[${my_dir}]})" >&2 && continue
-      my_file="${MY_TMPDIR}/${MY_NAME[${my_dir}]}"
+      my_name="${MY_NAME[${my_dir}]//%ID%/${my_rcpt_id}}"
+      cp -p "${my_file}" "${MY_TMPDIR}/${my_name}"
+      [ $? -ne 0 ] && echo "ERROR: Failed to copy file (${my_file} -> ${MY_TMPDIR}/${my_name})" >&2 && continue
+      my_file="${MY_TMPDIR}/${my_name}"
     fi
     my_rcpt_files="${my_rcpt_files}${my_rcpt_files:+ }'${my_file}'"
   done
+  [ -n "${MY_SIMULATE}" ] && continue
   [ -n "${my_rcpt_skip}" ] && continue
   eval mutt -s "'${MY_SUBJECT}'" "$@" ${my_rcpt_files:+-a} ${my_rcpt_files} ${my_rcpt_files:+--} ${my_rcpt_email} < "${MY_BODY}"
 done
