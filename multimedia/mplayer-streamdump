@@ -1,0 +1,239 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 1 ] && cat 1>&2 << EOF && exit 1
+USAGE: ${0##*/} [<options>] <stream-url>
+
+SYNOPSIS:
+  Dump the specified audio stream to (MP3) files, creating a new file each time
+  the stream title changes.
+
+OPTIONS:
+  -N --stream-name <string>
+     Stream name
+
+  -X --stream-index <integer> [default:auto]
+     Stream title/file name index start position
+
+  -K --stream-noskip-first
+     Do not skip the first (potentially incomplete) stream title
+
+  -I --title-ignore <egrep-expression>
+     Stream title to ignore (and keep dumping the same stream/file)
+
+  -D --title-drop <egrep-expression>
+     Stream title to drop (do not save to file)
+
+  -S --title-separator <sed-expression>
+     Stream artists/title separator
+
+  -P --title-strip <sed-expression>
+     Stream title part to strip out
+
+  -Y --title-delay <seconds> [default:0]
+     Time delay before reacting to stream title change
+
+  -m --min-duration <seconds> [default:15]
+     Minimum valid stream duration (to save to file)
+
+  -M --max-duration <seconds> [default:0]
+     Maximum valid stream duration (to save to file)
+
+  -Fi --fade-in <seconds> [default:0.5]
+     Fade-in time
+
+  -Fo --fade-out <seconds> [default:0.5]
+     Fade-out time
+
+  -Ft --fade-type <type> [default:h]
+     Fade-in/-out type (see 'sox' manual for available types)
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+
+## Arguments
+STREAM_URL=
+STREAM_NAME=
+STREAM_INDEX=0
+STREAM_SKIP=1
+TITLE_IGNORE=
+TITLE_DROP=
+TITLE_SEPARATOR=
+TITLE_STRIP=
+TITLE_DELAY=0
+DURATION_MIN=15
+DURATION_MAX=0
+FADE_IN=0.5
+FADE_OUT=0.5
+FADE_TYPE='h'
+ARGS_SEP=
+MPLAYER_OPTS=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    --) ARGS_SEP='yes';;
+    -N|--stream-name) shift; STREAM_NAME="${1}";;
+    -X|--stream-index) shift; STREAM_INDEX="${1}";;
+    -K|--stream-skip) STREAM_SKIP=0;;
+    -I|--title-ignore) shift; TITLE_IGNORE="${1}";;
+    -D|--title-drop) shift; TITLE_DROP="${1}";;
+    -S|--title-separator) shift; TITLE_SEPARATOR="${1}";;
+    -P|--title-strip) shift; TITLE_STRIP="${1}";;
+    -Y|--title-delay) shift; TITLE_DELAY="${1}";;
+    -m|--min-duration) shift; DURATION_MIN="${1}";;
+    -M|--max-duration) shift; DURATION_MAX="${1}";;
+    -Fi|--fade-in) shift; FADE_IN="${1}";;
+    -Fo|--fade-out) shift; FADE_OUT="${1}";;
+    -Ft|--fade-type) shift; FADE_TYPE="${1}";;
+    -*)
+      if [ -n "${ARGS_SEP}" ]; then
+        MPLAYER_OPTS="${MPLAYER_OPTS} ${1}"
+      else
+        echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      fi
+      ;;
+    *)
+      if [ -n "${ARGS_SEP}" ]; then
+        MPLAYER_OPTS="${MPLAYER_OPTS} ${1}"
+      elif [ -z "${STREAM_URL}" ]; then
+        STREAM_URL="${1}"
+      else
+        echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      fi
+      ;;
+
+  esac
+  shift
+done
+if [ -z "${STREAM_NAME}" ]; then
+  STREAM_NAME="${STREAM_URL}"
+  echo "*** Automatically set stream name: ${STREAM_NAME}"
+fi
+if [ ${STREAM_INDEX} -le 0 ]; then
+  STREAM_INDEX=$(ls -1 [0-9][0-9][0-9][0-9]\ -\ *.mp3 2>/dev/null | tail -n 1 | sed 's|^0*||;s| - .*$||g')
+  [ -n "${STREAM_INDEX}" ] && STREAM_INDEX=$(( ${STREAM_INDEX} + 1 )) || STREAM_INDEX=1
+  echo "*** Automatically detected stream index: ${STREAM_INDEX}"
+fi
+[ ${DURATION_MAX} -le 0 ] && DURATION_MAX=999999
+export STREAM_NAME
+export STREAM_INDEX
+export STREAM_SKIP
+export TITLE_SEPARATOR
+export TITLE_STRIP
+export TITLE_IGNORE
+export TITLE_DROP
+export TITLE_DELAY
+export DURATION_MIN
+export DURATION_MAX
+export FADE_IN
+export FADE_OUT
+export FADE_TYPE
+
+
+## Checks
+[ -z "$(which mplayer)" ] && echo "ERROR: Missing 'mplayer' utility" >&2 && exit 1
+[ -z "$(which sox)" ] && echo "ERROR: Missing 'sox' utility" >&2 && exit 1
+[ -z "$(which lame)" ] && echo "ERROR: Missing 'lame' utility" >&2 && exit 1
+[ ${DURATION_MIN} -gt ${DURATION_MAX} ] && echo "ERROR: Minimum duration can not be larger than maximum duration (${DURATION_MIN}>${DURATION_MAX})" >&2 && exit 1
+
+
+## Parameters
+export FILE_PREFIX="${TMP:-/tmp}/${0##*/}.$$"
+
+
+## Trap signals
+# ... on EXIT
+trap 'echo "*** Cleaning-up..."; rm -f "${FILE_PREFIX}".*; exit 2' EXIT
+
+
+## Create control channel
+rm -f "${FILE_PREFIX}".*
+mkfifo "${FILE_PREFIX}.input"
+[ ${STREAM_SKIP} -ne 0 ] && touch "${FILE_PREFIX}.skip"
+
+
+## Loop mplayer capture until we end
+echo -n ${STREAM_INDEX} > "${FILE_PREFIX}.index"
+while true; do
+  echo "*** Dumping ($(date +'%Y-%m-%d %H:%M:%S'))"
+  STREAM_TITLE=
+  MPLAYER_QUIT=
+  eval mplayer -nojoystick -nolirc -quiet -slave -input file="${FILE_PREFIX}.input" -idle -novideo -ao pcm:fast:waveheader:file="${FILE_PREFIX}.wav" -nocache ${MPLAYER_OPTS} "${STREAM_URL}" 2>/dev/null | while read output ; do
+    [ -n "${MPLAYER_QUIT}" ] && continue
+    [ -n "$(echo -n $output | egrep -i '^(Playing |(Name|Genre|Website|Bitrate)[^:]*:)' )" ] && echo "--- $output"
+    [ -z "$(echo -n $output | fgrep -i streamtitle)" ] && continue
+    if [ -z "${STREAM_TITLE}" ]; then
+      STREAM_TITLE="$(echo -n $output | sed -e "s/.*streamtitle='\([^;]*\)';.*/\1/i")"
+      if [ -e "${FILE_PREFIX}.title_prev" ]; then
+        if [ "${STREAM_TITLE}" == "$(cat "${FILE_PREFIX}.title_prev")" ]; then
+          echo "*** Title (previous): ${STREAM_TITLE}"
+          unset STREAM_TITLE
+          continue
+        fi
+      fi
+      echo "*** Title (new): ${STREAM_TITLE}"
+      echo -n "${STREAM_TITLE}" > "${FILE_PREFIX}.title_next"
+    else
+      STREAM_TITLE="$(echo -n $output | sed -e "s/.*streamtitle='\([^;]*\)';.*/\1/i")"
+      echo "*** Title (update): ${STREAM_TITLE}"
+      [ -n "${TITLE_IGNORE}" ] && [ -n "$(echo -n "${STREAM_TITLE}" | egrep "${TITLE_IGNORE}")" ] && continue
+      [ "${STREAM_TITLE}" == "$(cat "${FILE_PREFIX}.title_next")" ] && continue
+      echo "*** Quit (in ${TITLE_DELAY} seconds)"
+      MPLAYER_QUIT='yes'
+      sleep ${TITLE_DELAY}
+      echo quit > "${FILE_PREFIX}.input"
+    fi
+  done
+  if [ $? -eq 0 ]; then
+    STREAM_LOOP=yes
+  else
+    STREAM_LOOP=no
+    [ ! -e "${FILE_PREFIX}.skip" -a ${TITLE_DELAY%.*} -gt 0 ] && sleep ${TITLE_DELAY} || sleep 1
+  fi
+  if [ -e "${FILE_PREFIX}.title_next" ]; then
+    STREAM_STOP=$(date +'%s')
+    STREAM_START=$(date +'%s' -r "${FILE_PREFIX}.title_next")
+    STREAM_DURATION=$(( ${STREAM_STOP} - ${STREAM_START} ))
+    STREAM_TITLE="$(cat "${FILE_PREFIX}.title_next")"
+    if [ -e "${FILE_PREFIX}.skip" ]; then
+      echo '*** Dropping (first title)' 
+      mv "${FILE_PREFIX}.title_next" "${FILE_PREFIX}.title_prev"
+      rm "${FILE_PREFIX}.skip" "${FILE_PREFIX}.wav"
+    elif [ -n "${TITLE_DROP}" ] && [ -n "$(echo -n "${STREAM_TITLE}" | egrep "${TITLE_DROP}")" ]; then
+      echo '*** Dropping (title-drop)' 
+      mv "${FILE_PREFIX}.title_next" "${FILE_PREFIX}.title_prev"
+      rm "${FILE_PREFIX}.wav"
+    elif [ ${STREAM_DURATION} -lt ${DURATION_MIN} -o ${STREAM_DURATION} -gt ${DURATION_MAX} ]; then
+      echo "*** Dropping (clip too short/long; ${STREAM_DURATION} seconds)"
+      mv "${FILE_PREFIX}.title_next" "${FILE_PREFIX}.title_prev"
+      rm "${FILE_PREFIX}.wav"
+    else
+      [ -n "${TITLE_STRIP}" ] && STREAM_TITLE="$(echo -n "${STREAM_TITLE}" | sed "s|${TITLE_STRIP}||g")"
+      STREAM_INDEX="$(cat "${FILE_PREFIX}.index")"
+      STREAM_INDEX_JUSTIFIED="$(printf '%.04d' ${STREAM_INDEX})"
+      STREAM_FILE="${STREAM_INDEX_JUSTIFIED} - ${STREAM_TITLE%%.}"
+      if [ -n "${TITLE_SEPARATOR}" ]; then
+        STREAM_ARTIST="$(echo -n "${STREAM_TITLE}" | sed "s|${TITLE_SEPARATOR}.*||")" 
+        STREAM_TITLE="$(echo -n "${STREAM_TITLE}" | sed "s|.*${TITLE_SEPARATOR}||")" 
+      fi
+      STREAM_TIMESTAMP="$(date +'%Y-%m-%d %H:%M:%S' -r "${FILE_PREFIX}.title_next")"
+      echo "*** Saving: ${STREAM_FILE} (${STREAM_NAME}, ${STREAM_ARTIST}, ${STREAM_TITLE}, ${STREAM_TIMESTAMP})"
+      mv "${FILE_PREFIX}.wav" "${STREAM_FILE}.wav"
+      (
+        STREAM_LENGTH="$(sox "${STREAM_FILE}.wav" 2>&1 -n stat | grep -i '^Length' | sed 's|.*:\s*||')"
+        sox "${STREAM_FILE}.wav" -t wav - 2>/dev/null fade ${FADE_TYPE} ${FADE_IN} ${STREAM_LENGTH} ${FADE_OUT} | \
+        lame --silent --preset standard --add-id3v2 --tn "${STREAM_INDEX_JUSTIFIED}" --tl "${STREAM_NAME}" --ta "${STREAM_ARTIST}" --tt "${STREAM_TITLE}" --tc "${STREAM_TIMESTAMP}" - "${STREAM_FILE}.mp3"
+        rm -f "${STREAM_FILE}.wav"
+      ) &
+      mv "${FILE_PREFIX}.title_next" "${FILE_PREFIX}.title_prev"
+      echo -n $(( ${STREAM_INDEX} + 1 )) > "${FILE_PREFIX}.index"
+    fi
+  else
+    echo "!!! No title to save"
+    rm "${FILE_PREFIX}.wav"
+  fi
+  [ "${STREAM_LOOP}" != "yes" ] && break
+done
+
