@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Command-line
+# Usage
 [ "${1##*-}" == "help" -o $# -lt 1 ] && cat << EOF >&2 && exit 1
 USAGE: ${0##*/} <mysql-backup.conf|mysql-backup.d>
 
@@ -126,6 +126,7 @@ MYSQL_BACKUP_LOCK="${MYSQL_BACKUP_DST%%/}/mysql-backup.lock"
 # Perform backup
 MYSQL_BACKUP_ERROR=0
 touch "${MYSQL_BACKUP_LOCK}"
+# ... data
 for db in ${MYSQL_BACKUP_DBS}; do
   MYSQL_BACKUP_DO="mysqldump --defaults-extra-file='${MYSQL_BACKUP_CNF}' --opt --single-transaction --routines '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
   ${MYSQL_BACKUP_CMD} "${MYSQL_BACKUP_DO}" 2> /tmp/$$.stderr > "${MYSQL_BACKUP_DST}"/${db}.mysqldump.bz2
@@ -134,6 +135,13 @@ for db in ${MYSQL_BACKUP_DBS}; do
   [ ${e} -ne 0 ] && MYSQL_BACKUP_ERROR=1
   echo "$(ls -lh "${MYSQL_BACKUP_DST}"/${db}.mysqldump.bz2)" | tee -a "${MYSQL_BACKUP_LOG}"
 done
+# ... grants
+MYSQL_BACKUP_DO="mysql --defaults-extra-file='${MYSQL_BACKUP_CNF}' -B -N mysql -e \"SELECT DISTINCT CONCAT( 'SHOW GRANTS FOR \'', user, '\'@\'', host, '\';' ) FROM mysql.user;\" | mysql --defaults-extra-file='${MYSQL_BACKUP_CNF}' -B -N mysql | sed 's|\$|;|' | bzip2 -9; exit \${PIPESTATUS[0]}"
+${MYSQL_BACKUP_CMD} "${MYSQL_BACKUP_DO}" 2> /tmp/$$.stderr > "${MYSQL_BACKUP_DST}"/grants.mysql.bz2
+e=$?
+cat /tmp/$$.stderr | tee -a "${MYSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
+[ ${e} -ne 0 ] && MYSQL_BACKUP_ERROR=1
+echo "$(ls -lh "${MYSQL_BACKUP_DST}"/grants.mysql.bz2)" | tee -a "${MYSQL_BACKUP_LOG}"
 rm "${MYSQL_BACKUP_LOCK}"
 
 # End

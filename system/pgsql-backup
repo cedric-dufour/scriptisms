@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Command-line
+# Usage
 [ "${1##*-}" == "help" -o $# -lt 1 ] && cat << EOF >&2 && exit 1
 USAGE: ${0##*/} <pgsql-backup.conf|pgsql-backup.d>
 
@@ -123,6 +123,7 @@ PGSQL_BACKUP_LOCK="${PGSQL_BACKUP_DST%%/}/pgsql-backup.lock"
 # Perform backup
 PGSQL_BACKUP_ERROR=0
 touch "${PGSQL_BACKUP_LOCK}"
+# ... data
 for db in ${PGSQL_BACKUP_DBS}; do
   [ "${db}" == "template0" ] && continue
   PGSQL_BACKUP_DO="export PGPASSFILE='${PGSQL_BACKUP_CNF}'; pg_dump -i -h '${PGSQL_BACKUP_HOSTPORT%%:*}' -p '${PGSQL_BACKUP_HOSTPORT##*:}' -c -o '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
@@ -132,6 +133,13 @@ for db in ${PGSQL_BACKUP_DBS}; do
   [ ${e} -ne 0 ] && PGSQL_BACKUP_ERROR=1
   echo "$(ls -lh "${PGSQL_BACKUP_DST}"/${db}.pg_dump.bz2)" | tee -a "${PGSQL_BACKUP_LOG}"
 done
+# ... roles
+PGSQL_BACKUP_DO="export PGPASSFILE='${PGSQL_BACKUP_CNF}'; pg_dumpall -i -h '${PGSQL_BACKUP_HOSTPORT%%:*}' -p '${PGSQL_BACKUP_HOSTPORT##*:}' -r | bzip2 -9; exit \${PIPESTATUS[0]}"
+${PGSQL_BACKUP_CMD} "${PGSQL_BACKUP_DO}" 2> /tmp/$$.stderr > "${PGSQL_BACKUP_DST}"/roles.pg_dumpall.bz2
+e=$?
+cat /tmp/$$.stderr | tee -a "${PGSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
+[ ${e} -ne 0 ] && PGSQL_BACKUP_ERROR=1
+echo "$(ls -lh "${PGSQL_BACKUP_DST}"/roles.pg_dumpall.bz2)" | tee -a "${PGSQL_BACKUP_LOG}"
 rm "${PGSQL_BACKUP_LOCK}"
 
 # End
