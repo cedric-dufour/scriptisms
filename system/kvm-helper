@@ -16,7 +16,7 @@ AVAILABLE MODES:
   - ${0##*/} info <host-name|ip-address>
     > Display server information (IP, MAC, UUID, etc.)
 
-  - ${0##*/} img <image-hd> [<kvm-options>]
+  - ${0##*/} hd-net <image-hd> [<kvm-options>]
     > Boot from hard disk (no network)
 
   - ${0##*/} hd <image-hd> <host-name> [<kvm-options>]
@@ -25,13 +25,16 @@ AVAILABLE MODES:
   - ${0##*/} hd2 <image-hd1> <host-name> <image-hd2> [<kvm-options>]
     > Boot from hard disk (with network and additional hard disk)
 
-  - ${0##*/} cd <image-hd> <host-name> <image-iso-cd> [<kvm-options>]
+  - ${0##*/} hd+cd <image-hd> <host-name> <image-iso-cd> [<kvm-options>]
     > Boot from optical disk (with network)
 
-  - ${0##*/} cd2 <image-hd> <host-name> <image-iso-cd1> <image-iso-cd2> [<kvm-options>]
+  - ${0##*/} hd2+cd <image-hd1> <host-name> <image-hd2> <image-iso-cd> [<kvm-options>]
     > Boot from optical disk (with network and additional optical disk)
 
-  - ${0##*/} pxe <image-hd> <host-name> [<kvm-options>]
+  - ${0##*/} hd+cd2 <image-hd> <host-name> <image-iso-cd1> <image-iso-cd2> [<kvm-options>]
+    > Boot from optical disk (with network and additional optical disk)
+
+  - ${0##*/} hd+pxe <image-hd> <host-name> [<kvm-options>]
     > Boot from the network (PXE boot)
 
   - ${0##*/} vnc [[<host>]:display>]
@@ -61,7 +64,7 @@ case "${MY_MODE}" in
     MY_HOSTNAME="${1}"; shift
     ;;
 
-  'img')
+  'hd-net')
     [ $# -lt 1 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
     MY_HD="${1}"; shift
     MY_HOSTNAME='';
@@ -85,7 +88,7 @@ case "${MY_MODE}" in
     MY_OPTION_BOOT='-boot c'
     ;;
 
-  'cd')
+  'hd+cd')
     [ $# -lt 3 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
     MY_HD="${1}"; shift
     MY_HOSTNAME="${1}"; shift
@@ -94,7 +97,18 @@ case "${MY_MODE}" in
     MY_OPTION_BOOT='-boot d'
     ;;
 
-  'cd2')
+  'hd2+cd')
+    [ $# -lt 4 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
+    MY_HD="${1}"; shift
+    MY_HOSTNAME="${1}"; shift
+    MY_HD2="${1}"; shift
+    MY_HD2_FORMAT="${MY_HD2##*.}"; [ -z "${MY_HD2_FORMAT}" -o "${MY_HD2_FORMAT}" == "${MY_HD2}" ] && MY_HD2_FORMAT='raw';
+    MY_ISO="${1}"; shift
+    MY_OPTION_RESOURCE="-drive file=${MY_HD2},if=virtio,media=disk,format=${MY_HD2_FORMAT},index=1 -drive file=${MY_ISO},media=cdrom,index=2"
+    MY_OPTION_BOOT='-boot d'
+    ;;
+
+  'hd+cd2')
     [ $# -lt 4 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
     MY_HD="${1}"; shift
     MY_HOSTNAME="${1}"; shift
@@ -104,7 +118,7 @@ case "${MY_MODE}" in
     MY_OPTION_BOOT='-boot d'
     ;;
 
-  'pxe')
+  'hd+pxe')
     [ $# -lt 2 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
     MY_HD="${1}"; shift
     MY_HOSTNAME="${1}"; shift

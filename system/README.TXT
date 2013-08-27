@@ -22,6 +22,11 @@ kvm-helper
 Launch a KVM virtual server (guest) with appropriate options for the
 requested mode.
 
+makejail-ssh
+------------
+Create a chroot-ed resources for jailed SSH proxying:
+  ProxyCommand ssh username@host netcat -w 1 %h %p 2> /dev/null
+
 mysql-backup
 ------------
 Backup a MySQL database according to the connection parameters specified

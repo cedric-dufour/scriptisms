@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <username>
+
+SYNOPSIS:
+  Create a chroot-ed resources for jailed SSH proxying:
+    ProxyCommand ssh username@host netcat -w 1 %h %p 2> /dev/null
+EOF
+
+# Arguments
+USERNAME="$1"
+JAILPATH="/home/${USERNAME}"
+
+# Check dependencies
+[ -z "$(which awk)" ] && echo "ERROR: Missing 'awk' binary" >&2 && exit 1
+[ -z "$(which makejail)" ] && echo "ERROR: Missing 'makejail' binary" >&2 && exit 1
+
+# Patch for multiarch support
+patch -p0 -f -r- << EOF
+--- /usr/sbin/makejail.orig	2013-08-27 11:08:58.000000000 +0200
++++ /usr/sbin/makejail	2013-08-27 11:03:24.000000000 +0200
+@@ -226,6 +226,10 @@
+ 	return map(string.strip,lines)
+ 
+ def dpkgInfoFiles(package):
++	if os.path.exists(config.debianDpkgInfoFile % (package+":i386")):
++		return readFileLines(config.debianDpkgInfoFile % (package+":i386"))
++	if os.path.exists(config.debianDpkgInfoFile % (package+":amd64")):
++		return readFileLines(config.debianDpkgInfoFile % (package+":amd64"))
+ 	return readFileLines(config.debianDpkgInfoFile % package)
+ 
+ def copyStatAndOwner(source,target):
+EOF
+
+# Check jail path
+[ ! -e "${JAILPATH}" ] && mkdir "${JAILPATH}"
+[ ! -d "${JAILPATH}" ] && echo "ERROR: Missing/invalid jail path (${JAILPATH})" >&2 && exit 1
+
+# Clean /proc (makejail fails otherwise)
+if [ -e "${JAILPATH}/proc" ]; then
+  umount "${JAILPATH}/proc"
+  rmdir "${JAILPATH}/proc"
+fi
+
+# Make jail
+cat << EOF > /tmp/makejail.$$.conf
+chroot = "${JAILPATH}"
+packages = [ "bash", "iputils-ping", "host", "openssh-client", "netcat-traditional" ]
+useDepends = 1
+blockDepends = [ "adduser", "debconf", "dpkg" ]
+EOF
+makejail /tmp/makejail.$$.conf
+[ $? -ne 0 ] && echo "ERROR: Failed to create/update jail path (1)" >&2 && rm -f /tmp/makejail.$$.conf && exit 1
+rm -f /tmp/makejail.$$.conf
+if [ -e "${JAILPATH}/proc" ]; then
+  umount "${JAILPATH}/proc"
+fi
+
+# Copy required files
+[ ! -e "${JAILPATH}/etc" ] && mkdir "${JAILPATH}/etc"
+[ ! -e "${JAILPATH}/etc/security" ] && mkdir "${JAILPATH}/etc/security"
+[ ! -e "${JAILPATH}/etc/default" ] && mkdir "${JAILPATH}/etc/default"
+[ ! -e "${JAILPATH}/dev" ] && mkdir "${JAILPATH}/dev"
+# ... environment
+echo "INFO: Updating '${JAILPATH}/etc/environment'" && cp /etc/environment "${JAILPATH}/etc/environment"
+echo "INFO: Updating '${JAILPATH}/etc/default/locale'" && cp /etc/default/locale "${JAILPATH}/etc/default/locale"
+# ... user/group information
+echo "INFO: Updating '${JAILPATH}/etc/passwd'" && awk -F':' '$3 < 100 || $3 > 65000 {print $0}' /etc/passwd > "${JAILPATH}/etc/passwd"
+echo "INFO: Updating '${JAILPATH}/etc/group'" && awk -F':' '$3 < 100 || $3 > 65000 {print $0}' /etc/group > "${JAILPATH}/etc/group"
+# ... security
+echo "INFO: Updating '${JAILPATH}/etc/security/limits.conf'" && cp /etc/security/limits.conf "${JAILPATH}/etc/security/limits.conf"
+echo "INFO: Updating '${JAILPATH}/etc/security/pam_env.conf'" && cp /etc/security/pam_env.conf "${JAILPATH}/etc/security/pam_env.conf"
+# ... DNS resolution
+echo "INFO: Updating '${JAILPATH}/etc/resolv.conf'" && cp /etc/resolv.conf "${JAILPATH}/etc/resolv.conf"
+# ... devices
+[ ! -e "${JAILPATH}/dev/null" ] && echo "INFO: Creating '${JAILPATH}/dev/null'" && mknod -m 666 "${JAILPATH}/dev/null" c 1 3
+[ ! -e "${JAILPATH}/dev/zero" ] && echo "INFO: Creating '${JAILPATH}/dev/zero'" && mknod -m 666 "${JAILPATH}/dev/zero" c 1 5
+[ ! -e "${JAILPATH}/dev/urandom" ] && echo "INFO: Creating '${JAILPATH}/dev/urandom'" && mknod -m 444 "${JAILPATH}/dev/urandom" c 1 9
+[ ! -e "${JAILPATH}/dev/tty" ] && echo "INFO: Creating '${JAILPATH}/dev/tty'" && mknod -m 666 "${JAILPATH}/dev/tty" c 5 0
+[ ! -e "${JAILPATH}/dev/ptmx" ] && echo "INFO: Creating '${JAILPATH}/dev/ptmx'" && mknod -m 666 "${JAILPATH}/dev/ptmx" c 5 2
+# ... directories
+[ ! -e "${JAILPATH}/proc" ] && echo "INFO: Creating '${JAILPATH}/proc'" && mkdir "${JAILPATH}/proc"
+[ ! -e "${JAILPATH}/dev/pts" ] && echo "INFO: Creating '${JAILPATH}/dev/pts'" && mkdir "${JAILPATH}/dev/pts"
+# ... binaries
+[ ! -e "${JAILPATH}/bin/netcat" -a -e "${JAILPATH}/bin/nc.traditional" ] && echo "INFO: Creating '${JAILPATH}/bin/netcat'" && ln -s nc.traditional "${JAILPATH}/bin/netcat"
+
+# Create user directory
+[ ! -e "${JAILPATH}/home/${USERNAME}" ] && mkdir "${JAILPATH}/home/${USERNAME}"
+[ ! -d "${JAILPATH}/home/${USERNAME}" ] && echo "ERROR: Missing/invalid user directory (${JAILPATH}/home/${USERNAME})" >&2 && exit 1
+# ... BASH profile
+[ ! -e "${JAILPATH}/home/${USERNAME}/.bash_profile" ] && echo "INFO: Creating '${JAILPATH}/home/${USERNAME}/.bash_profile'" && cat << EOF > "${JAILPATH}/home/${USERNAME}/.bash_profile"
+## LOGIN SHELL SETTINGS
+
+# Import non-login shell settings
+[ -r ~/.bashrc ] && . ~/.bashrc
+EOF
+# ... BASH configuration
+[ ! -e "${JAILPATH}/home/${USERNAME}/.bashrc" ] && echo "INFO: Creating '${JAILPATH}/home/${USERNAME}/.bashrc'" && cat << EOF > "${JAILPATH}/home/${USERNAME}/.bashrc"
+## ENVIRONMENT
+
+# User settings
+umask 077
+ulimit -c 0
+
+# System variables
+
+
+## "PROMPT" SHELL ONLY
+[ -z "\$PS1" ] && return
+
+# Prompt
+PS1="\[\e[34m\]\u@\h:\[\e[36m\]\w\[\e[0m\] # "
+
+# Completions
+[ -r /etc/bash_completion ] && . /etc/bash_completion
+
+# Done
+cd
+EOF
+# ... SSH configuration
+[ ! -e "${JAILPATH}/home/${USERNAME}/.ssh" ] && echo "INFO: Creating '${JAILPATH}/home/${USERNAME}/.ssh'" && mkdir "${JAILPATH}/home/${USERNAME}/.ssh"
+[ ! -e "${JAILPATH}/.ssh" ] && echo "INFO: Symlinking '${JAILPATH}/.ssh'" && ln -s "home/${USERNAME}/.ssh/" "${JAILPATH}/.ssh"
+
+# Account creation and jail finalization
+# ... user account
+id ${USERNAME} >/dev/null
+[ $? -ne 0 ] && echo "INFO: Creating '${USERNAME}' account" && useradd --home /home/${USERNAME} --gid users --shell /bin/bash ${USERNAME}
+grep -q "^${USERNAME}:" "/home/${USERNAME}/etc/passwd"
+[ $? -ne 0 ] && echo "INFO: Adding user to '/home/${USERNAME}/etc/passwd'" && fgrep ${USERNAME} /etc/passwd >> "/home/${USERNAME}/etc/passwd"
+# ... home directory permissions
+echo "INFO: Setting permissions on '/home/${USERNAME}/home/${USERNAME}'" && chown -R ${USERNAME}.users "/home/${USERNAME}/home/${USERNAME}"
+# ... chroot environment
+grep -q "^${USERNAME} " /etc/security/chroot.conf
+[ $? -ne 0 ] && echo "INFO: Configuring user in '/etc/security/chroot.conf'" && echo "${USERNAME} /home/${USERNAME}" >> /etc/security/chroot.conf
+# ... mountpoints
+grep -q "^none /home/${USERNAME}/proc " /etc/fstab
+[ $? -ne 0 ] && echo "INFO: Adding '/home/${USERNAME}/proc' to '/etc/fstab'" && echo "none /home/${USERNAME}/proc proc defaults 0 0" >> /etc/fstab
+grep -q "^none /home/${USERNAME}/dev/pts " /etc/fstab
+[ $? -ne 0 ] && echo "INFO: Adding '/home/${USERNAME}/dev/pts' to '/etc/fstab'" && echo "none /home/${USERNAME}/dev/pts devpts gid=5,mode=620 0 0" >> /etc/fstab
+
