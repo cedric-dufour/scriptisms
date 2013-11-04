@@ -87,8 +87,12 @@ trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_
 # Loop through audio files
 echo "INFO[$$]: Looking for files to transcode..."
 IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -iname '*.wav' -o -iname '*.mp3' ${AAC_INCL:+-o -iname '*.aac' -o -iname '*.m4a' -o -iname '*.mp4'} ${FLAC_INCL:+-o -iname '*.flac'} \)" | sort); do
-  # Compute destination file name
+  # Compute source parameters
+  d_src="$(dirname ${p_src})"
+  [ -e "${d_src}/.nodownsample" ] && continue
   e_src="${p_src##*.}"
+
+  # Compute destination parameters
   p_dst="${p_src%.*}.mp3"
   p_dst="${DST_DIR}/${p_dst#${SRC_DIR}/}"
   d_dst="$(dirname ${p_dst})"
@@ -114,35 +118,38 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -i
 
     'mp3')
       if [ -n "${ID3_INCL}" ]; then
-        IFS=$'\n'; for tag in $(id3info "${p_src}" | egrep '(TIT2|TALB|TPE1|TRCK|TYER|Bitrate)' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}'); do
-          case "${tag%%|*}" in
+        IFS=$'\n'; for tag in $(id3info "${p_src}" | egrep -i '(TIT2|TALB|TPE1|TRCK|TYER|Bitrate)' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TIT2\|TALB\|TPE1\|TRCK\|TYER\|Bitrate\).*|/\1|/i'); do
+          key="${tag%%|*}"
+          case "${key^^}" in
             'TIT2') tt="${tag##*|}";;
             'TALB') tl="${tag##*|}";;
             'TPE1') ta="${tag##*|}";;
             'TRCK') tn="${tag##*|}";;
             'TYER') ty="${tag##*|}";;
-            'Bitrate') br="$(echo ${tag##*|} | sed 's/[^0-9]//g')";;
+            'BITRATE') br="$(echo ${tag##*|} | sed 's/[^0-9]//g')";;
           esac
         done
       fi
       ;;
 
     'aac'|'m4a'|'mp4')
-      IFS=$'\n'; for tag in $(faad --info "${p_src}" 2>&1 | egrep '^(title|album|artist|track|date):' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | iconv -f utf-8 -t iso-8859-1); do
-       case "${tag%%|*}" in
-          'title') tt="${tag##*|}";;
-          'album') tl="${tag##*|}";;
-          'artist') ta="${tag##*|}";;
-          'track') tn="${tag##*|}";;
-          'data') ty="${tag##*|}";;
+      IFS=$'\n'; for tag in $(faad --info "${p_src}" 2>&1 | egrep -i '^(TITLE|ALBUM|ARTIST|TRACK|DATE):' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TITLE\|ALBUM\|ARTIST\|TRACK\|DATE\).*|/\1|/i' | iconv -f utf-8 -t iso-8859-1); do
+        key="${tag%%|*}"
+        case "${key^^}" in
+          'TITLE') tt="${tag##*|}";;
+          'ALBUM') tl="${tag##*|}";;
+          'ARTIST') ta="${tag##*|}";;
+          'TRACK') tn="${tag##*|}";;
+          'DATE') ty="${tag##*|}";;
         esac
       done
       ;;
 
     'flac')
       if [ -n "${METAFLAC_INCL}" ]; then
-        IFS=$'\n'; for tag in $(metaflac --export-tags-to=- "${p_src}" | egrep '^(TITLE|ALBUM|ARTIST|TRACKNUMBER|DATE)=' | awk -F '=' 'BEGIN {OFS="|"} {print $1,$2}' | iconv -f utf-8 -t iso-8859-1); do
-         case "${tag%%|*}" in
+        IFS=$'\n'; for tag in $(metaflac --export-tags-to=- "${p_src}" | egrep -i '^(TITLE|ALBUM|ARTIST|TRACKNUMBER|DATE)=' | awk -F '=' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TITLE\|ALBUM\|ARTIST\|TRACKNUMBER\|DATE\).*|/\1|/i' | iconv -f utf-8 -t iso-8859-1); do
+          key="${tag%%|*}"
+          case "${key^^}" in
             'TITLE') tt="${tag##*|}";;
             'ALBUM') tl="${tag##*|}";;
             'ARTIST') ta="${tag##*|}";;

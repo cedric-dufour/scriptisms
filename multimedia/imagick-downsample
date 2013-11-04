@@ -72,8 +72,12 @@ trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_
 # Loop through image files
 echo "INFO[$$]: Looking for files to transcode..."
 IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.tif' -o -iname '*.tiff'  \)" | sort); do
-  # Compute destination file name
+  # Compute source parameters
+  d_src="$(dirname ${p_src})"
+  [ -e "${d_src}/.nodownsample" ] && continue
   e_src="${p_src##*.}"
+
+  # Compute destination parameters
   p_dst="${p_src%.*}.jpg"
   p_dst="${DST_DIR}/${p_dst#${SRC_DIR}/}"
   d_dst="$(dirname ${p_dst})"
