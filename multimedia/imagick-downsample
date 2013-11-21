@@ -98,7 +98,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -i
   echo "INFO[$$]: Transcoding ${p_src} -> ${p_dst}"
 
   # Downsample/transcode image file
-  eval "convert \"${p_src}\" -resize '${SIZE_GAUGE}x${SIZE_GAUGE}>' -quality ${JPEG_QUALITY} \"${p_dst}\""
+  eval "convert \"${p_src}\" -resize '${SIZE_GAUGE}x${SIZE_GAUGE}>' -quality ${JPEG_QUALITY} +profile '*' \"${p_dst}\""
   [ $? -ne 0 ] && echo "WARNING[$$]: An error occured while transcoding (${p_aux} -> ${p_dst}); skipping..." >&2 && continue
    
 done

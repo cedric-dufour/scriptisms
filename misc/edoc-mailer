@@ -22,6 +22,7 @@ OPTIONS:
   -B --body      Message body file
   -P --prefix    Document name prefix [default:none]
   -X --suffix    Document name suffix [default:'.pdf']
+  -W --wait      Wait the given amount of seconds after each message is sent [default:0]
   -d1            First document directory
   ...            ...
   -d5            Fifth document directory
@@ -41,6 +42,7 @@ MY_SUBJECT='E-document(s)'
 MY_BODY=/dev/null
 MY_PREFIX=
 MY_SUFFIX='.pdf'
+MY_WAIT=0
 for my_dir in {1..5}; do
   MY_DIR[${my_dir}]=
   MY_NAME[${my_dir}]=
@@ -62,6 +64,9 @@ while [ -n "${1}" ]; do
       ;;
     -X|--suffix)
       shift; MY_SUFFIX="${1}"
+      ;;
+    -W|--wait)
+      shift; MY_WAIT="${1}"
       ;;
     -d1|-d2|-d3|-d4|-d5)
       my_dir=${1#-d}
@@ -120,13 +125,10 @@ done
 ## Temporary directory
 MY_TMPDIR="$(mktemp -d)"
 [ ! -d "${MY_TMPDIR}" ] && echo 'ERROR: Failed to create temporary directory' >&2 && exit 1
-function __cleanup {
-  [ -n "${MY_TMPDIR}" ] && rm -rf "${MY_TMPDIR}"
-}
 
 
 ## Trap signals
-trap '__cleanup; exit 1' INT TERM
+trap 'rm -rf "${MY_TMPDIR}"' EXIT
 
 
 ## Process recipients
@@ -140,13 +142,13 @@ IFS=$'\n'; for my_rcpt in $(cat "${MY_RCPT}"); do
   fi
   my_rcpt_files=
   my_rcpt_skip=
-  echo "INFO: Sending documents to '${my_rcpt_email}' (${my_rcpt_id})"
+  echo "NOTICE: Processing recipient (${my_rcpt_id})"
   for my_dir in $(echo -e ${MY_DIRS}); do
     my_file="${MY_DIR[${my_dir}]%%/}/${MY_PREFIX}${my_rcpt_id}${MY_SUFFIX}"
     if [ ! -e "${my_file}" ]; then
       echo "WARNING: No matching file found (${my_file})" >&2
       if [ -n "${MY_REQD[${my_dir}]}" ]; then
-        echo "ERROR: File is required for sending; skipping recipient" >&2
+        echo "ERROR: File is required for sending; skipping recipient (${my_rcpt_id})" >&2
         my_rcpt_skip='yes'
         break
       fi
@@ -162,13 +164,14 @@ IFS=$'\n'; for my_rcpt in $(cat "${MY_RCPT}"); do
     fi
     my_rcpt_files="${my_rcpt_files}${my_rcpt_files:+ }'${my_file}'"
   done
-  [ -n "${MY_SIMULATE}" ] && continue
   [ -n "${my_rcpt_skip}" ] && continue
+  echo "INFO: Sending documents to '${my_rcpt_email}' (${my_rcpt_id})"
+  [ -n "${MY_SIMULATE}" ] && continue
   eval mutt -s "'${MY_SUBJECT}'" "$@" ${my_rcpt_files:+-a} ${my_rcpt_files} ${my_rcpt_files:+--} ${my_rcpt_email} < "${MY_BODY}"
+  sleep ${MY_WAIT}
 done
 
 
 ## Done
-__cleanup
 exit 0
 

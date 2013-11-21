@@ -118,7 +118,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -i
 
     'mp3')
       if [ -n "${ID3_INCL}" ]; then
-        IFS=$'\n'; for tag in $(id3info "${p_src}" | egrep -i '(TIT2|TALB|TPE1|TRCK|TYER|Bitrate)' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TIT2\|TALB\|TPE1\|TRCK\|TYER\|Bitrate\).*|/\1|/i'); do
+        IFS=$'\n'; for tag in $(id3info "${p_src}" | egrep -i '(TIT2|TALB|TPE1|TRCK|TYER|Bitrate)' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TIT2\|TALB\|TPE1\|TRCK\|TYER\|Bitrate\).*|/\1|/i' | iconv -f latin1 -t utf8 ); do
           key="${tag%%|*}"
           case "${key^^}" in
             'TIT2') tt="${tag##*|}";;
@@ -133,7 +133,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -i
       ;;
 
     'aac'|'m4a'|'mp4')
-      IFS=$'\n'; for tag in $(faad --info "${p_src}" 2>&1 | egrep -i '^(TITLE|ALBUM|ARTIST|TRACK|DATE):' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TITLE\|ALBUM\|ARTIST\|TRACK\|DATE\).*|/\1|/i' | iconv -f utf-8 -t iso-8859-1); do
+      IFS=$'\n'; for tag in $(faad --info "${p_src}" 2>&1 | egrep -i '^(TITLE|ALBUM|ARTIST|TRACK|DATE):' | awk -F ': ' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TITLE\|ALBUM\|ARTIST\|TRACK\|DATE\).*|/\1|/i' ); do
         key="${tag%%|*}"
         case "${key^^}" in
           'TITLE') tt="${tag##*|}";;
@@ -147,7 +147,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -i
 
     'flac')
       if [ -n "${METAFLAC_INCL}" ]; then
-        IFS=$'\n'; for tag in $(metaflac --export-tags-to=- "${p_src}" | egrep -i '^(TITLE|ALBUM|ARTIST|TRACKNUMBER|DATE)=' | awk -F '=' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TITLE\|ALBUM\|ARTIST\|TRACKNUMBER\|DATE\).*|/\1|/i' | iconv -f utf-8 -t iso-8859-1); do
+        IFS=$'\n'; for tag in $(metaflac --export-tags-to=- "${p_src}" | egrep -i '^(TITLE|ALBUM|ARTIST|TRACKNUMBER|DATE)=' | awk -F '=' 'BEGIN {OFS="|"} {print $1,$2}' | sed 's/.*\(TITLE\|ALBUM\|ARTIST\|TRACKNUMBER\|DATE\).*|/\1|/i' ); do
           key="${tag%%|*}"
           case "${key^^}" in
             'TITLE') tt="${tag##*|}";;
@@ -168,7 +168,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -i
   [ -n "${tn}" ] && tags="${tags} --tn \"${tn}\""
   [ -n "${ty}" ] && tags="${tags} --ty \"${ty}\""
   [ -n "${LAME_COMMENT}" ] && tags="${tags} --tc \"${LAME_COMMENT}\" "
-  [ -n "${tags}" ] && tags="--add-id3v2 ${tags}"
+  [ -n "${tags}" ] && tags="--add-id3v2 --id3v2-latin1 ${tags}"
    
   # Downsample/transcode audio file
   if [ "${e_src}" == 'mp3' -a -n "${br}" ] && [ ${br} -le ${TARGET_KBS} ]; then
