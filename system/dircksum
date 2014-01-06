@@ -10,22 +10,26 @@ SYSNOPSIS:
   directory.
 
 OPTIONS:
-  -v, --verbose :
+  -v, --verbose
     Display computing progress (on 'stdout').
 
-  -s, --silent :
+  -s, --silent
     Display only warnings and errors (on 'stderr').
 
-  -t, --trust :
+  -t, --trust
     Trust and use existing checksums ('.dircksum' contents) without verification
     (existing checksums will not be compared to the re-computed checksums).
     This mode is useful to complete an interrupted checksumming.
     WARNING: If the corresponding directory has become corrupted, it will NOT
              be detected!
 
-  -r, --read-only :
+  -r, --read-only
     Perform a read-only checksum verification, without saving new/missing
     checksums.
+
+  -p, --print
+    Print checksum results to 'stdout'
+    (useful - along with 'diff' - to detect discrepancies location).
 
   -d, --delete
     Delete the checksum file from the given directory and all the parent arbo-
@@ -43,6 +47,7 @@ VERBOSE=
 SILENT=
 TRUST=
 READONLY=
+PRINT=
 DELETE=
 
 # Checks
@@ -68,6 +73,7 @@ function _exit {
 function _dircksum {
   # Arguments
   local DIRECTORY="${1}"
+  local DEPTH="${2}"
 
   # Compute checksum
   [ -n "${VERBOSE}" ] && echo "INFO: Computing checksum for directory (${DIRECTORY})..."
@@ -81,17 +87,14 @@ function _dircksum {
       [ -z "${SILENT}" ] && echo "INFO: Trusting/using existing checksum WITHOUT VERIFICATION (${__subdir})"
       continue
     fi
-    _dircksum "${__subdir}"
+    _dircksum "${__subdir}" $(( ${DEPTH}+1 ))
     [ ${EXIT} -ne 0 ] && [ -z "${READONLY}" ] && return ${EXIT}
   done
 
   # ... necessary to loose CPU cycles?
   if [ -n "${READONLY}" ]; then
-    if [ ! -e "${DIRECTORY}/.dircksum" ]; then
-      echo "WARNING: Missing checksum file; can not verify checksum (${DIRECTORY})" >&2
-      _exit 1; return ${EXIT}
-    elif [ ! -r "${DIRECTORY}/.dircksum" ]; then
-      echo "WARNING: Unreadable checksum file; can not verify checksum (${DIRECTORY})" >&2
+    if [ ! -e "${DIRECTORY}/.dircksum" -o ! -r "${DIRECTORY}/.dircksum" ]; then
+      echo "WARNING: Missing/unreadable checksum file; can not verify checksum (${DIRECTORY})" >&2
       _exit 1; return ${EXIT}
     fi
   fi
@@ -139,6 +142,7 @@ ${__cksum} ${__size} ${__dirs} ${__files} $(date +'%Y%m%dT%H%M%S') # DIRCKSUM
 ${__filecksum}
 EOF
     [ $? -ne 0 ] && echo "ERROR: Failed to save checksum file (${DIRECTORY}/.dircksum)" >&2 && _exit 2 && return ${EXIT}
+    [ -n "${PRINT}" -a ${DEPTH} -eq 0 ] && cat "${DIRECTORY}/.dircksum"
   elif [ ! -r "${DIRECTORY}/.dircksum" ]; then
     echo "WARNING: Unreadable checksum file (${DIRECTORY}/.dircksum)" >&2
     _exit 1; return ${EXIT}
@@ -148,6 +152,12 @@ EOF
     local __size_check=${__dircksum%% *}; __dircksum=${__dircksum#* }
     local __dirs_check=${__dircksum%% *}; __dircksum=${__dircksum#* }
     local __files_check=${__dircksum%% *}
+    [ -n "${PRINT}" -a ${DEPTH} -eq 0 ] && cat << EOF
+# CKSUM[cksum] SIZE[bytes] DIRS[count] FILES[count] DATE[iso]
+${__cksum} ${__size} ${__dirs} ${__files} $(date +'%Y%m%dT%H%M%S') # DIRCKSUM
+# CKSUK[cksum] SIZE[bytes] FILE[name]
+${__filecksum}
+EOF
     if [ "${__cksum_check}" != "${__cksum}" -o "${__size_check}" != "${__size}" -o "${__dirs_check}" != "${__dirs}" -o "${__files_check}" != "${__files}" ]; then
       #echo "DEBUG: ${__cksum} ${__size} ${__dirs} ${__files} <-> ${__cksum_check} ${__size_check} ${__dirs_check} ${__files_check}" >&2
       echo "ERROR: Checksum MISMATCH (${DIRECTORY})" >&2 && _exit 2; return ${EXIT}
@@ -198,6 +208,9 @@ while [ -n "${1}" ]; do
       TRUST=
       DELETE=
       ;;
+    '-p'|'--print')
+      PRINT='yes'
+      ;;
     '-d'|'--delete')
       DELETE='yes'
       TRUST=
@@ -216,7 +229,7 @@ while [ -n "${1}" ]; do
           popd >/dev/null
           _delete "${DIRECTORY}"
         else
-          _dircksum "${DIRECTORY}"
+          _dircksum "${DIRECTORY}" 0
         fi
         [ ${EXIT} -ne 0 ] && [ -z "${READONLY}" -a -z "${DELETE}" ] && exit ${EXIT}
       fi
