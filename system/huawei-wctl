@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# References
+# http://chaddyhv.wordpress.com/2012/08/13/programming-and-installing-huawei-hilink-e3131-under-linux/
+
+# Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<options>] <action>
+
+SYNOPSIS:
+  Control Huawei web-based (HiLink) USB dongle.
+
+ACTIONS:
+  ps pin-status  Display PIN code (entry) status
+  pu pin-unlock  Unlock the dongle/SIM (PIN code entry)
+  s  status      Display the connection status
+  c  connect     Establish the dial-up connection
+  d  disconnect  Disconnect the dial-up connection
+  m  sms-send    Send given text message (SMS) to given number
+  i  devinfo     Display device information
+
+OPTIONS:
+  -p --pin-code  PIN code
+  -P --pin-file  PIN code file
+  -n --number    Phone number
+  -t --text      Text message
+EOF
+
+# Arguments
+HUAWEI_PIN_CODE=
+HUAWEI_PIN_FILE=
+HUAWEI_NUMBER=
+HUAWEI_TEXT=
+HUAWEI_ACTION=
+while [ -n "${1}" ]; do
+  ARGV="${1}"; shift
+  case "${ARGV}" in
+    -p|--pin-code)
+      [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
+      HUAWEI_PIN_CODE="${1}"; shift;;
+    -P|--pin-file)
+      [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
+      HUAWEI_PIN_FILE="${1}"; shift;;
+    -n|--number)
+      [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
+      HUAWEI_NUMBER="${1}"; shift;;
+    -t|--text)
+      [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
+      HUAWEI_TEXT="${1}"; shift;;
+    -*)
+      echo "ERROR: Unknown option (${1})" >&2 && exit 1;;
+    *)
+      [ -n "${HUAWEI_ACTION}" ] && echo 'ERROR: Only one action is allowed' >&2 && exit 1
+      HUAWEI_ACTION="${ARGV}"
+  esac
+done
+
+# Parameters
+HUAWEI_URL='http://192.168.1.1'
+
+# Checks
+if [ -n "${HUAWEI_PIN_FILE}" ]; then
+  [ ! -r "${HUAWEI_PIN_FILE}" ] && echo "ERROR: Invalid/unreadable PIN code file (${HUAWEI_PIN_FILE})" >&2 && exit 1
+  HUAWEI_PIN_CODE="$(grep -v '^\s*#' "${HUAWEI_PIN_FILE}" | head -n 1)"
+fi
+
+# Functions
+function huawei_command {
+  HUAWEI_API_COMMAND="${1}"; shift
+  HUAWEI_REQUEST="${1}"; shift
+  if [ -n "${HUAWEI_REQUEST}" ]; then
+    HUAWEI_RESPONSE="$(wget -q -O- --post-data "<request>${HUAWEI_REQUEST}</request>" ${HUAWEI_URL}/api/${HUAWEI_API_COMMAND})"
+  else
+    HUAWEI_RESPONSE="$(wget -q -O- ${HUAWEI_URL}/api/${HUAWEI_API_COMMAND})"
+  fi
+  [ -z "${HUAWEI_RESPONSE}" ] && echo 'ERROR: No response from dongle' >&2 && exit 1
+  #echo "${HUAWEI_RESPONSE}" >&2 # DEBUG
+  echo "${HUAWEI_RESPONSE}" | sed 's|<?xml[^>]*>||' | egrep '^\s*<[^>]*>[^<]{1,}</[^>]*>\s*$' | sed 's|\s*<\([^>]*\)>|\1: |;s|</.*||'
+}
+
+# Actions
+case "${HUAWEI_ACTION}" in
+  ps|pin-status)
+    huawei_command 'monitoring/status' | grep '^SimStatus:'
+    huawei_command 'pin/status' | grep '^SimPinTimes:'
+    ;;
+  pu|pin-unlock)
+    [ -z "${HUAWEI_PIN_CODE}" ] && echo 'ERROR: Missing/empty PIN code' >&2 && exit 1
+    [ -z "$(echo "${HUAWEI_PIN_CODE}" | egrep '^[0-9]{4,8}$')" ] && echo 'ERROR: Invalid PIN code' >&2 && exit 1
+    [ -n "$(huawei_command 'monitoring/status' | grep '^SimStatus: [^0]')" ] && echo 'WARNING: SIM card already unlocked' >&2 && exit 0
+    huawei_command 'pin/operate' "<OperateType>0</OperateType><CurrentPin>${HUAWEI_PIN_CODE}</CurrentPin><NewPin></NewPin><PukCode></PukCode>"
+    ;;
+  s|status)
+    huawei_command 'net/current-plmn' | egrep '^(FullName|ShortName):'
+    huawei_command 'monitoring/status'
+    ;;
+  c|connect)
+    huawei_command 'dialup/dial' '<Action>1</Action>'
+    ;;
+  d|disconnect)
+    huawei_command 'dialup/dial' '<Action>0</Action>'
+    ;;
+  m|sms-send)
+    [ -z "${HUAWEI_NUMBER}" ] && echo 'ERROR: Missing/empty phone code' >&2 && exit 1
+    [ -z "${HUAWEI_TEXT}" ] && echo 'ERROR: Missing/empty text message' >&2 && exit 1
+    [ -z "$(echo "${HUAWEI_NUMBER}" | egrep '^\+?[0-9]{1,}$')" ] && echo "ERROR: Invalid phone number (${HUAWEI_NUMBER})" >&2 && exit 1
+    HUAWEI_TEXT="${HUAWEI_TEXT:0:160}"
+    huawei_command 'sms/send-sms' "<Index>-1</Index><Phones><Phone>${HUAWEI_NUMBER}</Phone></Phones><Sca></Sca><Content>$( echo "${HUAWEI_TEXT}" | sed "s|&|\&amp;|g;s|<|\&lt;|g;s|>|\&gt;|g;s|'|\&#39|g;s|\"|\&quot;|g")</Content><Length>${#HUAWEI_TEXT}</Length><Reserved>1</Reserved><Date>$(date +'%Y-%m-%d %H:%M:%S')</Date>"
+    ;;
+  i|devinfo)
+    huawei_command 'device/information'
+    ;;
+  *)
+    echo "ERROR: Unknown action (${HUAWEI_ACTION})" >&2 && exit 1;;
+esac
+exit 0
+

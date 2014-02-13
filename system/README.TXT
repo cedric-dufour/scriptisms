@@ -17,6 +17,10 @@ dns-make-ip6.arpa
 Generate the reverse lookup zone corresponging to the given IPv6 segment
 (which length MUST match 16-bit multiple) and given DNS forward resources.
 
+huawei-wctl
+-----------
+Control Huawei E303s-2 (and compatible) 3G/UMTS USB dongle via its web API.
+
 kvm-helper
 ----------
 Launch a KVM virtual server (guest) with appropriate options for the
