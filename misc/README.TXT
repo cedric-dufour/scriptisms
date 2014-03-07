@@ -11,6 +11,11 @@ eVFRMimport
 Copy Skyguide eVFR Manual to the given destination directory, converting
 all PDF files to PNG images for easier/faster browsing.
 
+openaip2gpx
+-----------
+Convert OpenAIP (XML) data to GPX format, textualizing as description (or
+comment) the AIP fields that have no GPX equivalent.
+
 pdf2html
 --------
 Convert the given PDF file to HTML and PNG images for easier/faster browsing.
