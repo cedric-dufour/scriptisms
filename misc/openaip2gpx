@@ -1,0 +1,513 @@
+#!/usr/bin/env python
+# -*- mode:python; tab-width:4; python-indent:4; indent-tabs-mode:nil; -*-
+# ex: filetype=python tabstop=4 softtabstop=4 shiftwidth=4 expandtab autoindent smartindent
+
+#
+# OpenAIP to GPX data converter
+# Author: Cedric Dufour <http://cedric.dufour.name>
+#
+# The Dovecot Load-Balancer is free software:
+# you can redistribute it and/or modify it *as you wish*.
+# Maintaining the author(s) acknowledgment would be nice, though ;-)
+#
+# The Dovecot Load-Balancer is distributed in the hope
+# that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+
+
+# Modules
+# ... deb: python-argparse, python-nltk
+import argparse
+from nltk.tokenize import regexp_tokenize
+import re
+import sys
+import xml.etree.ElementTree as ElementTree
+
+# Global objects
+DEBUG = False
+
+# OpenAIP to GPX data converter class
+class COpenAip2GPX:
+		"""
+    OpenAIP to GPX data converter
+    """
+
+    #------------------------------------------------------------------------------
+    # CONSTRUCTORS / DESTRUCTOR
+    #------------------------------------------------------------------------------
+
+		def __init__( self ):
+				self.oArgumentParser = None
+				self.oArguments = None
+				self.oElementTree = None
+				self.oReAirportName = None
+				self.oReAirportId = None
+				self.oReAirportType = None
+				self.oReRunwaySurface = None
+				self.oReNavaidName = None
+				self.oReNavAidId = None
+				self.oReNavaidType = None
+				self.__initArgumentParser()
+
+
+		def __initArgumentParser( self ):
+				"""
+				Creates the arguments parser (and help generator)
+				"""
+
+				# Create argument parser
+				self.oArgumentParser = argparse.ArgumentParser( 'OpenAIP to GPX data converter' )
+
+				# ... input file
+				self.oArgumentParser.add_argument( 'openaip_filename', type=str,
+																					 default='',
+																					 metavar='<filename>',
+																					 help='OpenAIP (XML) data file' )
+
+				# ... airport name
+				self.oArgumentParser.add_argument( '-An', '--airport_name', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match airport name' )
+
+				# ... airport ID
+				self.oArgumentParser.add_argument( '-Ai', '--airport_id', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match airport ID (ICAO code)' )
+
+				# ... airport type
+				self.oArgumentParser.add_argument( '-At', '--airport_type', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match airport type' )
+
+				# ... runway length
+				self.oArgumentParser.add_argument( '-Rl', '--runway_length', type=int,
+																					 default=0,
+																					 metavar='<meter>',
+																					 help='Minimum length of runway to match' )
+
+				# ... runway surface
+				self.oArgumentParser.add_argument( '-Rs', '--runway_surface', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match runway surface' )
+
+				# ... runway filter
+				self.oArgumentParser.add_argument( '-Rf', '--runway_filter', action='store_true',
+																					 default=False,
+																					 help='Filter-out airports that have not matching runway' )
+
+				# ... navaid name
+				self.oArgumentParser.add_argument( '-Nn', '--navaid_name', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match navaid name' )
+
+				# ... navaid ID
+				self.oArgumentParser.add_argument( '-Ni', '--navaid_id', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match navaid ID' )
+
+				# ... navaid type
+				self.oArgumentParser.add_argument( '-Nt', '--navaid_type', type=str,
+																					 default='',
+																					 metavar='<regexp>',
+																					 help='PERL-compatible RegExp to match navaid type' )
+
+				# ... capitalize name
+				self.oArgumentParser.add_argument( '--capitalize', action='store_true',
+																					 default=False,
+																					 help='Capitalize names' )
+
+				# ... use comment
+				self.oArgumentParser.add_argument( '--comment', action='store_true',
+																					 default=False,
+																					 help='Output textualized data as GPX comment (instead of description)' )
+
+
+		def __initArguments( self, _aArguments = None ):
+				"""
+				Parses the command-line arguments; returns a non-zero exit code in case of failure.
+				"""
+
+				# Parse arguments
+				if _aArguments is None:
+						_aArguments = sys.argv
+				try:
+						self.oArguments = self.oArgumentParser.parse_args()
+				except Exception, e:
+						self.oArguments = None
+						sys.stderr.write( 'ERROR: Failed to parse arguments; %s\n' % str(e) )
+						return 1
+
+				# Validate arguments
+				if len( self.oArguments.openaip_filename ) <= 0:
+						sys.stderr.write( 'ERROR: Missing OpenAIP data file name (openaip_filename); %s\n' % str(e) )
+						return 1
+				if len( self.oArguments.airport_name ) > 0:
+						try:
+								self.oReAirportName = re.compile( self.oArguments.airport_name, re.IGNORECASE )
+						except Exception, e:
+								self.oReAirportName = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (airport_name); %s\n' % str(e) )
+								return 1
+				if len( self.oArguments.airport_id ) > 0:
+						try:
+								self.oReAirportId = re.compile( self.oArguments.airport_id, re.IGNORECASE )
+						except Exception, e:
+								self.oReAirportId = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (airport_id); %s\n' % str(e) )
+								return 1
+				if len( self.oArguments.airport_type ) > 0:
+						try:
+								self.oReAirportType = re.compile( self.oArguments.airport_type, re.IGNORECASE )
+						except Exception, e:
+								self.oReAirportType = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (airport_type); %s\n' % str(e) )
+								return 1
+				if len( self.oArguments.runway_surface ) > 0:
+						try:
+								self.oReRunwaySurface = re.compile( self.oArguments.runway_surface, re.IGNORECASE )
+						except Exception, e:
+								self.oReRunwaySurface = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (runway_surface); %s\n' % str(e) )
+								return 1
+				if len( self.oArguments.navaid_name ) > 0:
+						try:
+								self.oReNavaidName = re.compile( self.oArguments.navaid_name, re.IGNORECASE )
+						except Exception, e:
+								self.oReNavaidName = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (navaid_name); %s\n' % str(e) )
+								return 1
+				if len( self.oArguments.navaid_id ) > 0:
+						try:
+								self.oReNavaidId = re.compile( self.oArguments.navaid_id, re.IGNORECASE )
+						except Exception, e:
+								self.oReNavaidId = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (navaid_id); %s\n' % str(e) )
+								return 1
+				if len( self.oArguments.navaid_type ) > 0:
+						try:
+								self.oReNavaidType = re.compile( self.oArguments.navaid_type, re.IGNORECASE )
+						except Exception, e:
+								self.oReNavaidType = None
+								sys.stderr.write( 'ERROR: Failed to compile regular expression (navaid_type); %s\n' % str(e) )
+								return 1
+				return 0
+
+
+    #------------------------------------------------------------------------------
+    # METHODS
+    #------------------------------------------------------------------------------
+
+    #
+		# Helpers
+		#
+
+		def __getAttribute( self, _oElement, _sName ):
+				__sAttribute = _oElement.get( _sName )
+				if __sAttribute is None:
+						return None
+				return __sAttribute.strip().encode( 'utf-8' )
+
+
+		def __findElementText( self, _oElement, _sName ):
+				__oSubElement = _oElement.find( _sName )
+				if __oSubElement is None:
+						return None
+				__sText = __oSubElement.text
+				if __sText is None:
+						return None
+				return __sText.strip().encode( 'utf-8' )
+
+
+		def __coalesce( self, _sString, _sDefault ):
+				if _sString is None:
+						return _sDefault
+				return _sString
+
+
+		def __capitalize( self, _sString ):
+				return ''.join( __sToken.capitalize() for __sToken in regexp_tokenize( _sString, pattern='\w+|.' ) )
+
+
+    #
+		# Parsing
+		#
+
+		def __parseTree( self ):
+				"""
+				Parses the OpenAIP (XML) data tree.
+				"""
+
+        # GPX output
+				sys.stdout.write( '<?xml version="1.0"?>\n' )
+				sys.stdout.write( '<gpx\n' )
+				sys.stdout.write( ' version="1.1"\n' )
+				sys.stdout.write( ' creator="https://github.com/cedric-dufour/scriptism/misc/openaip2gpx"\n' )
+				sys.stdout.write( ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n' )
+				sys.stdout.write( ' xmlns="http://www.topografix.com/GPX/1/1"\n' )
+				sys.stdout.write( ' xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n' )
+				__oWaypoints = self.oElementTree.getroot().find( 'WAYPOINTS' )
+				if __oWaypoints is not None:
+						for __oAirport in __oWaypoints.findall( 'AIRPORT' ):
+								self.__parseAirport( __oAirport )
+				__oNavAids = self.oElementTree.getroot().find( 'NAVAIDS' )
+				if __oNavAids is not None:
+						for __oNavAid in __oNavAids.findall( 'NAVAID' ):
+								self.__parseNavAid( __oNavAid )
+				sys.stdout.write( '</gpx>\n' )
+
+
+		def __parseAirport( self, _oAirport ):
+				"""
+				Parses the OpenAIP (XML) AIRPORT elements.
+				"""
+
+        # Parse airport data
+        # ... type
+				__sType = self.__getAttribute( _oAirport, 'TYPE' )
+				if __sType is None:
+						sys.stderr.write( 'ERROR: Missing airport type\n' )
+						return
+				if self.oReAirportType is not None and self.oReAirportType.search( __sType ) is None:
+						return
+
+				# ... name and ICAO code
+				__sName = self.__findElementText( _oAirport, 'NAME' )
+				if __sName is None:
+						sys.stderr.write( 'ERROR: Missing airport name\n' )
+						return
+				if self.oReAirportName is not None and self.oReAirportName.search( __sName ) is None:
+						return
+				if self.oArguments.capitalize:
+						__sName = self.__capitalize( __sName )
+				__sICAO = self.__findElementText( _oAirport, 'ICAO' )
+				if self.oReAirportId is not None:
+						if __sICAO is None or self.oReAirportId.search( __sICAO ) is None:
+								return
+
+        # ... location
+				__oGeoLocation = _oAirport.find( 'GEOLOCATION' )
+				if __oGeoLocation is None:
+						sys.stderr.write( 'ERROR: Missing airport geolocation\n' )
+						return
+				__sLatitude = self.__findElementText( __oGeoLocation, 'LAT' )
+				__sLongitude = self.__findElementText( __oGeoLocation, 'LON' )
+				__sElevation = self.__findElementText( __oGeoLocation, 'ELEV' )
+				if __sLatitude is None or __sLongitude is None or __sElevation is None:
+						sys.stderr.write( 'ERROR: Invalid airport geolocation\n' )
+						return
+
+        # ... runways
+				__lRunways = []
+				for __oRunway in _oAirport.findall( 'RWY' ):
+						__sRunway = 'RWY:'
+						# ... name
+						__sRunwayName = self.__findElementText( __oRunway, 'NAME' )
+						if __sRunwayName is None:
+								sys.stderr.write( 'ERROR: Missing runway name\n' )
+								continue
+						__sRunway += ' '+__sRunwayName
+						# ... length and width
+						__sRunwayLength = self.__findElementText( __oRunway, 'LENGTH' )
+						if self.oArguments.runway_length > 0:
+								if __sRunwayLength is None:
+										continue
+								if int( float( __sRunwayLength ) + 0.5 ) < self.oArguments.runway_length:
+										continue
+						if __sRunwayLength is not None:
+								__sRunway += ' '+str( int( float( __sRunwayLength ) + 0.5 ) )
+						__sRunwayWidth = self.__findElementText( __oRunway, 'WIDTH' )
+						if __sRunwayWidth is not None:
+								__sRunway += 'x'+str( int( float( __sRunwayWidth ) + 0.5 ) )
+						__sRunway += 'm'
+						# ... surface
+						__sRunwaySurface = self.__findElementText( __oRunway, 'SFC' )
+						if self.oReRunwaySurface is not None:
+								if __sRunwaySurface is None:
+										continue
+								if self.oReRunwaySurface.search( __sRunwaySurface ) is None:
+										continue
+						if __sRunwaySurface is not None:
+								__sRunway += ' '+__sRunwaySurface
+						# ... operations
+						__sRunwayOperations = self.__getAttribute( __oRunway, 'OPERATIONS' )
+						if __sRunwayOperations is not None:
+								__sRunway += ' ('+__sRunwayOperations+')'
+						# ... ADD
+						__lRunways.append( __sRunway )
+				if self.oArguments.runway_filter and ( self.oArguments.runway_length > 0 or self.oReRunwaySurface is not None )	and len( __lRunways ) <= 0:
+						return
+
+				# ... radios
+				__lRadios = []
+				for __oRadio in _oAirport.findall( 'RADIO' ):
+						__sRadio = ''
+						# ... category
+						__sRadioCategory = self.__coalesce( self.__getAttribute( __oRadio, 'CATEGORY' ), 'FREQ' )
+						__sRadioCategory = __sRadioCategory[:4]
+						if __sRadioCategory == 'COMM': __sRadioCategory = 'COM'
+						elif __sRadioCategory == 'NAVI': __sRadioCategory = 'NAV'
+						__sRadio += __sRadioCategory
+						# ... type
+						__sRadioType = self.__findElementText( __oRadio, 'TYPE' )
+						if __sRadioType is not None:
+								__sRadio += '['+__sRadioType+']'
+						__sRadio += ':'
+						# ... frequency
+						__sRadioFrequency = self.__findElementText( __oRadio, 'FREQUENCY' )
+						if __sRadioFrequency is None:
+								sys.stderr.write( 'ERROR: Missing radio frequency' )
+								continue
+						__sRadio += ' '+__sRadioFrequency
+						# ... description
+						__sRadioDescription = self.__findElementText( __oRadio, 'DESCRIPTION' )
+						if __sRadioDescription is not None:
+								__sRadio += ' '+__sRadioDescription
+						# ... ADD
+						__lRadios.append( __sRadio )
+
+        # GPX output
+				# ... DTD data
+				sys.stdout.write( '<wpt lat="%s" lon="%s">\n' % ( __sLatitude, __sLongitude ) )
+				sys.stdout.write( ' <ele>%s</ele>\n' % __sElevation )
+				if __sICAO is None:
+						sys.stdout.write( ' <name>%s</name>\n' % __sName )
+				else:
+						sys.stdout.write( ' <name>%s (%s)</name>\n' % ( __sName, __sICAO ) )
+				# ... textualized data
+				if self.oArguments.comment:
+						sys.stdout.write( ' <cmt>' )
+				else:
+						sys.stdout.write( ' <desc>' )
+				sys.stdout.write( 'TYPE: %s' % __sType )
+				for __sRunway in __lRunways:
+						sys.stdout.write( '\n%s' % __sRunway )
+				for __sRadio in __lRadios:
+						sys.stdout.write( '\n%s' % __sRadio )
+				if self.oArguments.comment:
+						sys.stdout.write( '</cmt>\n' )
+				else:
+						sys.stdout.write( '</desc>\n' )
+				sys.stdout.write( ' <type>Airport</type>\n' )
+				sys.stdout.write( ' <sym>Airport</sym>\n' )
+				sys.stdout.write( '</wpt>\n' )
+
+
+		def __parseNavAid( self, _oNavaid ):
+				"""
+				Parses the OpenAIP (XML) NAVAIDS elements.
+				"""
+
+        # Parse navaid data
+        # ... type
+				__sType = self.__getAttribute( _oNavaid, 'TYPE' )
+				if __sType is None:
+						sys.stderr.write( 'ERROR: Missing navaid type\n' )
+						return
+				if self.oReNavaidType is not None and self.oReNavaidType.search( __sType ) is None:
+						return
+
+				# ... name and ID
+				__sName = self.__findElementText( _oNavaid, 'NAME' )
+				if __sName is None:
+						sys.stderr.write( 'ERROR: Missing navaid name\n' )
+						return
+				if self.oReNavaidName is not None and self.oReNavaidName.search( __sName ) is None:
+						return
+				if self.oArguments.capitalize:
+						__sName = self.__capitalize( __sName )
+				__sID = self.__findElementText( _oNavaid, 'ID' )
+				if __sID is None:
+						sys.stderr.write( 'ERROR: Missing navaid ID\n' )
+						return
+				if self.oReNavaidId is not None and self.oReNavaidId.search( __sID ) is None:
+						return
+
+        # ... location
+				__oGeoLocation = _oNavaid.find( 'GEOLOCATION' )
+				if __oGeoLocation is None:
+						sys.stderr.write( 'ERROR: Missing navaid geolocation\n' )
+						return
+				__sLatitude = self.__findElementText( __oGeoLocation, 'LAT' )
+				__sLongitude = self.__findElementText( __oGeoLocation, 'LON' )
+				__sElevation = self.__findElementText( __oGeoLocation, 'ELEV' )
+				if __sLatitude is None or __sLongitude is None or __sElevation is None:
+						sys.stderr.write( 'ERROR: Invalid navaid geolocation\n' )
+						return
+
+        # ... radio
+				__oRadio = _oNavaid.find( 'RADIO' )
+				if __oRadio is None:
+						sys.stderr.write( 'ERROR: Missing navaid radio details\n' )
+						return
+				__sFrequency = self.__findElementText( __oRadio, 'FREQUENCY' )
+				if __sFrequency is None:
+						sys.stderr.write( 'ERROR: Missing navaid frequency\n' )
+						return
+
+        # GPX output
+				# ... DTD data
+				sys.stdout.write( '<wpt lat="%s" lon="%s">\n' % ( __sLatitude, __sLongitude ) )
+				sys.stdout.write( ' <ele>%s</ele>\n' % __sElevation )
+				sys.stdout.write( ' <name>%s %s (%s %s)</name>\n' % (__sType, __sName, __sFrequency, __sID ) )
+				# ... textualized data
+				if self.oArguments.comment:
+						sys.stdout.write( ' <cmt>' )
+				else:
+						sys.stdout.write( ' <desc>' )
+				sys.stdout.write( 'TYPE: %s' % __sType )
+				sys.stdout.write( '\nFREQ: %s' % __sFrequency )
+				sys.stdout.write( '\nID: %s' % __sID )
+				if self.oArguments.comment:
+						sys.stdout.write( '</cmt>\n' )
+				else:
+						sys.stdout.write( '</desc>\n' )
+				sys.stdout.write( ' <type>NavAid</type>\n' )
+				sys.stdout.write( ' <sym>NavAid</sym>\n' )
+				sys.stdout.write( '</wpt>\n' )
+
+
+		def parseFile( self, _sFileName ):
+				"""
+				Parses the given OpenAIP(XML) data file; returns a non-zero exit code in case of failure.
+				"""
+
+				try:
+						self.oElementTree = ElementTree.parse( _sFileName )
+				except Exception, e:
+						self.oElementTree = None
+						sys.stderr.write( 'ERROR: Failed to open/parse file; %s\n' % str(e) )
+						return 1
+				self.__parseTree()
+				return 0
+
+
+		#
+		# Main
+		#
+
+		def main( self ):
+				"""
+				Executes the OpenAIP to GPX data converter; returns a non-zero exit code in case of failure.
+				"""
+
+				# Initialize
+				# ... arguments
+				__iReturn = self.__initArguments()
+				if __iReturn:
+						return __iReturn
+
+				# Execute
+				return self.parseFile( self.oArguments.openaip_filename )
+
+
+# Main
+if __name__ == '__main__':
+		oOpenAip2GPX = COpenAip2GPX()
+		sys.exit( oOpenAip2GPX.main() )
