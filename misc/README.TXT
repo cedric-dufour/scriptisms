@@ -11,6 +11,10 @@ eVFRMimport
 Copy Skyguide eVFR Manual to the given destination directory, converting
 all PDF files to PNG images for easier/faster browsing.
 
+gpx2flightlog
+-------------
+Convert a GPX (XML) track data to SkyDemon flightlog data format.
+
 openaip2gpx
 -----------
 Convert OpenAIP (XML) data to GPX format, textualizing as description (or
