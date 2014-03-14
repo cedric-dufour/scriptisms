@@ -20,6 +20,10 @@ pdf2html
 --------
 Convert the given PDF file to HTML and PNG images for easier/faster browsing.
 
+pdfxunite
+---------
+A version of 'pdfunite' that is compatible with 'xargs'.
+
 xps-index
 ---------
 Extract strings from given XPS file, located within given bounding frame.

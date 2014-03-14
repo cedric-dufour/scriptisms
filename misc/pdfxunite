@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Usage
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <PDF-destfile> <PDF-sourcefile-1>..<PDF-sourcefile-n>
+
+SYSNOPSIS:
+  A version of 'pdfunite' that is compatible with 'xargs'
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+PDFXUNITE_DEST="${1}"; shift
+[ -e "${PDFXUNITE_DEST}" ] && PDFXUNITE_HEAD="${PDFXUNITE_DEST}" || PDFXUNITE_HEAD=''
+
+# PDF unite
+if [ -e "${PDFXUNITE_DEST}" ]; then
+  pdfunite "${PDFXUNITE_DEST}" "$@" "${PDFXUNITE_DEST}.tmp" && mv "${PDFXUNITE_DEST}.tmp" "${PDFXUNITE_DEST}"
+else
+  pdfunite "$@" "${PDFXUNITE_DEST}"
+fi
+
