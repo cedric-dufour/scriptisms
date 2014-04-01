@@ -43,7 +43,7 @@ class COpenAip2GPX:
         self.oReAirportType = None
         self.oReRunwaySurface = None
         self.oReNavaidName = None
-        self.oReNavAidId = None
+        self.oReNavaidId = None
         self.oReNavaidType = None
         self.__initArgumentParser()
 
