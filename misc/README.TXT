@@ -11,6 +11,16 @@ eVFRMimport
 Copy Skyguide eVFR Manual to the given destination directory, converting
 all PDF files to PNG images for easier/faster browsing.
 
+gps2logbook
+-----------
+Convert GPS (DSV) data to (aircraft) logbook entries, with touchdown/airborne
+details: geolocaization, course, takeoff/landing/touch-'n-go, runway used and
+distance to threshold.
+
+gpx2csv
+-------
+A quick-n-dirty GPX track to CSV data converter
+
 gpx2flightlog
 -------------
 Convert a GPX (XML) track data to SkyDemon flightlog data format.
