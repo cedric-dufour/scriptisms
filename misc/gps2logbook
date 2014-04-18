@@ -1,0 +1,681 @@
+#!/usr/bin/env python
+# -*- mode:python; tab-width:4; indent-tabs-mode:nil; -*-
+# ex: filetype=python tabstop=4 softtabstop=4 shiftwidth=4 expandtab autoindent smartindent
+
+#
+# GPS to Logbook data converter
+# Author: Cedric Dufour <http://cedric.dufour.name>
+#
+# The GPS to Logbook data converter is free software:
+# you can redistribute it and/or modify it *as you wish*.
+# Maintaining the author(s) acknowledgment would be nice, though ;-)
+#
+# The GPS to Logbook data converter is distributed in the hope
+# that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+
+
+# Modules
+# ... deb: python-argparse, python-matplotlib, python-numpy, python-opencv, python-scipy
+import argparse
+import csv
+import cv2
+import math
+import matplotlib.pyplot as plot
+import numpy
+from scipy import interpolate
+import sys
+
+
+#------------------------------------------------------------------------------
+# CONSTANTS
+#------------------------------------------------------------------------------
+
+# Geodesical constants (shamelessly copied from GPSD)
+GPS_PI = 3.1415926535897932384626433832795029
+RAD_2_DEG = 57.2957795130823208767981548141051703
+DEG_2_RAD = 0.0174532925199432957692369076848861271
+WGS84A = 6378137 # equatorial radius
+WGS84B = 6356752.3142 # polar radius
+
+
+#------------------------------------------------------------------------------
+# FUNCTIONS
+#------------------------------------------------------------------------------
+
+def distanceRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) distance between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLatD = _fLat2 - _fLat1
+    __fLonD = _fLon2 - _fLon1
+    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    try:
+        __fQ = __fLatD / __fPhiD
+    except ZeroDivisionError:
+        __fQ = math.cos( _fLat1 )
+    if abs( __fLonD ) > GPS_PI:
+        if __fLonD > 0.0:
+            __fLonD = __fLonD - GPS_PI*2.0
+        else:
+            __fLonD = GPS_PI*2.0 + __fLonD
+    __fDistance = ( WGS84A + WGS84B ) / 2.0 * math.sqrt( __fLatD*__fLatD + __fLonD*__fLonD * __fQ*__fQ )
+    return __fDistance
+
+
+def bearingRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) bearing between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLonD = _fLon2 - _fLon1
+    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    if abs( __fLonD ) > GPS_PI:
+        if __fLonD > 0.0:
+            __fLonD = __fLonD - GPS_PI*2.0
+        else:
+            __fLonD = GPS_PI*2.0 + __fLonD
+    __fBearing = math.atan2( __fLonD, __fPhiD )
+    __fBearing *= RAD_2_DEG
+    if __fBearing < 0:
+        __fBearing += 360.0
+    return __fBearing;
+
+
+def destinationRL( _fLat1, _fLon1, _fBrng, _fDist ):
+    """
+    Loxodrome (rhumb line) desptination point from given geographical point along given course.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fBrng *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLatD = _fDist * math.cos( _fBrng )
+    __fLat2 = _fLat1 + __fLatD
+    __fPhiD = math.log( math.tan( __fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    try:
+        __fQ = __fLatD / __fPhiD
+    except ZeroDivisionError:
+        __fQ = math.cos( _fLat1 )
+    __fLonD = _fDist * math.sin( _fBrng ) / __fQ
+    if math.abs( __fLat2 ) > GPS_PI/2.0:
+        if __fLat2 > 0.0:
+            __fLat2 = GPS_PI - __fLat2
+        else:
+            __fLat2 = - GPS_PI - __fLat2
+    __fLon2 = ( _fLon1 + __fLonD +GPS_PI ) % ( GPS_PI*2.0 ) - GPS_PI;
+    return ( __fLat2 * RAD_2_DEG, __fLon2 * RAD_2_DEG )
+
+
+def midpointRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) midpoint between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    if abs( _fLon2 - _fLon1 ) > GPS_PI:
+        _fLon1 += 2*GPS_PI
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLat3 = ( _fLat1 + _fLat2 ) / 2.0;
+    __f1 = math.tan( _fLat1/2.0 + GPS_PI/4.0 );
+    __f2 = math.tan( _fLat2/2.0 + GPS_PI/4.0 );
+    __f3 = math.tan( __fLat3/2.0 + GPS_PI/4.0 );
+    try:
+        __fLon3 = ( ( _fLon2 - _fLon1 )*math.log( __f3 ) + _fLon1*math.log( __f2 ) - _fLon2*math.log( __f1 ) ) / math.log( __f2/__f1 )
+    except ZeroDivisionError:
+        __fLon3 = ( _fLon1 + _fLon2 ) / 2.0
+    __fLon3 = ( __fLon3 + GPS_PI*3.0 ) % ( GPS_PI*2.0 ) - GPS_PI
+    return ( __fLat3 * RAD_2_DEG, __fLon3 * RAD_2_DEG )
+
+
+def skeleton( _aArray, _iMaxN ):
+    __aSkeleton = numpy.zeros( numpy.shape( _aArray ), numpy.uint8 )
+    __aKernel = numpy.ones( 3, numpy.uint8 )
+    for __i in range(0,_iMaxN+1):
+        __aKernelN = numpy.ones( 2*__i+1, numpy.uint8 )
+        __aErode = cv2.erode( _aArray, __aKernelN )
+        __aSkeleton = __aSkeleton + __aErode - cv2.morphologyEx( __aErode, cv2.MORPH_OPEN, __aKernel )
+    return __aSkeleton
+
+
+
+#------------------------------------------------------------------------------
+# CLASSES
+#------------------------------------------------------------------------------
+
+
+# GPS to Logbook data converter class
+class CGps2Logbook:
+    """
+    GPS to Logbook
+    """
+
+    #------------------------------------------------------------------------------
+    # CONSTRUCTORS / DESTRUCTOR
+    #------------------------------------------------------------------------------
+
+    def __init__( self ):
+        # Variables
+        self.oArgumentParser = None
+        self.oArguments = None
+        self.fRwyLat = None,
+        self.fRwyLon = None,
+        self.fRwyLen = None,
+        self.fRwyAxis = None,
+        self.lEpoch = None
+        self.lLat = None
+        self.lLon = None
+        self.lEle = None
+        self.lBrng = None
+        self.lHSpd = None
+        self.__initArgumentParser()
+
+
+    def __initArgumentParser( self ):
+        """
+        Creates the arguments parser (and help generator)
+        """
+
+        # Create argument parser
+        self.oArgumentParser = argparse.ArgumentParser( 'GPS to Logbook data converter' )
+
+        # ... input file
+        # self.oArgumentParser.add_argument( 'gps_data_file', type=str,
+        #                                    default='stdin',
+        #                                    metavar='<path>',
+        #                                    help='GPS data (DSV) file' )
+
+        # ... 1st runway threshold latitude
+        self.oArgumentParser.add_argument( '-Rlat1', '--runway_threshold_latitude_1', type=float,
+                                           default=-999,
+                                           metavar='<latitude>',
+                                           help='1st runway threshold latitude, in degrees [deg]' )
+
+        # ... 1st runway threshold longitude
+        self.oArgumentParser.add_argument( '-Rlon1', '--runway_threshold_longitude_1', type=float,
+                                           default=-999,
+                                           metavar='<longitude>',
+                                           help='1st runway threshold longitude, in degrees [deg]' )
+
+        # ... 1st runway threshold elevation
+        self.oArgumentParser.add_argument( '-Rele1', '--runway_threshold_elevation_1', type=float,
+                                           default=-999,
+                                           metavar='<elevation>',
+                                           help='1st runway threshold, in meters [m]' )
+
+        # ... 2nd runway threshold latitude
+        self.oArgumentParser.add_argument( '-Rlat2', '--runway_threshold_latitude_2', type=float,
+                                           default=-999,
+                                           metavar='<latitude>',
+                                           help='2nd runway threshold latitude, in degrees [deg]' )
+
+        # ... 2nd runway threshold longitude
+        self.oArgumentParser.add_argument( '-Rlon2', '--runway_threshold_longitude_2', type=float,
+                                           default=-999,
+                                           metavar='<longitude>',
+                                           help='2nd runway threshold longitude, in degrees [deg]' )
+
+        # ... 2nd runway threshold elevation
+        self.oArgumentParser.add_argument( '-Rele2', '--runway_threshold_elevation_2', type=float,
+                                           default=-999,
+                                           metavar='<elevation>',
+                                           help='2nd runway threshold, in meters [m]' )
+
+        # ... runway width
+        self.oArgumentParser.add_argument( '-Rw', '--runway_width', type=float,
+                                           default=-999,
+                                           metavar='<width>',
+                                           help='Runway width, in meters [m]' )
+
+        # ... stall speed
+        self.oArgumentParser.add_argument( '-S', '--stall_speed', type=float,
+                                           default=-999,
+                                           metavar='<speed>',
+                                           help='Aircraft stall speed, in meters per second [m/s]' )
+
+        # ... wind speed
+        self.oArgumentParser.add_argument( '-Ws', '--wind_speed', type=float,
+                                           default=0,
+                                           metavar='<speed>',
+                                           help='Wind speed, in meters per second [m/s]' )
+
+        # ... wind direction
+        self.oArgumentParser.add_argument( '-Wd', '--wind_direction', type=float,
+                                           default=0,
+                                           metavar='<angle>',
+                                           help='Wind direction, in degrees [deg]' )
+
+        # ... time resolution
+        self.oArgumentParser.add_argument( '-T', '--time_resolution', type=float,
+                                           default=1,
+                                           metavar='<seconds>',
+                                           help='Time resolution, in seconds [s]' )
+
+        # ... analysis windows width
+        self.oArgumentParser.add_argument( '-La', '--analysis_length', type=int,
+                                           default=60,
+                                           metavar='<seconds>',
+                                           help='Analysis window length, in seconds [s]' )
+
+        # ... noise filter width
+        self.oArgumentParser.add_argument( '-Ln', '--noise_filter', type=int,
+                                           default=5,
+                                           metavar='<seconds>',
+                                           help='Noise filter length, in seconds [s]' )
+
+        # ... touch-n-go filter width
+        self.oArgumentParser.add_argument( '-Ltg', '--touchgo_filter', type=int,
+                                           default=30,
+                                           metavar='<seconds>',
+                                           help='Touch-\'n-Go filter length, in seconds [s]' )
+
+        # ... delimiter
+        self.oArgumentParser.add_argument( '-d', '--delimiter', type=str,
+                                           default=',',
+                                           metavar='<character>',
+                                           help='GPS data (DSV) file delimiter' )
+        # ... debug
+        self.oArgumentParser.add_argument( '--debug', action='store_true',
+                                           default=False,
+                                           help='Show debugging information' )
+
+
+
+    def __initArguments( self, _aArguments = None ):
+        """
+        Parses the command-line arguments; returns a non-zero exit code in case of failure.
+        """
+
+        # Parse arguments
+        if _aArguments is None:
+            _aArguments = sys.argv
+        try:
+            self.oArguments = self.oArgumentParser.parse_args()
+        except Exception, e:
+            self.oArguments = None
+            sys.stderr.write( 'ERROR: Failed to parse arguments; %s\n' % str(e) )
+            return 1
+
+        # Validate arguments
+        # if len( self.oArguments.gps_data_file ) <= 0:
+        #     sys.stderr.write( 'ERROR: Missing GPS data file path (gps_data_file); %s\n' % str(e) )
+        #     return 1
+        if self.oArguments.runway_threshold_latitude_1 < -90 or self.oArguments.runway_threshold_latitude_1 > 90:
+            sys.stderr.write( 'ERROR: Missing or invalid 1st runway threshold latitude (runway_threshold_latitude_1)\n' )
+            return 1
+        if self.oArguments.runway_threshold_longitude_1 < -180 or self.oArguments.runway_threshold_longitude_1 > 180:
+            sys.stderr.write( 'ERROR: Missing or invalid 1st runway threshold longitude (runway_threshold_longitude_1)\n' )
+            return 1
+        if self.oArguments.runway_threshold_elevation_1 < 0:
+            sys.stderr.write( 'ERROR: Missing or invalid 1st runway threshold elevation (runway_threshold_elevation_1)\n' )
+            return 1
+        if self.oArguments.runway_threshold_latitude_2 < -90 or self.oArguments.runway_threshold_latitude_2 > 90:
+            sys.stderr.write( 'ERROR: Missing or invalid 2nd runway threshold latitude (runway_threshold_latitude_2)\n' )
+            return 1
+        if self.oArguments.runway_threshold_longitude_2 < -180 or self.oArguments.runway_threshold_longitude_2 > 180:
+            sys.stderr.write( 'ERROR: Missing or invalid 2nd runway threshold longitude (runway_threshold_longitude_2)\n' )
+            return 1
+        if self.oArguments.runway_threshold_elevation_2 < 0:
+            sys.stderr.write( 'ERROR: Missing or invalid 2nd runway threshold elevation (runway_threshold_elevation_2)\n' )
+            return 1
+        if self.oArguments.runway_width < 0:
+            sys.stderr.write( 'ERROR: Missing or invalid runway width (runway_width)\n' )
+            return 1
+        if self.oArguments.stall_speed < 0:
+            sys.stderr.write( 'ERROR: Missing or invalid aircraft stall speed (stall_speed)\n' )
+            return 1
+        if self.oArguments.time_resolution < 0.1 or self.oArguments.time_resolution > 10.0:
+            sys.stderr.write( 'ERROR: Missing or invalid time resolution (time_resolution)\n' )
+            return 1
+        if self.oArguments.analysis_length < 30:
+            sys.stderr.write( 'ERROR: Invalid analysis window width (analysis_length)\n' )
+            return 1
+        if self.oArguments.touchgo_filter < 1:
+            sys.stderr.write( 'ERROR: Invalid noise filter width (noise_filter)\n' )
+            return 1
+        if self.oArguments.touchgo_filter < self.oArguments.noise_filter:
+            sys.stderr.write( 'ERROR: Invalid Touch-\'n-Go filter width (touchgo_filter)\n' )
+            return 1
+        return 0
+
+
+    #------------------------------------------------------------------------------
+    # METHODS
+    #------------------------------------------------------------------------------
+
+    #
+    # Processing
+    #
+
+    def __rwyele( self, _fLat, _fLon ):
+        """
+        Returns the runway elevation at the given geographical point.
+        """
+
+        __fThrDist = distanceRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, _fLat, _fLon )
+        __fThrBrng = bearingRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, _fLat, _fLon )
+        return \
+          self.oArguments.runway_threshold_elevation_1 + \
+          ( self.oArguments.runway_threshold_elevation_2 - self.oArguments.runway_threshold_elevation_1 ) * \
+          math.cos( self.fRwyAxis - __fThrBrng ) * __fThrDist / self.fRwyLen
+
+
+    def __process( self ):
+        """
+        Process the data window and output touchdown/airbone data.
+        """
+
+        # Data window length
+        __iDataLength = len( self.lEpoch )
+
+        # Compute mean elevation correction
+        __fEleCorr = 0.0
+        __iEleCount = 0
+        for __i in range( __iDataLength ):
+            if self.lHSpd[__i] <= self.oArguments.stall_speed:
+                __fEleCorr += self.lEle[__i] - self.__rwyele( self.lLat[__i], self.lLon[__i] )
+                __iEleCount += 1
+        if __iEleCount > 0:
+            __fEleCorr = __fEleCorr / __iEleCount
+
+        # Compute distance and altitude AGL
+        __lDist = [0]*__iDataLength
+        __lAlt = [0]*__iDataLength
+        for __i in range( __iDataLength ):
+            if __i > 0:
+                __lDist[__i] = __lDist[__i-1] + distanceRL( self.lLat[__i-1], self.lLon[__i-1], self.lLat[__i], self.lLon[__i] )
+            if self.lHSpd[__i] > self.oArguments.stall_speed:
+                __lAlt[__i] = self.lEle[__i] - __fEleCorr - self.__rwyele( self.lLat[__i], self.lLon[__i] )
+
+        # Interpolate/smooth data
+        __aEpoch = numpy.arange( self.lEpoch[0], self.lEpoch[__iDataLength-1], self.oArguments.time_resolution )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lLat, s=__iDataLength )
+        __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lLon, s=__iDataLength )
+        __aLon = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lBrng, s=__iDataLength )
+        __aBrng = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        __tTCK = interpolate.splrep( self.lEpoch, __lDist, s=__iDataLength )
+        __aHSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
+        __tTCK = interpolate.splrep( self.lEpoch, __lAlt, s=0 )
+        __aAlt = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
+        __iDataLength = len( __aEpoch )
+
+        # Correct wind speed
+        for __i in range( __iDataLength ):
+            __aHSpd[__i] += self.oArguments.wind_speed * math.cos( ( __aBrng[__i] - self.oArguments.wind_direction ) * DEG_2_RAD )
+
+        # Estimate attitude (climb/descent)
+        __iAttWdwLength = int( 5.0 / self.oArguments.time_resolution )
+        __aAtt = numpy.zeros( __iDataLength, numpy.int8 )
+        for __i in range( __iAttWdwLength+1, __iDataLength-__iAttWdwLength-1 ):
+            __fAltB = 0.0
+            __fAltA = 0.0
+            for __j in range( 1, __iAttWdwLength+1 ):
+                __fAltB += __aAlt[__i-__j]
+                __fAltA += __aAlt[__i+__j]
+            __fAltB /= __iAttWdwLength
+            __fAltA /= __iAttWdwLength
+            if __fAltA > 0.5 and __fAltA - __fAltB > 1.0:
+                __aAtt[__i] = 1
+            elif __fAltB > 0.5 and __fAltA - __fAltB < -1.0:
+                __aAtt[__i] = -1
+
+        # Detect "airborne" status
+        __aAirborne = numpy.zeros( __iDataLength, numpy.uint8 )
+        for __i in range( __iDataLength ):
+            # IF:
+            # 1. horz. speed is above stall speed AND
+            # 2. altitude above ground level is above 0.5m OR
+            # 3. climb speed is above 0.1m/s (20ft/min) OR
+            # 4. descent speed is above -0.1m/s (-20ft/min)
+            if __aHSpd[__i] > self.oArguments.stall_speed and \
+              ( __aAlt[__i] > 0.5 or \
+                ( __aVSpd[__i] > 0.1 and __aAtt[__i] > 0 ) or \
+                ( __aVSpd[__i] < -0.1 and __aAtt[__i] < 0 ) ):
+                __aAirborne[__i] = 1
+
+        # Filter out data imprecisions/errors noise
+        __aKernel = numpy.ones( int( self.oArguments.noise_filter / self.oArguments.time_resolution ), numpy.uint8 )
+        __aAirborne = cv2.morphologyEx( __aAirborne, cv2.MORPH_OPEN, __aKernel )
+        __aAirborne = cv2.morphologyEx( __aAirborne, cv2.MORPH_CLOSE, __aKernel )
+
+        # Filter-out touch-'n-go data
+        __aAirborne_touchgo = cv2.morphologyEx( __aAirborne, cv2.MORPH_CLOSE, numpy.ones( int( self.oArguments.touchgo_filter / self.oArguments.time_resolution ) ) )
+
+        # Output detected events
+        for __i in range( 1, __iDataLength ):
+            if __aAirborne[__i] != __aAirborne[__i-1]:
+                sys.stdout.write( "%.1f" % __aEpoch[__i] )
+                sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLat[__i] ) )
+                sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
+                sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, self.__rwyele( __aLat[__i], __aLon[__i] ) ) )
+                sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aBrng[__i] ) )
+                sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aHSpd[__i] ) )
+                sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aVSpd[__i] ) )
+                if __aAirborne[__i]:
+                    sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'AIRBORNE' ) )
+                    if __aAirborne_touchgo[__i-1]:
+                        sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
+                    else:
+                        sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TAKEOFF' ) )
+                else:
+                    sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHDOWN' ) )
+                    if __aAirborne_touchgo[__i]:
+                        sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
+                    else:
+                        sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'LANDING' ) )
+                if math.cos( ( __aBrng[__i] - self.fRwyAxis ) * DEG_2_RAD ) > 0.0:
+                    sys.stdout.write( "%s%01d" % ( self.oArguments.delimiter, int( self.fRwyAxis/10.0 ) ) )
+                    __fThrDist = distanceRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, __aLat[__i], __aLon[__i] )
+                    __fThrBrng = bearingRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, __aLat[__i], __aLon[__i] )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.cos( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
+                else:
+                    sys.stdout.write( "%s%01d" % ( self.oArguments.delimiter, int( self.fRwyAxis/10.0+18.0 ) ) )
+                    __fThrDist = distanceRL( self.oArguments.runway_threshold_latitude_2, self.oArguments.runway_threshold_longitude_2, __aLat[__i], __aLon[__i] )
+                    __fThrBrng = bearingRL( self.oArguments.runway_threshold_latitude_2, self.oArguments.runway_threshold_longitude_2, __aLat[__i], __aLon[__i] )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.cos( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
+                sys.stdout.write( "\n" )
+
+        # DEBUG: plot interpolated data graphs
+        if self.oArguments.debug:
+            plot.plot( __aEpoch, __aAlt, __aEpoch, __aHSpd, __aEpoch, __aVSpd*10, __aEpoch, __aAtt*10, __aEpoch, __aAirborne*10, 'o' )
+            plot.legend( [ 'Altitude', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne' ], loc='best' )
+            plot.show()
+
+
+    #
+    # Main
+    #
+
+    def main( self ):
+        """
+        Executes the GPS to Logbook data converter; returns a non-zero exit code in case of failure.
+        """
+
+        # Parse arguments
+        __iReturn = self.__initArguments()
+        if __iReturn:
+            return __iReturn
+
+        # Compute additional airfield parameters
+        ( self.fRwyLat, self.fRwyLon ) = \
+          midpointRL( self.oArguments.runway_threshold_latitude_1,
+                      self.oArguments.runway_threshold_longitude_1,
+                      self.oArguments.runway_threshold_latitude_2,
+                      self.oArguments.runway_threshold_longitude_2 )
+        self.fRwyLen = \
+          distanceRL( self.oArguments.runway_threshold_latitude_1,
+                      self.oArguments.runway_threshold_longitude_1,
+                      self.oArguments.runway_threshold_latitude_2,
+                      self.oArguments.runway_threshold_longitude_2 )
+        self.fRwyAxis = \
+          bearingRL( self.oArguments.runway_threshold_latitude_1,
+                     self.oArguments.runway_threshold_longitude_1,
+                     self.oArguments.runway_threshold_latitude_2,
+                     self.oArguments.runway_threshold_longitude_2 )
+
+        # Prepare the data container
+        self.lEpoch = []
+        self.lLat = []
+        self.lLon = []
+        self.lEle = []
+        self.lBrng = []
+        self.lHSpd = []
+
+        # Parse the DSV file
+        # FORMAT: Epoch,Latitude,Longitude,Elevation
+        # NOTE: we don't use GPS-provide course data, since GPS do not get those "natively",
+        #       but rather derive them from position data (the same way as we do here, first crudely,
+        #       then elaborately using splines first derivative)
+        __iTriggerCount = 0
+        __fTriggerEpoch = 0.0
+        __fRefEle = ( self.oArguments.runway_threshold_elevation_1 + self.oArguments.runway_threshold_elevation_2 ) / 2.0
+        __fRefDist = self.fRwyLen / 2.0
+        __fRefHWidth = self.oArguments.runway_width / 2.0
+        __bDataFill = False
+        __bDataProcessed = False
+        __fDataEpoch = 0.0
+        __iDataLength = 0
+        __fEpochPrev = 0.0
+        __fLatPrev = 0.0
+        __fLonPrev = 0.0
+        for __lRow in csv.reader( iter( sys.stdin.readline, '' ), delimiter=self.oArguments.delimiter ):
+            if len( __lRow ) == 0: continue
+            if __lRow[0].strip().startswith( '#' ): continue
+            if len( __lRow ) < 4 and not ( len( __lRow ) == 0 and __lRow[0].strip() ):
+                sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
+                continue
+
+            # Retrieve geolocalization data
+            ( __sEpoch, __sLat, __sLon, __sEle ) = tuple( __lRow )[:4]
+            if not __sEpoch or not __sLat or not __sLon or not __sEle:
+                sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
+                continue
+            __fEpoch = float( __sEpoch )
+            __fLat = float( __sLat )
+            __fLon = float( __sLon )
+            __fEle = float( __sEle )
+
+            # Compute (crude) course data
+            __bPrev = False
+            if __fEpochPrev > 0.0:
+                __fBrng = bearingRL( __fLatPrev, __fLonPrev, __fLat, __fLon )
+                __fHSpd = distanceRL( __fLatPrev, __fLonPrev, __fLat, __fLon ) / ( __fEpoch - __fEpochPrev ) + \
+                  self.oArguments.wind_speed * math.cos( ( __fBrng - self.oArguments.wind_direction ) * DEG_2_RAD )
+                __bPrev = True
+            __fEpochPrev = __fEpoch
+            __fLatPrev = __fLat
+            __fLonPrev = __fLon
+            if not __bPrev:
+                continue
+
+            # Compute runway axis misalignment
+            __fAxisMisalign = abs( __fBrng - self.fRwyAxis )
+            if __fAxisMisalign > 90.0:
+                __fAxisMisalign = abs( 180.0 - __fAxisMisalign )
+
+            # Detect whether point is worth considering
+            __fRwyDist = distanceRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
+            __fRwyBrng = bearingRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
+            # IF:
+            # 1. ship is moving fast enough (> 2.5m/s, 5kt)
+            # 2. along the runway axis
+            # 3. below the decision altitude
+            # 4. close enough to (or *on*) the runway
+            if __fHSpd > 2.5 and \
+              __fAxisMisalign < 15.0 and \
+              __fEle < __fRefEle + 150.0 and \
+              __fRwyDist < __fRefDist + 250.0 and \
+              ( __fRwyDist > __fRefDist or \
+                __fRwyDist * abs( math.sin( ( __fRwyBrng - self.fRwyAxis ) * DEG_2_RAD ) ) < __fRefHWidth + 15.0 ):
+                __iTriggerCount += 1
+            else:
+                __iTriggerCount -= 1
+            if __iTriggerCount >= 5:
+                __iTriggerCount = 5
+
+            # Store data
+            # IF: worthy data trigger has been activated
+            if __iTriggerCount > 0:
+                if __iTriggerCount == 1:
+                    __fDataEpoch = __fEpoch
+                self.lEpoch.append( __fEpoch )
+                self.lLat.append( __fLat )
+                self.lLon.append( __fLon )
+                self.lEle.append( __fEle )
+                self.lBrng.append( __fBrng )
+                self.lHSpd.append( __fHSpd )
+                __iDataLength += 1
+
+            # Process
+            # IF:
+            # 1. data (from the same analysis window) haven't already been processed
+            # 2. enough data are available AND
+            # 3. analysis window length is reached OR
+            # 4. or worthy data are no longer available
+            if not __bDataProcessed and \
+              __iDataLength >= 5 and \
+              ( __fEpoch - __fDataEpoch >= self.oArguments.analysis_length or \
+                __iTriggerCount <= 0 ):
+                self.__process()
+                __bDataProcessed = True
+
+            # Stop accumulating and clear data ("untrigger")
+            # IF: worthy data trigger has starved
+            if __iTriggerCount <= 0:
+                __iTriggerCount = 0
+                __bDataProcessed = False
+                __fDataEpoch = 0.0
+                __iDataLength = 0
+                self.lEpoch = []
+                self.lLat = []
+                self.lLon = []
+                self.lEle = []
+                self.lBrng = []
+                self.lHSpd = []
+
+        # Process (end of file)
+        # IF:
+        # 1. data (from the same analysis window) haven't already been processed
+        # 2. enough data are available AND
+        if not __bDataProcessed and \
+            __iDataLength >= 5:
+            self.__process()
+
+
+#------------------------------------------------------------------------------
+# MAIN
+#------------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    oGps2Logbook = CGps2Logbook()
+    sys.exit( oGps2Logbook.main() )
