@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# -*- mode:python; tab-width:4; indent-tabs-mode:t; -*-
+# -*- mode:python; tab-width:4; indent-tabs-mode:nil; -*-
 # ex: filetype=python tabstop=4 softtabstop=4 shiftwidth=4 expandtab autoindent smartindent
 
 #
@@ -23,6 +23,42 @@ from nltk.tokenize import regexp_tokenize
 import re
 import sys
 import xml.etree.ElementTree as ElementTree
+
+
+#------------------------------------------------------------------------------
+# FUNCTIONS
+#------------------------------------------------------------------------------
+
+def getAttribute( _oElement, _sName ):
+    __sAttribute = _oElement.get( _sName )
+    if __sAttribute is None:
+        return None
+    return __sAttribute.strip().encode( 'utf-8' )
+
+
+def findElementText( _oElement, _sName ):
+    __oSubElement = _oElement.find( _sName )
+    if __oSubElement is None:
+        return None
+    __sText = __oSubElement.text
+    if __sText is None:
+        return None
+    return __sText.strip().encode( 'utf-8' )
+
+
+def coalesce( _sString, _sDefault ):
+    if _sString is None:
+        return _sDefault
+    return _sString
+
+
+def capitalize( _sString ):
+    return ''.join( __sToken.capitalize() for __sToken in regexp_tokenize( _sString, pattern='\w+|.' ) )
+
+
+#------------------------------------------------------------------------------
+# CLASSES
+#------------------------------------------------------------------------------
 
 # OpenAIP to GPX data converter class
 class COpenAip2GPX:
@@ -202,37 +238,6 @@ class COpenAip2GPX:
     #------------------------------------------------------------------------------
 
     #
-    # Helpers
-    #
-
-    def __getAttribute( self, _oElement, _sName ):
-        __sAttribute = _oElement.get( _sName )
-        if __sAttribute is None:
-            return None
-        return __sAttribute.strip().encode( 'utf-8' )
-
-
-    def __findElementText( self, _oElement, _sName ):
-        __oSubElement = _oElement.find( _sName )
-        if __oSubElement is None:
-            return None
-        __sText = __oSubElement.text
-        if __sText is None:
-            return None
-        return __sText.strip().encode( 'utf-8' )
-
-
-    def __coalesce( self, _sString, _sDefault ):
-        if _sString is None:
-            return _sDefault
-        return _sString
-
-
-    def __capitalize( self, _sString ):
-        return ''.join( __sToken.capitalize() for __sToken in regexp_tokenize( _sString, pattern='\w+|.' ) )
-
-
-    #
     # Parsing
     #
 
@@ -267,7 +272,7 @@ class COpenAip2GPX:
 
         # Parse airport data
         # ... type
-        __sType = self.__getAttribute( _oAirport, 'TYPE' )
+        __sType = getAttribute( _oAirport, 'TYPE' )
         if __sType is None:
             sys.stderr.write( 'ERROR: Missing airport type\n' )
             return
@@ -275,15 +280,15 @@ class COpenAip2GPX:
             return
 
         # ... name and ICAO code
-        __sName = self.__findElementText( _oAirport, 'NAME' )
+        __sName = findElementText( _oAirport, 'NAME' )
         if __sName is None:
             sys.stderr.write( 'ERROR: Missing airport name\n' )
             return
         if self.oReAirportName is not None and self.oReAirportName.search( __sName ) is None:
             return
         if self.oArguments.capitalize:
-            __sName = self.__capitalize( __sName )
-        __sICAO = self.__findElementText( _oAirport, 'ICAO' )
+            __sName = capitalize( __sName )
+        __sICAO = findElementText( _oAirport, 'ICAO' )
         if self.oReAirportId is not None:
             if __sICAO is None or self.oReAirportId.search( __sICAO ) is None:
                 return
@@ -293,9 +298,9 @@ class COpenAip2GPX:
         if __oGeoLocation is None:
             sys.stderr.write( 'ERROR: Missing airport geolocation\n' )
             return
-        __sLatitude = self.__findElementText( __oGeoLocation, 'LAT' )
-        __sLongitude = self.__findElementText( __oGeoLocation, 'LON' )
-        __sElevation = self.__findElementText( __oGeoLocation, 'ELEV' )
+        __sLatitude = findElementText( __oGeoLocation, 'LAT' )
+        __sLongitude = findElementText( __oGeoLocation, 'LON' )
+        __sElevation = findElementText( __oGeoLocation, 'ELEV' )
         if __sLatitude is None or __sLongitude is None or __sElevation is None:
             sys.stderr.write( 'ERROR: Invalid airport geolocation\n' )
             return
@@ -305,13 +310,13 @@ class COpenAip2GPX:
         for __oRunway in _oAirport.findall( 'RWY' ):
             __sRunway = 'RWY:'
             # ... name
-            __sRunwayName = self.__findElementText( __oRunway, 'NAME' )
+            __sRunwayName = findElementText( __oRunway, 'NAME' )
             if __sRunwayName is None:
                 sys.stderr.write( 'ERROR: Missing runway name\n' )
                 continue
             __sRunway += ' '+__sRunwayName
             # ... length and width
-            __sRunwayLength = self.__findElementText( __oRunway, 'LENGTH' )
+            __sRunwayLength = findElementText( __oRunway, 'LENGTH' )
             if self.oArguments.runway_length > 0:
                 if __sRunwayLength is None:
                     continue
@@ -319,12 +324,12 @@ class COpenAip2GPX:
                     continue
             if __sRunwayLength is not None:
                 __sRunway += ' '+str( int( float( __sRunwayLength ) + 0.5 ) )
-            __sRunwayWidth = self.__findElementText( __oRunway, 'WIDTH' )
+            __sRunwayWidth = findElementText( __oRunway, 'WIDTH' )
             if __sRunwayWidth is not None:
                 __sRunway += 'x'+str( int( float( __sRunwayWidth ) + 0.5 ) )
             __sRunway += 'm'
             # ... surface
-            __sRunwaySurface = self.__findElementText( __oRunway, 'SFC' )
+            __sRunwaySurface = findElementText( __oRunway, 'SFC' )
             if self.oReRunwaySurface is not None:
                 if __sRunwaySurface is None:
                     continue
@@ -333,7 +338,7 @@ class COpenAip2GPX:
             if __sRunwaySurface is not None:
                 __sRunway += ' '+__sRunwaySurface
             # ... operations
-            __sRunwayOperations = self.__getAttribute( __oRunway, 'OPERATIONS' )
+            __sRunwayOperations = getAttribute( __oRunway, 'OPERATIONS' )
             if __sRunwayOperations is not None:
                 __sRunway += ' ('+__sRunwayOperations+')'
             # ... ADD
@@ -346,24 +351,24 @@ class COpenAip2GPX:
         for __oRadio in _oAirport.findall( 'RADIO' ):
             __sRadio = ''
             # ... category
-            __sRadioCategory = self.__coalesce( self.__getAttribute( __oRadio, 'CATEGORY' ), 'FREQ' )
+            __sRadioCategory = coalesce( getAttribute( __oRadio, 'CATEGORY' ), 'FREQ' )
             __sRadioCategory = __sRadioCategory[:4]
             if __sRadioCategory == 'COMM': __sRadioCategory = 'COM'
             elif __sRadioCategory == 'NAVI': __sRadioCategory = 'NAV'
             __sRadio += __sRadioCategory
             # ... type
-            __sRadioType = self.__findElementText( __oRadio, 'TYPE' )
+            __sRadioType = findElementText( __oRadio, 'TYPE' )
             if __sRadioType is not None:
                 __sRadio += '['+__sRadioType+']'
             __sRadio += ':'
             # ... frequency
-            __sRadioFrequency = self.__findElementText( __oRadio, 'FREQUENCY' )
+            __sRadioFrequency = findElementText( __oRadio, 'FREQUENCY' )
             if __sRadioFrequency is None:
                 sys.stderr.write( 'ERROR: Missing radio frequency' )
                 continue
             __sRadio += ' '+__sRadioFrequency
             # ... description
-            __sRadioDescription = self.__findElementText( __oRadio, 'DESCRIPTION' )
+            __sRadioDescription = findElementText( __oRadio, 'DESCRIPTION' )
             if __sRadioDescription is not None:
                 __sRadio += ' '+__sRadioDescription
             # ... ADD
@@ -403,7 +408,7 @@ class COpenAip2GPX:
 
         # Parse navaid data
         # ... type
-        __sType = self.__getAttribute( _oNavaid, 'TYPE' )
+        __sType = getAttribute( _oNavaid, 'TYPE' )
         if __sType is None:
             sys.stderr.write( 'ERROR: Missing navaid type\n' )
             return
@@ -411,15 +416,15 @@ class COpenAip2GPX:
             return
 
         # ... name and ID
-        __sName = self.__findElementText( _oNavaid, 'NAME' )
+        __sName = findElementText( _oNavaid, 'NAME' )
         if __sName is None:
             sys.stderr.write( 'ERROR: Missing navaid name\n' )
             return
         if self.oReNavaidName is not None and self.oReNavaidName.search( __sName ) is None:
             return
         if self.oArguments.capitalize:
-            __sName = self.__capitalize( __sName )
-        __sID = self.__findElementText( _oNavaid, 'ID' )
+            __sName = capitalize( __sName )
+        __sID = findElementText( _oNavaid, 'ID' )
         if __sID is None:
             sys.stderr.write( 'ERROR: Missing navaid ID\n' )
             return
@@ -431,9 +436,9 @@ class COpenAip2GPX:
         if __oGeoLocation is None:
             sys.stderr.write( 'ERROR: Missing navaid geolocation\n' )
             return
-        __sLatitude = self.__findElementText( __oGeoLocation, 'LAT' )
-        __sLongitude = self.__findElementText( __oGeoLocation, 'LON' )
-        __sElevation = self.__findElementText( __oGeoLocation, 'ELEV' )
+        __sLatitude = findElementText( __oGeoLocation, 'LAT' )
+        __sLongitude = findElementText( __oGeoLocation, 'LON' )
+        __sElevation = findElementText( __oGeoLocation, 'ELEV' )
         if __sLatitude is None or __sLongitude is None or __sElevation is None:
             sys.stderr.write( 'ERROR: Invalid navaid geolocation\n' )
             return
@@ -443,7 +448,7 @@ class COpenAip2GPX:
         if __oRadio is None:
             sys.stderr.write( 'ERROR: Missing navaid radio details\n' )
             return
-        __sFrequency = self.__findElementText( __oRadio, 'FREQUENCY' )
+        __sFrequency = findElementText( __oRadio, 'FREQUENCY' )
         if __sFrequency is None:
             sys.stderr.write( 'ERROR: Missing navaid frequency\n' )
             return
@@ -504,7 +509,10 @@ class COpenAip2GPX:
         return self.parseFile( self.oArguments.openaip_filename )
 
 
-# Main
+#------------------------------------------------------------------------------
+# MAIN
+#------------------------------------------------------------------------------
+
 if __name__ == '__main__':
     oOpenAip2GPX = COpenAip2GPX()
     sys.exit( oOpenAip2GPX.main() )
