@@ -487,7 +487,7 @@ class CGps2Logbook:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TAKEOFF' ) )
                 else:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHDOWN' ) )
-                    if __aAirborne_touchgo[__i]:
+                    if __aAirborne_touchgo[__i+1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'LANDING' ) )
@@ -507,7 +507,7 @@ class CGps2Logbook:
 
         # DEBUG: plot interpolated data graphs
         if self.oArguments.debug:
-            plot.plot( __aEpoch, __aAlt, __aEpoch, __aHSpd, __aEpoch, __aVSpd*10, __aEpoch, __aAtt*10, __aEpoch, __aAirborne*10, 'o' )
+            plot.plot( __aEpoch, __aAlt, __aEpoch, __aHSpd, __aEpoch, __aVSpd*10, __aEpoch, __aAtt*10, __aEpoch, __aAirborne_touchgo*10, 'o' )
             plot.legend( [ 'Altitude', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne' ], loc='best' )
             plot.show()
 
