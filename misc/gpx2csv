@@ -1,0 +1,282 @@
+#!/usr/bin/env python
+# -*- mode:python; tab-width:4; indent-tabs-mode:nil; -*-
+# ex: filetype=python tabstop=4 softtabstop=4 shiftwidth=4 expandtab autoindent smartindent
+
+#
+# GPX track to DSV data converter
+# Author: Cedric Dufour <http://cedric.dufour.name>
+#
+# The GPX track to DSV data converter is free software:
+# you can redistribute it and/or modify it *as you wish*.
+# Maintaining the author(s) acknowledgment would be nice, though ;-)
+#
+# The GPX track to DSV data converter is distributed in the hope
+# that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+
+
+# Modules
+# ... deb: python-argparse, python-dateutil
+import argparse
+from dateutil import parser
+import math
+import sys
+import xml.etree.ElementTree as ElementTree
+
+
+#------------------------------------------------------------------------------
+# CONSTANTS
+#------------------------------------------------------------------------------
+
+# Geodesical constants (shamelessly copied from GPSD)
+GPS_PI = 3.1415926535897932384626433832795029
+RAD_2_DEG = 57.2957795130823208767981548141051703
+DEG_2_RAD = 0.0174532925199432957692369076848861271
+WGS84A = 6378137 # equatorial radius
+WGS84B = 6356752.3142 # polar radius
+
+
+#------------------------------------------------------------------------------
+# FUNCTIONS
+#------------------------------------------------------------------------------
+
+def distanceRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) distance between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLatD = _fLat2 - _fLat1
+    __fLonD = _fLon2 - _fLon1
+    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    try:
+        __fQ = __fLatD / __fPhiD
+    except ZeroDivisionError:
+        __fQ = math.cos( _fLat1 )
+    if abs( __fLonD ) > GPS_PI:
+        if __fLonD > 0.0:
+            __fLonD = __fLonD - GPS_PI*2.0
+        else:
+            __fLonD = GPS_PI*2.0 + __fLonD
+    __fDistance = ( WGS84A + WGS84B ) / 2.0 * math.sqrt( __fLatD*__fLatD + __fLonD*__fLonD * __fQ*__fQ )
+    return __fDistance
+
+
+def bearingRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) bearing between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLonD = _fLon2 - _fLon1
+    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    if abs( __fLonD ) > GPS_PI:
+        if __fLonD > 0.0:
+            __fLonD = __fLonD - GPS_PI*2.0
+        else:
+            __fLonD = GPS_PI*2.0 + __fLonD
+    __fBearing = math.atan2( __fLonD, __fPhiD )
+    __fBearing *= RAD_2_DEG
+    if __fBearing < 0:
+        __fBearing += 360.0
+    return __fBearing;
+
+
+def getAttribute( _oElement, _sName ):
+    __sAttribute = _oElement.get( _sName )
+    if __sAttribute is None:
+        return None
+    return __sAttribute.strip()
+
+
+def findElementText( _oElement, _sName ):
+    __oSubElement = _oElement.find( _sName )
+    if __oSubElement is None:
+        return None
+    __sText = __oSubElement.text
+    if __sText is None:
+        return None
+    return __sText.strip()
+
+
+def coalesce( _sString, _sDefault ):
+    if _sString is None:
+        return _sDefault
+    return _sString
+
+
+#------------------------------------------------------------------------------
+# CLASSES
+#------------------------------------------------------------------------------
+
+# GPX track to SkyDemon flightlog converter class
+class CGPX2Flightlog:
+    """
+    GPX track to SkyDemon flightlog converter
+    """
+
+    #------------------------------------------------------------------------------
+    # CONSTRUCTORS / DESTRUCTOR
+    #------------------------------------------------------------------------------
+
+    def __init__( self ):
+        self.oArgumentParser = None
+        self.oArguments = None
+        self.oElementTree = None
+        self.__initArgumentParser()
+
+
+    def __initArgumentParser( self ):
+        """
+        Creates the arguments parser (and help generator)
+        """
+
+        # Create argument parser
+        self.oArgumentParser = argparse.ArgumentParser( 'GPX track to SkyDemon flightlog converter' )
+
+        # ... input file
+        self.oArgumentParser.add_argument( 'gpx_filename', type=str,
+                                           default='',
+                                           metavar='<filename>',
+                                           help='GPX (XML) data file' )
+
+
+    def __initArguments( self, _aArguments = None ):
+        """
+        Parses the command-line arguments; returns a non-zero exit code in case of failure.
+        """
+
+        # Parse arguments
+        if _aArguments is None:
+            _aArguments = sys.argv
+        try:
+            self.oArguments = self.oArgumentParser.parse_args()
+        except Exception, e:
+            self.oArguments = None
+            sys.stderr.write( 'ERROR: Failed to parse arguments; %s\n' % str(e) )
+            return 1
+
+        # Validate arguments
+        if len( self.oArguments.gpx_filename ) <= 0:
+            sys.stderr.write( 'ERROR: Missing GPX data file name (gpx_filename); %s\n' % str(e) )
+            return 1
+        return 0
+
+
+    #------------------------------------------------------------------------------
+    # METHODS
+    #------------------------------------------------------------------------------
+
+    #
+    # Parsing
+    #
+
+    def __parseTree( self ):
+        """
+        Parses the GPX (XML) data tree.
+        """
+
+        # Flightlog output
+        __oTimeEpochStart = parser.parse( '1970-01-01T00:00:00Z' )
+        __bTrackStarted = False
+        __bTrackSegmentStarted = False
+        __sGpxNamespace = ''
+        __oTrack = self.oElementTree.getroot().find( __sGpxNamespace+'trk' )
+        if __oTrack is None:
+            __sGpxNamespace = '{http://www.topografix.com/GPX/1/1}'
+            __oTrack = self.oElementTree.getroot().find( __sGpxNamespace+'trk' )
+        if __oTrack is not None:
+            for __oTrackSegment in __oTrack.findall( __sGpxNamespace+'trkseg' ):
+                for __oTrackPoint in __oTrackSegment.findall( __sGpxNamespace+'trkpt' ):
+                    # ... textual data
+                    __sLat = getAttribute( __oTrackPoint, 'lat' )
+                    __sLon = getAttribute( __oTrackPoint, 'lon' )
+                    __sTime = findElementText( __oTrackPoint, __sGpxNamespace+'time' )
+                    if __sLat is None or __sLon is None or __sTime is None:
+                        sys.stderr.write( 'ERROR: Invalid track point\n' )
+                        continue
+                    __sEle = coalesce( findElementText( __oTrackPoint, __sGpxNamespace+'ele' ), '0' )
+                    # ... numeric data
+                    __fLat = float( __sLat )
+                    __fLon = float( __sLon )
+                    __fEle = float( __sEle )
+                    __oTime = parser.parse( __sTime )
+                    if __bTrackSegmentStarted:
+                        __iTimeDelta = ( __oTime - __oTimePrevious ).total_seconds()
+                        __fBearing = bearingRL( __fLatPrevious, __fLonPrevious, __fLat, __fLon )
+                        __fDistance = distanceRL( __fLatPrevious, __fLonPrevious, __fLat, __fLon )
+                        sys.stdout.write( '%d,%.6f,%.6f,%.1f,%.1f,%.1f,%.1f\n' % (
+                            ( __oTime - __oTimeEpochStart ).total_seconds(),
+                            __fLat,
+                            __fLon,
+                            __fEle,
+                            __fBearing,
+                            __fDistance / __iTimeDelta,
+                            ( __fEle - __fElePrevious ) / __iTimeDelta,
+                            ) )
+                    elif __bTrackStarted:
+                        __bTrackSegmentStarted = True
+                    else:
+                        __bTrackStarted = True
+                    # ... save previsou data
+                    __oTimePrevious = __oTime
+                    __fLatPrevious = __fLat
+                    __fLonPrevious = __fLon
+                    __fElePrevious = __fEle
+                __bTrackSegmentStarted = False
+
+
+    def parseFile( self, _sFileName ):
+        """
+        Parses the given GPX (XML) data file; returns a non-zero exit code in case of failure.
+        """
+
+        try:
+            self.oElementTree = ElementTree.parse( _sFileName )
+        except Exception, e:
+            self.oElementTree = None
+            sys.stderr.write( 'ERROR: Failed to open/parse file; %s\n' % str(e) )
+            return 1
+        self.__parseTree()
+        return 0
+
+
+    #
+    # Main
+    #
+
+    def main( self ):
+        """
+        Executes the GPX track to SkyDemon flightlog converter; returns a non-zero exit code in case of failure.
+        """
+
+        # Initialize
+        # ... arguments
+        __iReturn = self.__initArguments()
+        if __iReturn:
+            return __iReturn
+
+        # Execute
+        return self.parseFile( self.oArguments.gpx_filename )
+
+
+#------------------------------------------------------------------------------
+# MAIN
+#------------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    oGPX2Flightlog = CGPX2Flightlog()
+    sys.exit( oGPX2Flightlog.main() )
