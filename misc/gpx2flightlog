@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# -*- mode:python; tab-width:4; indent-tabs-mode:t; -*-
+# -*- mode:python; tab-width:4; indent-tabs-mode:nil; -*-
 # ex: filetype=python tabstop=4 softtabstop=4 shiftwidth=4 expandtab autoindent smartindent
 
 #
@@ -25,14 +25,140 @@ import sys
 import xml.etree.ElementTree as ElementTree
 
 
-# Constants
-# NOTE: shamelessly copied from GPSD
+#------------------------------------------------------------------------------
+# CONSTANTS
+#------------------------------------------------------------------------------
+
+# Geodesical constants (shamelessly copied from GPSD)
 GPS_PI = 3.1415926535897932384626433832795029
 RAD_2_DEG = 57.2957795130823208767981548141051703
 DEG_2_RAD = 0.0174532925199432957692369076848861271
-WGS84A = 6378137
-WGS84B = 6356752.3142
+WGS84A = 6378137 # equatorial radius
+WGS84B = 6356752.3142 # polar radius
 
+
+#------------------------------------------------------------------------------
+# FUNCTIONS
+#------------------------------------------------------------------------------
+
+def distanceRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) distance between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLatD = _fLat2 - _fLat1
+    __fLonD = _fLon2 - _fLon1
+    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    try:
+        __fQ = __fLatD / __fPhiD
+    except ZeroDivisionError:
+        __fQ = math.cos( _fLat1 )
+    if abs( __fLonD ) > GPS_PI:
+        if __fLonD > 0.0:
+            __fLonD = __fLonD - GPS_PI*2.0
+        else:
+            __fLonD = GPS_PI*2.0 + __fLonD
+    __fDistance = ( WGS84A + WGS84B ) / 2.0 * math.sqrt( __fLatD*__fLatD + __fLonD*__fLonD * __fQ*__fQ )
+    return __fDistance
+
+
+def bearingRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+    """
+    Loxodrome (rhumb line) bearing between two geographical points.
+    """
+
+    # Units conversion
+    _fLat1 *= DEG_2_RAD
+    _fLon1 *= DEG_2_RAD
+    _fLat2 *= DEG_2_RAD
+    _fLon2 *= DEG_2_RAD
+
+    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
+    __fLonD = _fLon2 - _fLon1
+    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
+    if abs( __fLonD ) > GPS_PI:
+        if __fLonD > 0.0:
+            __fLonD = __fLonD - GPS_PI*2.0
+        else:
+            __fLonD = GPS_PI*2.0 + __fLonD
+    __fBearing = math.atan2( __fLonD, __fPhiD )
+    __fBearing *= RAD_2_DEG
+    if __fBearing < 0:
+        __fBearing += 360.0
+    return __fBearing;
+
+
+def stringLat( _fLat ):
+    __sLat = ''
+    if _fLat < 0.0:
+        __sLat += 'S'
+    else:
+        __sLat += 'N'
+    _fLat = abs( _fLat )
+    _iLat = int( _fLat )
+    __sLat += '%02d' % _iLat
+    _fLat -= _iLat
+    _fLat *= 60.0;
+    _iLat = int( _fLat )
+    __sLat += '%02d' % _iLat
+    _fLat -= _iLat
+    _fLat *= 60.0;
+    __sLat += '%05.2f' % _fLat
+    return __sLat
+
+
+def stringLon( _fLon ):
+    __sLon = ''
+    if _fLon < 0.0:
+        __sLon += 'W'
+    else:
+        __sLon += 'E'
+    _fLon = abs( _fLon )
+    _iLon = int( _fLon )
+    __sLon += '%03d' % _iLon
+    _fLon -= _iLon
+    _fLon *= 60.0;
+    _iLon = int( _fLon )
+    __sLon += '%02d' % _iLon
+    _fLon -= _iLon
+    _fLon *= 60.0;
+    __sLon += '%05.2f' % _fLon
+    return __sLon
+
+
+def getAttribute( _oElement, _sName ):
+    __sAttribute = _oElement.get( _sName )
+    if __sAttribute is None:
+        return None
+    return __sAttribute.strip()
+
+
+def findElementText( _oElement, _sName ):
+    __oSubElement = _oElement.find( _sName )
+    if __oSubElement is None:
+        return None
+    __sText = __oSubElement.text
+    if __sText is None:
+        return None
+    return __sText.strip()
+
+
+def coalesce( _sString, _sDefault ):
+    if _sString is None:
+        return _sDefault
+    return _sString
+
+
+#------------------------------------------------------------------------------
+# CLASSES
+#------------------------------------------------------------------------------
 
 # GPX track to SkyDemon flightlog converter class
 class CGPX2Flightlog:
@@ -93,113 +219,6 @@ class CGPX2Flightlog:
     #------------------------------------------------------------------------------
 
     #
-    # Helpers
-    #
-
-    def __getAttribute( self, _oElement, _sName ):
-        __sAttribute = _oElement.get( _sName )
-        if __sAttribute is None:
-            return None
-        return __sAttribute.strip()
-
-
-    def __findElementText( self, _oElement, _sName ):
-        __oSubElement = _oElement.find( _sName )
-        if __oSubElement is None:
-            return None
-        __sText = __oSubElement.text
-        if __sText is None:
-            return None
-        return __sText.strip()
-
-
-    def __coalesce( self, _sString, _sDefault ):
-        if _sString is None:
-            return _sDefault
-        return _sString
-
-
-    def __strLat( self, _fLat ):
-        __sLat = ''
-        if _fLat < 0.0:
-            __sLat += 'S'
-        else:
-            __sLat += 'N'
-        _fLat = abs( _fLat )
-        _iLat = int( _fLat )
-        __sLat += '%02d' % _iLat
-        _fLat -= _iLat
-        _fLat *= 60.0;
-        _iLat = int( _fLat )
-        __sLat += '%02d' % _iLat
-        _fLat -= _iLat
-        _fLat *= 60.0;
-        __sLat += '%05.2f' % _fLat
-        return __sLat
-
-
-    def __strLon( self, _fLon ):
-        __sLon = ''
-        if _fLon < 0.0:
-            __sLon += 'W'
-        else:
-            __sLon += 'E'
-        _fLon = abs( _fLon )
-        _iLon = int( _fLon )
-        __sLon += '%03d' % _iLon
-        _fLon -= _iLon
-        _fLon *= 60.0;
-        _iLon = int( _fLon )
-        __sLon += '%02d' % _iLon
-        _fLon -= _iLon
-        _fLon *= 60.0;
-        __sLon += '%05.2f' % _fLon
-        return __sLon
-
-
-    def __distance( self, _fLon1, _fLat1, _fLon2, _fLat2 ):
-        # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
-        _fLon1 *= DEG_2_RAD
-        _fLat1 *= DEG_2_RAD
-        _fLon2 *= DEG_2_RAD
-        _fLat2 *= DEG_2_RAD
-        __fLonD = _fLon2 - _fLon1
-        __fLatD = _fLat2 - _fLat1
-        __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
-        if __fPhiD != 0.0:
-            __fQ = __fLatD/__fPhiD
-        else:
-            __fQ = math.cos( _fLat1 )
-        if abs( __fLonD ) > GPS_PI:
-            if __fLonD > 0.0:
-                __fLonD = __fLonD - GPS_PI*2.0
-            else:
-                __fLonD = GPS_PI*2.0 + __fLonD
-        __fDistance = ( WGS84A + WGS84B ) / 2.0 * math.sqrt( __fLatD*__fLatD + __fLonD*__fLonD * __fQ*__fQ )
-        return __fDistance
-
-
-    def __bearing( self, _fLon1, _fLat1, _fLon2, _fLat2 ):
-        # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
-        _fLon1 *= DEG_2_RAD
-        _fLat1 *= DEG_2_RAD
-        _fLon2 *= DEG_2_RAD
-        _fLat2 *= DEG_2_RAD
-        __fLonD = _fLon2 - _fLon1
-        __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
-        if abs( __fLonD ) > GPS_PI:
-            if __fLonD > 0.0:
-                __fLonD = __fLonD - GPS_PI*2.0
-            else:
-                __fLonD = GPS_PI*2.0 + __fLonD
-        __fBearing = math.atan2( __fLonD, __fPhiD )
-        __fBearing *= RAD_2_DEG
-        if __fBearing < 0:
-            __fBearing += 360.0
-        return __fBearing;
-
-
-    #
     # Parsing
     #
 
@@ -212,18 +231,22 @@ class CGPX2Flightlog:
         __bTrackStarted = False
         __bTimeStarted = None
         __bTrackSegmentStarted = False
-        __oTrack = self.oElementTree.getroot().find( 'trk' )
+		__sGpxNamespace = ''
+        __oTrack = self.oElementTree.getroot().find( __sGpxNamespace+'trk' )
+        if __oTrack is None:
+			__sGpxNamespace = '{http://www.topografix.com/GPX/1/1}'
+			__oTrack = self.oElementTree.getroot().find( __sGpxNamespace+'trk' )
         if __oTrack is not None:
-            for __oTrackSegment in __oTrack.findall( 'trkseg' ):
-                for __oTrackPoint in __oTrackSegment.findall( 'trkpt' ):
+            for __oTrackSegment in __oTrack.findall( __sGpxNamespace+'trkseg' ):
+                for __oTrackPoint in __oTrackSegment.findall( __sGpxNamespace+'trkpt' ):
                     # ... textual data
-                    __sLat = self.__getAttribute( __oTrackPoint, 'lat' )
-                    __sLon = self.__getAttribute( __oTrackPoint, 'lon' )
-                    __sTime = self.__findElementText( __oTrackPoint, 'time' )
+                    __sLat = getAttribute( __oTrackPoint, 'lat' )
+                    __sLon = getAttribute( __oTrackPoint, 'lon' )
+                    __sTime = findElementText( __oTrackPoint, __sGpxNamespace+'time' )
                     if __sLat is None or __sLon is None or __sTime is None:
                         sys.stderr.write( 'ERROR: Invalid track point\n' )
                         continue
-                    __sEle = self.__coalesce( self.__findElementText( __oTrackPoint, 'ele' ), '0' )
+                    __sEle = coalesce( findElementText( __oTrackPoint, __sGpxNamespace+'ele' ), '0' )
                     # ... numeric data
                     __fLat = float( __sLat )
                     __fLon = float( __sLon )
@@ -231,12 +254,12 @@ class CGPX2Flightlog:
                     __oTime = parser.parse( __sTime )
                     if __bTrackSegmentStarted:
                         __iTimeDelta = ( __oTime - __oTimePrevious ).total_seconds()
-                        __fBearing = self.__bearing( __fLonPrevious, __fLatPrevious, __fLon, __fLat )
-                        __fDistance = self.__distance( __fLonPrevious, __fLatPrevious, __fLon, __fLat )
+                        __fBearing = bearingRL( __fLatPrevious, __fLonPrevious, __fLat, __fLon )
+                        __fDistance = distanceRL( __fLatPrevious, __fLonPrevious, __fLat, __fLon )
                         sys.stdout.write( '%d,%s %s,%.1f,%.1f,%.1f,%.1f\n' % (
                             ( __oTime - __oTimeStarted ).total_seconds() * 1000,
-                            self.__strLat( __fLat ),
-                            self.__strLon( __fLon ),
+                            stringLat( __fLat ),
+                            stringLon( __fLon ),
                             __fBearing,
                             __fDistance * 3600.0 / 1852.0 / __iTimeDelta,
                             __fEle,
@@ -254,8 +277,8 @@ class CGPX2Flightlog:
                     __fLonPrevious = __fLon
                     __fElePrevious = __fEle
                 __bTrackSegmentStarted = False
-                        
-                        
+
+
     def parseFile( self, _sFileName ):
         """
         Parses the given GPX (XML) data file; returns a non-zero exit code in case of failure.
@@ -290,7 +313,10 @@ class CGPX2Flightlog:
         return self.parseFile( self.oArguments.gpx_filename )
 
 
-# Main
+#------------------------------------------------------------------------------
+# MAIN
+#------------------------------------------------------------------------------
+
 if __name__ == '__main__':
     oGPX2Flightlog = CGPX2Flightlog()
     sys.exit( oGPX2Flightlog.main() )
