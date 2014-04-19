@@ -17,14 +17,16 @@
 
 
 # Modules
-# ... deb: python-argparse, python-matplotlib, python-numpy, python-opencv, python-scipy
+# ... deb: python-argparse, python-dateutil, python-matplotlib, python-numpy, python-opencv, python-scipy
 import argparse
 import csv
 import cv2
+from dateutil import parser
 import math
 import matplotlib.pyplot as plot
 import numpy
 from scipy import interpolate
+import time
 import sys
 
 
@@ -518,7 +520,7 @@ class CGps2Logbook:
         # NOTE: touch-'n-go can not occur at the beginning/end of the analysis window
         for __i in range( 1, __iDataLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
-                sys.stdout.write( "%.1f" % __aEpoch[__i] )
+                sys.stdout.write( "%s" % time.strftime( '%Y-%m-%dT%H:%M:%SZ', time.gmtime( __aEpoch[__i] ) ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLat[__i] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, self.__rwyele( __aLat[__i], __aLon[__i] ) ) )
@@ -622,6 +624,7 @@ class CGps2Logbook:
         # NOTE: we don't use GPS-provide course data, since GPS do not get those "natively",
         #       but rather derive them from position data (the same way as we do here, first crudely,
         #       then elaborately using splines first derivative)
+        __oTimeEpochStart = parser.parse( '1970-01-01T00:00:00Z' )
         __iTrigCount = 0
         __fTrigEpoch = 0.0
         __fRefEle = ( self.oArguments.runway_threshold_elevation_1 + self.oArguments.runway_threshold_elevation_2 ) / 2.0
@@ -642,14 +645,21 @@ class CGps2Logbook:
                 continue
 
             # Retrieve geolocalization data
-            ( __sEpoch, __sLat, __sLon, __sEle ) = tuple( __lRow )[:4]
-            if not __sEpoch or not __sLat or not __sLon or not __sEle:
+            ( __sTime, __sLat, __sLon, __sEle ) = tuple( __lRow )[:4]
+            if not __sTime or not __sLat or not __sLon or not __sEle:
                 sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
                 continue
-            __fEpoch = float( __sEpoch )
-            __fLat = float( __sLat )
-            __fLon = float( __sLon )
-            __fEle = float( __sEle )
+            try:
+                try:
+                    __fEpoch = float( __sTime )
+                except Exception:
+                    __fEpoch = ( parser.parse( __sTime ) - __oTimeEpochStart ).total_seconds()
+                __fLat = float( __sLat )
+                __fLon = float( __sLon )
+                __fEle = float( __sEle )
+            except Exception:
+                sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
+                continue
 
             # Compute (crude) course data
             __bPrev = False
