@@ -22,6 +22,7 @@ import argparse
 from dateutil import parser
 import math
 import sys
+import time
 import xml.etree.ElementTree as ElementTree
 
 
@@ -218,8 +219,8 @@ class CGPX2Flightlog:
                         __iTimeDelta = ( __oTime - __oTimePrevious ).total_seconds()
                         __fBearing = bearingRL( __fLatPrevious, __fLonPrevious, __fLat, __fLon )
                         __fDistance = distanceRL( __fLatPrevious, __fLonPrevious, __fLat, __fLon )
-                        sys.stdout.write( '%d,%.6f,%.6f,%.1f,%.1f,%.1f,%.1f\n' % (
-                            ( __oTime - __oTimeEpochStart ).total_seconds(),
+                        sys.stdout.write( '%s,%.6f,%.6f,%.1f,%.1f,%.1f,%.1f\n' % (
+                            time.strftime( '%Y-%m-%dT%H:%M:%SZ', time.gmtime( ( __oTime - __oTimeEpochStart ).total_seconds() ) ),
                             __fLat,
                             __fLon,
                             __fEle,
