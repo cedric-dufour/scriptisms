@@ -434,7 +434,7 @@ class CGps2Logbook:
                 __lDist[__i] = __lDist[__i-1] + distanceRL( self.lLat[__i-1], self.lLon[__i-1], self.lLat[__i], self.lLon[__i] )
 
         # Interpolate/smooth data
-        __aEpoch = numpy.arange( self.lEpoch[0], self.lEpoch[__iDataLength-1], self.oArguments.time_resolution )
+        __aEpoch = numpy.arange( int(self.lEpoch[0]), int(self.lEpoch[__iDataLength-1])+1, self.oArguments.time_resolution )
         __tTCK = interpolate.splrep( self.lEpoch, self.lLat, s=0 )
         __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
         __tTCK = interpolate.splrep( self.lEpoch, self.lLon, s=0 )
@@ -520,7 +520,8 @@ class CGps2Logbook:
         # NOTE: touch-'n-go can not occur at the beginning/end of the analysis window
         for __i in range( 1, __iDataLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
-                sys.stdout.write( "%s" % time.strftime( '%Y-%m-%dT%H:%M:%SZ', time.gmtime( __aEpoch[__i] ) ) )
+                sys.stdout.write( "%s.%sZ" % ( time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__i] ) ), \
+                                               str( math.modf( __aEpoch[__i] )[0] )[2] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLat[__i] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, self.__rwyele( __aLat[__i], __aLon[__i] ) ) )
