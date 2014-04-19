@@ -155,11 +155,11 @@ def midpointRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
 
 def skeleton( _aArray, _iMaxN ):
     __aSkeleton = numpy.zeros( numpy.shape( _aArray ), numpy.uint8 )
-    __aKernel = numpy.ones( 3, numpy.uint8 )
+    __aK = numpy.ones( 3, numpy.uint8 )
     for __i in range(0,_iMaxN+1):
-        __aKernelN = numpy.ones( 2*__i+1, numpy.uint8 )
-        __aErode = cv2.erode( _aArray, __aKernelN )
-        __aSkeleton = __aSkeleton + __aErode - cv2.morphologyEx( __aErode, cv2.MORPH_OPEN, __aKernel )
+        __aKN = numpy.ones( 2*__i+1, numpy.uint8 )
+        __aErode = cv2.erode( _aArray, __aKN )
+        __aSkeleton = __aSkeleton + __aErode - cv2.morphologyEx( __aErode, cv2.MORPH_OPEN, __aK )
     return __aSkeleton
 
 
@@ -185,7 +185,7 @@ class CGps2Logbook:
         self.oArguments = None
         self.fRwyLat = None,
         self.fRwyLon = None,
-        self.fRwyLen = None,
+        self.fRwyLength = None,
         self.fRwyAxis = None,
         self.lEpoch = None
         self.lLat = None
@@ -252,11 +252,18 @@ class CGps2Logbook:
                                            metavar='<width>',
                                            help='Runway width, in meters [m]' )
 
-        # ... stall speed
-        self.oArgumentParser.add_argument( '-S', '--stall_speed', type=float,
+        # ... stall speed (landing)
+        self.oArgumentParser.add_argument( '-Vs0', '--stall_speed_landing', type=float,
                                            default=-999,
                                            metavar='<speed>',
-                                           help='Aircraft stall speed, in meters per second [m/s]' )
+                                           help='Aircraft stall speed (landing, Vs0), in meters per second [m/s]' )
+
+
+        # ... stall speed (take-off)
+        self.oArgumentParser.add_argument( '-Vs1', '--stall_speed_takeoff', type=float,
+                                           default=-999,
+                                           metavar='<speed>',
+                                           help='Aircraft stall speed (take-off, Vs1), in meters per second [m/s]' )
 
         # ... wind speed
         self.oArgumentParser.add_argument( '-Ws', '--wind_speed', type=float,
@@ -272,23 +279,23 @@ class CGps2Logbook:
 
         # ... time resolution
         self.oArgumentParser.add_argument( '-T', '--time_resolution', type=float,
-                                           default=1,
+                                           default=0.5,
                                            metavar='<seconds>',
                                            help='Time resolution, in seconds [s]' )
 
-        # ... analysis windows width
+        # ... analysis windows length
         self.oArgumentParser.add_argument( '-La', '--analysis_length', type=int,
                                            default=60,
                                            metavar='<seconds>',
                                            help='Analysis window length, in seconds [s]' )
 
-        # ... noise filter width
+        # ... noise filter length
         self.oArgumentParser.add_argument( '-Ln', '--noise_filter', type=int,
                                            default=5,
                                            metavar='<seconds>',
                                            help='Noise filter length, in seconds [s]' )
 
-        # ... touch-n-go filter width
+        # ... touch-n-go filter length
         self.oArgumentParser.add_argument( '-Ltg', '--touchgo_filter', type=int,
                                            default=30,
                                            metavar='<seconds>',
@@ -346,20 +353,22 @@ class CGps2Logbook:
         if self.oArguments.runway_width < 0:
             sys.stderr.write( 'ERROR: Missing or invalid runway width (runway_width)\n' )
             return 1
-        if self.oArguments.stall_speed < 0:
-            sys.stderr.write( 'ERROR: Missing or invalid aircraft stall speed (stall_speed)\n' )
+        if self.oArguments.stall_speed_landing < 0:
+            sys.stderr.write( 'ERROR: Missing or invalid aircraft stall speed (stall_speed_landing)\n' )
             return 1
-        if self.oArguments.time_resolution < 0.1 or self.oArguments.time_resolution > 10.0:
+        if self.oArguments.stall_speed_takeoff < 0:
+            self.oArguments.stall_speed_takeoff = self.oArguments.stall_speed_landing
+        if self.oArguments.time_resolution < 0.1 or self.oArguments.time_resolution > 1.0:
             sys.stderr.write( 'ERROR: Missing or invalid time resolution (time_resolution)\n' )
             return 1
         if self.oArguments.analysis_length < 30:
-            sys.stderr.write( 'ERROR: Invalid analysis window width (analysis_length)\n' )
+            sys.stderr.write( 'ERROR: Invalid analysis window length (analysis_length)\n' )
             return 1
         if self.oArguments.touchgo_filter < 1:
-            sys.stderr.write( 'ERROR: Invalid noise filter width (noise_filter)\n' )
+            sys.stderr.write( 'ERROR: Invalid noise filter length (noise_filter)\n' )
             return 1
         if self.oArguments.touchgo_filter < self.oArguments.noise_filter:
-            sys.stderr.write( 'ERROR: Invalid Touch-\'n-Go filter width (touchgo_filter)\n' )
+            sys.stderr.write( 'ERROR: Invalid Touch-\'n-Go filter length (touchgo_filter)\n' )
             return 1
         return 0
 
@@ -382,7 +391,28 @@ class CGps2Logbook:
         return \
           self.oArguments.runway_threshold_elevation_1 + \
           ( self.oArguments.runway_threshold_elevation_2 - self.oArguments.runway_threshold_elevation_1 ) * \
-          math.cos( self.fRwyAxis - __fThrBrng ) * __fThrDist / self.fRwyLen
+          math.cos( self.fRwyAxis - __fThrBrng ) * __fThrDist / self.fRwyLength
+
+
+    def __attitude( self, _aAlt, _fAttWdwLength ):
+        # Estimate attitude (climb/descent)
+        __iDataLength = len( _aAlt )
+        __iAttWdwLength = int( _fAttWdwLength / self.oArguments.time_resolution )
+        __aAtt = numpy.zeros( __iDataLength, numpy.int8 )
+        for __i in range( __iAttWdwLength+1, __iDataLength-__iAttWdwLength-1 ):
+            __fAltB = 0.0
+            __fAltA = 0.0
+            for __j in range( 1, __iAttWdwLength+1 ):
+                __fAltB += _aAlt[__i-__j]
+                __fAltA += _aAlt[__i+__j]
+            __fAltB /= __iAttWdwLength
+            __fAltA /= __iAttWdwLength
+            if __fAltA - __fAltB > 1.0:
+                __aAtt[__i] = 1
+            elif __fAltA - __fAltB < -1.0:
+                __aAtt[__i] = -1
+        return __aAtt
+
 
 
     def __process( self ):
@@ -393,85 +423,100 @@ class CGps2Logbook:
         # Data window length
         __iDataLength = len( self.lEpoch )
 
-        # Compute mean elevation correction
-        __fEleCorr = 0.0
-        __iEleCount = 0
-        for __i in range( __iDataLength ):
-            if self.lHSpd[__i] <= self.oArguments.stall_speed:
-                __fEleCorr += self.lEle[__i] - self.__rwyele( self.lLat[__i], self.lLon[__i] )
-                __iEleCount += 1
-        if __iEleCount > 0:
-            __fEleCorr = __fEleCorr / __iEleCount
-
-        # Compute distance and altitude AGL
+        # Compute distance
         __lDist = [0]*__iDataLength
-        __lAlt = [0]*__iDataLength
         for __i in range( __iDataLength ):
             if __i > 0:
                 __lDist[__i] = __lDist[__i-1] + distanceRL( self.lLat[__i-1], self.lLon[__i-1], self.lLat[__i], self.lLon[__i] )
-            if self.lHSpd[__i] > self.oArguments.stall_speed:
-                __lAlt[__i] = self.lEle[__i] - __fEleCorr - self.__rwyele( self.lLat[__i], self.lLon[__i] )
 
         # Interpolate/smooth data
         __aEpoch = numpy.arange( self.lEpoch[0], self.lEpoch[__iDataLength-1], self.oArguments.time_resolution )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lLat, s=__iDataLength )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lLat, s=0 )
         __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lLon, s=__iDataLength )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lLon, s=0 )
         __aLon = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lBrng, s=__iDataLength )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lEle, s=0 )
+        __aEle = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        __tTCK = interpolate.splrep( self.lEpoch, self.lBrng, s=0 )
         __aBrng = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, __lDist, s=__iDataLength )
+        __tTCK = interpolate.splrep( self.lEpoch, __lDist, s=0 )
         __aHSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
-        __tTCK = interpolate.splrep( self.lEpoch, __lAlt, s=0 )
-        __aAlt = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
         __iDataLength = len( __aEpoch )
 
         # Correct wind speed
         for __i in range( __iDataLength ):
             __aHSpd[__i] += self.oArguments.wind_speed * math.cos( ( __aBrng[__i] - self.oArguments.wind_direction ) * DEG_2_RAD )
 
-        # Estimate attitude (climb/descent)
-        __iAttWdwLength = int( 5.0 / self.oArguments.time_resolution )
-        __aAtt = numpy.zeros( __iDataLength, numpy.int8 )
-        for __i in range( __iAttWdwLength+1, __iDataLength-__iAttWdwLength-1 ):
-            __fAltB = 0.0
-            __fAltA = 0.0
-            for __j in range( 1, __iAttWdwLength+1 ):
-                __fAltB += __aAlt[__i-__j]
-                __fAltA += __aAlt[__i+__j]
-            __fAltB /= __iAttWdwLength
-            __fAltA /= __iAttWdwLength
-            if __fAltA > 0.5 and __fAltA - __fAltB > 1.0:
-                __aAtt[__i] = 1
-            elif __fAltB > 0.5 and __fAltA - __fAltB < -1.0:
-                __aAtt[__i] = -1
+        # Roughly estimate attitude (climb/descent)
+        __aAtt = self.__attitude( __aEle, 10.0 )
+
+        # Compute mean elevation correction
+        # NOTE: lower stall speed by 20% to account for wind speed errors
+        __fEleCorr = 0.0
+        __iEleCount = 0
+        for __i in range( __iDataLength ):
+            if ( __aAtt[__i] == 1 and __aHSpd[__i] <= 0.8*self.oArguments.stall_speed_takeoff ) or \
+              __aHSpd[__i] <= 0.8*self.oArguments.stall_speed_landing:
+                __fEleCorr += __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
+                __iEleCount += 1
+        if __iEleCount > 0:
+            __fEleCorr = __fEleCorr / __iEleCount
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG: Mean runway elevation (GPS) correction = %.1f (N=%d)\n" % ( __fEleCorr, __iEleCount ) )
+
+        # Compute altitude AGL
+        # NOTE: lower stall speed by 20% to account for wind speed errors
+        __aAlt = numpy.zeros( __iDataLength )
+        for __i in range( __iDataLength ):
+            if ( __aAtt[__i] != 1 and __aHSpd[__i] > 0.8*self.oArguments.stall_speed_takeoff ) or \
+              __aHSpd[__i] > 0.8*self.oArguments.stall_speed_landing:
+                __aAlt[__i] = __aEle[__i] - __fEleCorr - self.__rwyele( __aLat[__i], __aLon[__i] )
+                if __aAlt[__i] < 0:
+                    __aAlt[__i] = 0
+
+        # Precisely re-estimate attitude (climb/descent)
+        __aAtt = self.__attitude( __aAlt, 5.0 )
+
+        # Compute vertical speed
+        __tTCK = interpolate.splrep( __aEpoch, __aAlt, s=0 )
+        __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
         # Detect "airborne" status
+        # NOTE: lower stall speed by 20% to account for wind speed errors
         __aAirborne = numpy.zeros( __iDataLength, numpy.uint8 )
         for __i in range( __iDataLength ):
             # IF:
-            # 1. horz. speed is above stall speed AND
-            # 2. altitude above ground level is above 0.5m OR
-            # 3. climb speed is above 0.1m/s (20ft/min) OR
-            # 4. descent speed is above -0.1m/s (-20ft/min)
-            if __aHSpd[__i] > self.oArguments.stall_speed and \
-              ( __aAlt[__i] > 0.5 or \
-                ( __aVSpd[__i] > 0.1 and __aAtt[__i] > 0 ) or \
-                ( __aVSpd[__i] < -0.1 and __aAtt[__i] < 0 ) ):
+            # 1. we're not *on* ground AND
+            # 2+3. horz. speed is above stall speed AND
+            # 4. altitude above ground level is above 0.5m OR
+            # 5. climb speed is above 0.1m/s (20ft/min) OR
+            # 6. descent speed is above -0.1m/s (-20ft/min)
+            if not __aAlt[__i] <= 0 and \
+              ( ( __aAtt[__i] < 1 and __aHSpd[__i] > 0.8*self.oArguments.stall_speed_landing ) or \
+                __aHSpd[__i] > 0.8*self.oArguments.stall_speed_takeoff ) and \
+              ( __aAlt[__i] > 0.1 or \
+                ( __aAtt[__i] > 0 and __aVSpd[__i] > 0.1 ) or \
+                ( __aAtt[__i] < 0 and __aVSpd[__i] < -0.1 ) ):
                 __aAirborne[__i] = 1
 
         # Filter out data imprecisions/errors noise
-        __aKernel = numpy.ones( int( self.oArguments.noise_filter / self.oArguments.time_resolution ), numpy.uint8 )
-        __aAirborne = cv2.morphologyEx( __aAirborne, cv2.MORPH_OPEN, __aKernel )
-        __aAirborne = cv2.morphologyEx( __aAirborne, cv2.MORPH_CLOSE, __aKernel )
+        # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
+        __iKLength = int( self.oArguments.noise_filter / self.oArguments.time_resolution )
+        if __iKLength % 2 == 0: __iKLength += 1
+        __aK = numpy.ones( __iKLength, numpy.uint8 )
+        __aAirborne_clean = cv2.morphologyEx( __aAirborne, cv2.MORPH_OPEN, __aK )
+        __aAirborne_clean = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, __aK )
 
         # Filter-out touch-'n-go data
-        __aAirborne_touchgo = cv2.morphologyEx( __aAirborne, cv2.MORPH_CLOSE, numpy.ones( int( self.oArguments.touchgo_filter / self.oArguments.time_resolution ) ) )
+        # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
+        __iKLength = int( self.oArguments.touchgo_filter / self.oArguments.time_resolution )
+        if __iKLength % 2 == 0: __iKLength += 1
+        __aK = numpy.ones( __iKLength, numpy.uint8 )
+        __aAirborne_touchgo = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, __aK )
 
         # Output detected events
         for __i in range( 1, __iDataLength ):
-            if __aAirborne[__i] != __aAirborne[__i-1]:
+            if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
                 sys.stdout.write( "%.1f" % __aEpoch[__i] )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLat[__i] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
@@ -479,7 +524,7 @@ class CGps2Logbook:
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aBrng[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aHSpd[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aVSpd[__i] ) )
-                if __aAirborne[__i]:
+                if __aAirborne_clean[__i]:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'AIRBORNE' ) )
                     if __aAirborne_touchgo[__i-1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
@@ -507,8 +552,28 @@ class CGps2Logbook:
 
         # DEBUG: plot interpolated data graphs
         if self.oArguments.debug:
-            plot.plot( __aEpoch, __aAlt, __aEpoch, __aHSpd, __aEpoch, __aVSpd*10, __aEpoch, __aAtt*10, __aEpoch, __aAirborne*10, 'o' )
-            plot.legend( [ 'Altitude', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne' ], loc='best' )
+            # ... transform raw elevation to raw altitude AGL
+            for __i in range( __iDataLength ):
+                __aEle[__i] -= __fEleCorr + self.__rwyele( __aLat[__i], __aLon[__i] )
+            for __i in range( len( self.lEpoch ) ):
+                self.lEle[__i] -= __fEleCorr + self.__rwyele( self.lLat[__i], self.lLon[__i] )
+            # ... filter-out errors derivative artifacts
+            for __i in range( __iDataLength ):
+                if __aVSpd[__i] > 25.0:
+                    __aVSpd[__i] = 25.0
+                elif __aVSpd[__i] < -25.0:
+                    __aVSpd[__i] = -25.0
+            # ... plot data
+            plot.plot( self.lEpoch, self.lEle, color='g', linestyle='None', marker='o' )
+            plot.plot( __aEpoch, __aEle, color='g' )
+            plot.plot( __aEpoch, __aAlt, color='r' )
+            plot.plot( self.lEpoch, self.lHSpd, color='b', linestyle='None', marker='o' )
+            plot.plot( __aEpoch, __aHSpd, color='m' )
+            plot.plot( __aEpoch, __aVSpd, color='c' )
+            plot.plot( __aEpoch, __aAtt*self.oArguments.stall_speed_landing, color='c', linestyle=':' )
+            plot.plot( __aEpoch, __aAirborne*self.oArguments.stall_speed_takeoff, color='k', linestyle=':' )
+            plot.plot( __aEpoch, __aAirborne_clean*self.oArguments.stall_speed_landing, color='k' )
+            plot.legend( [ 'Altitude (GPS)', 'Altitude (raw)', 'Altitude', 'H.Speed (GPS)', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne (raw)', 'Airborne' ], loc='best' )
             plot.show()
 
 
@@ -532,7 +597,7 @@ class CGps2Logbook:
                       self.oArguments.runway_threshold_longitude_1,
                       self.oArguments.runway_threshold_latitude_2,
                       self.oArguments.runway_threshold_longitude_2 )
-        self.fRwyLen = \
+        self.fRwyLength = \
           distanceRL( self.oArguments.runway_threshold_latitude_1,
                       self.oArguments.runway_threshold_longitude_1,
                       self.oArguments.runway_threshold_latitude_2,
@@ -556,10 +621,10 @@ class CGps2Logbook:
         # NOTE: we don't use GPS-provide course data, since GPS do not get those "natively",
         #       but rather derive them from position data (the same way as we do here, first crudely,
         #       then elaborately using splines first derivative)
-        __iTriggerCount = 0
-        __fTriggerEpoch = 0.0
+        __iTrigCount = 0
+        __fTrigEpoch = 0.0
         __fRefEle = ( self.oArguments.runway_threshold_elevation_1 + self.oArguments.runway_threshold_elevation_2 ) / 2.0
-        __fRefDist = self.fRwyLen / 2.0
+        __fRefDist = self.fRwyLength / 2.0
         __fRefHWidth = self.oArguments.runway_width / 2.0
         __bDataFill = False
         __bDataProcessed = False
@@ -598,35 +663,35 @@ class CGps2Logbook:
             if not __bPrev:
                 continue
 
-            # Compute runway axis misalignment
-            __fAxisMisalign = abs( __fBrng - self.fRwyAxis )
-            if __fAxisMisalign > 90.0:
-                __fAxisMisalign = abs( 180.0 - __fAxisMisalign )
+            # Compute runway axis crossing angle
+            __fAxisXAng = abs( __fBrng - self.fRwyAxis )
+            if __fAxisXAng > 90.0:
+                __fAxisXAng = abs( 180.0 - __fAxisXAng )
 
             # Detect whether point is worth considering
             __fRwyDist = distanceRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
             __fRwyBrng = bearingRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
             # IF:
             # 1. ship is moving fast enough (> 2.5m/s, 5kt)
-            # 2. along the runway axis
+            # 2. not cross the runway axis
             # 3. below the decision altitude
             # 4. close enough to (or *on*) the runway
             if __fHSpd > 2.5 and \
-              __fAxisMisalign < 15.0 and \
+              __fAxisXAng < 60.0 and \
               __fEle < __fRefEle + 150.0 and \
               __fRwyDist < __fRefDist + 250.0 and \
               ( __fRwyDist > __fRefDist or \
-                __fRwyDist * abs( math.sin( ( __fRwyBrng - self.fRwyAxis ) * DEG_2_RAD ) ) < __fRefHWidth + 15.0 ):
-                __iTriggerCount += 1
+                __fRwyDist * abs( math.sin( ( __fRwyBrng - self.fRwyAxis ) * DEG_2_RAD ) ) < __fRefHWidth + 5.0 ):
+                __iTrigCount += 1
             else:
-                __iTriggerCount -= 1
-            if __iTriggerCount >= 5:
-                __iTriggerCount = 5
+                __iTrigCount -= 1
+            if __iTrigCount >= 5:
+                __iTrigCount = 5
 
             # Store data
             # IF: worthy data trigger has been activated
-            if __iTriggerCount > 0:
-                if __iTriggerCount == 1:
+            if __iTrigCount > 0:
+                if __iTrigCount == 1:
                     __fDataEpoch = __fEpoch
                 self.lEpoch.append( __fEpoch )
                 self.lLat.append( __fLat )
@@ -645,14 +710,14 @@ class CGps2Logbook:
             if not __bDataProcessed and \
               __iDataLength >= 5 and \
               ( __fEpoch - __fDataEpoch >= self.oArguments.analysis_length or \
-                __iTriggerCount <= 0 ):
+                __iTrigCount <= 0 ):
                 self.__process()
                 __bDataProcessed = True
 
             # Stop accumulating and clear data ("untrigger")
             # IF: worthy data trigger has starved
-            if __iTriggerCount <= 0:
-                __iTriggerCount = 0
+            if __iTrigCount <= 0:
+                __iTrigCount = 0
                 __bDataProcessed = False
                 __fDataEpoch = 0.0
                 __iDataLength = 0
