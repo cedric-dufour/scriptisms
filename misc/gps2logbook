@@ -422,6 +422,8 @@ class CGps2Logbook:
 
         # Data window length
         __iDataLength = len( self.lEpoch )
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG: GPS data timespan = %.1fs (N=%d)\n" % ( self.lEpoch[__iDataLength-1]-self.lEpoch[0], __iDataLength ) )
 
         # Compute distance
         __lDist = [0]*__iDataLength
@@ -462,7 +464,7 @@ class CGps2Logbook:
         if __iEleCount > 0:
             __fEleCorr = __fEleCorr / __iEleCount
         if self.oArguments.debug:
-            sys.stderr.write( "DEBUG: Mean runway elevation (GPS) correction = %.1f (N=%d)\n" % ( __fEleCorr, __iEleCount ) )
+            sys.stderr.write( "DEBUG: Mean runway elevation (GPS) correction = %.1fm (N=%d)\n" % ( __fEleCorr, __iEleCount ) )
 
         # Compute altitude AGL
         __aAlt = numpy.zeros( __iDataLength )
@@ -511,12 +513,9 @@ class CGps2Logbook:
         if __iKLength % 2 == 0: __iKLength += 1
         __aK = numpy.ones( __iKLength, numpy.uint8 )
         __aAirborne_touchgo = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, __aK )
-        # ... touch-'n-go can not occur at the beginning/end of the analysis window
-        for __i in range( 0, __iKLength/2 ):
-            __aAirborne_touchgo[__i] = 0
-            __aAirborne_touchgo[__iDataLength-__i-1] = 0
 
         # Output detected events
+        # NOTE: touch-'n-go can not occur at the beginning/end of the analysis window
         for __i in range( 1, __iDataLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
                 sys.stdout.write( "%.1f" % __aEpoch[__i] )
@@ -528,13 +527,13 @@ class CGps2Logbook:
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aVSpd[__i] ) )
                 if __aAirborne_clean[__i]:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'AIRBORNE' ) )
-                    if __aAirborne_touchgo[__i-1]:
+                    if __i>self.oArguments.touchgo_filter/self.oArguments.time_resolution/2 and __aAirborne_touchgo[__i-1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TAKEOFF' ) )
                 else:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHDOWN' ) )
-                    if __aAirborne_touchgo[__i+1]:
+                    if __i<__iDataLength-self.oArguments.touchgo_filter/self.oArguments.time_resolution/2 and __aAirborne_touchgo[__i+1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'LANDING' ) )
