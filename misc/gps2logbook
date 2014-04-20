@@ -193,8 +193,9 @@ class CGps2Logbook:
         self.lLat = None
         self.lLon = None
         self.lEle = None
-        self.lBrng = None
-        self.lHSpd = None
+        self.lLatErr = None
+        self.lLonErr = None
+        self.lEleErr = None
         self.__initArgumentParser()
 
 
@@ -416,7 +417,6 @@ class CGps2Logbook:
         return __aAtt
 
 
-
     def __process( self ):
         """
         Process the data window and output touchdown/airbone data.
@@ -425,30 +425,59 @@ class CGps2Logbook:
         # Data window length
         __iDataLength = len( self.lEpoch )
         if self.oArguments.debug:
-            sys.stderr.write( "DEBUG: GPS data timespan = %.1fs (N=%d)\n" % ( self.lEpoch[__iDataLength-1]-self.lEpoch[0], __iDataLength ) )
-
-        # Compute distance
-        __lDist = [0]*__iDataLength
-        for __i in range( __iDataLength ):
-            if __i > 0:
-                __lDist[__i] = __lDist[__i-1] + distanceRL( self.lLat[__i-1], self.lLon[__i-1], self.lLat[__i], self.lLon[__i] )
+            sys.stderr.write( "DEBUG[__process]: GPS data timespan = %.1fs (N=%d)\n" % ( self.lEpoch[__iDataLength-1]-self.lEpoch[0], __iDataLength ) )
 
         # Interpolate/smooth data
-        __aEpoch = numpy.arange( int(self.lEpoch[0]), int(self.lEpoch[__iDataLength-1])+1, self.oArguments.time_resolution )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lLat, s=0 )
-        __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lLon, s=0 )
-        __aLon = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lEle, s=0 )
-        __aEle = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, self.lBrng, s=0 )
-        __aBrng = interpolate.splev( __aEpoch, __tTCK, der=0 )
-        __tTCK = interpolate.splrep( self.lEpoch, __lDist, s=0 )
-        __aHSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
-        __iDataLength = len( __aEpoch )
-
-        # Correct wind speed
+        __aEpoch = numpy.arange( int(self.lEpoch[0]), int(self.lEpoch[__iDataLength-1])+1+self.oArguments.time_resolution, self.oArguments.time_resolution )
+        __iSplineLength = len( __aEpoch )
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: Interpolated data timespan = %.1fs (N=%d)\n" % ( __aEpoch[__iSplineLength-1]-__aEpoch[0], __iSplineLength ) )
+        # ... latitude
+        __aW = numpy.ones( __iDataLength )
+        __fS = 0.0
         for __i in range( __iDataLength ):
+            if self.lLatErr[__i] > 0.0:
+                __aW = ( 100.0 - self.lLatErr[__i] ) / 100.0
+                if __aW < 0.0: __aW = 0.0
+                __fS = __iDataLength
+        __tTCK = interpolate.splrep( self.lEpoch, self.lLat, w=__aW, s=__fS )
+        __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        # ... longitude
+        __aW = numpy.ones( __iDataLength )
+        __fS = 0.0
+        for __i in range( __iDataLength ):
+            if self.lLonErr[__i] > 0.0:
+                __aW = ( 100.0 - self.lLonErr[__i] ) / 100.0
+                if __aW < 0.0: __aW = 0.0
+                __fS = __iDataLength
+        __tTCK = interpolate.splrep( self.lEpoch, self.lLon, w=__aW, s=__fS )
+        __aLon = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        # ... elevation
+        __aW = numpy.ones( __iDataLength )
+        __fS = 0.0
+        for __i in range( __iDataLength ):
+            if self.lEleErr[__i] > 0.0:
+                __aW = ( 100.0 - self.lEleErr[__i] ) / 100.0
+                if __aW < 0.0: __aW = 0.0
+                __fS = __iDataLength
+        __tTCK = interpolate.splrep( self.lEpoch, self.lEle, w=__aW, s=__fS )
+        __aEle = interpolate.splev( __aEpoch, __tTCK, der=0 )
+
+        # Compute 1st order data
+        # ... distance and bearing
+        __aDist = numpy.zeros( __iSplineLength )
+        __aBrng = numpy.zeros( __iSplineLength )
+        for __i in range( 1, __iSplineLength ):
+            __aDist[__i] = __aDist[__i-1] + distanceRL( __aLat[__i-1], __aLon[__i-1], __aLat[__i], __aLon[__i] )
+            __aBrng[__i] = bearingRL( __aLat[__i-1], __aLon[__i-1], __aLat[__i], __aLon[__i] )
+        __aBrng[0] = __aBrng[1]
+
+        # Compute 2nd order data
+        # ... horizontal speed
+        __tTCK = interpolate.splrep( __aEpoch, __aDist )
+        __aHSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
+        # ... correct wind speed
+        for __i in range( __iSplineLength ):
             __aHSpd[__i] += self.oArguments.wind_speed * math.cos( ( __aBrng[__i] - self.oArguments.wind_direction ) * DEG_2_RAD )
 
         # Roughly estimate attitude (climb/descent)
@@ -458,7 +487,7 @@ class CGps2Logbook:
         # NOTE: lower stall speed by 20% to account for wind speed errors
         __fEleCorr = 0.0
         __iEleCount = 0
-        for __i in range( __iDataLength ):
+        for __i in range( __iSplineLength ):
             if ( __aAtt[__i] == 1 and __aHSpd[__i] <= 0.8*self.oArguments.stall_speed_takeoff ) or \
               __aHSpd[__i] <= 0.8*self.oArguments.stall_speed_landing:
                 __fEleCorr += __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
@@ -466,27 +495,28 @@ class CGps2Logbook:
         if __iEleCount > 0:
             __fEleCorr = __fEleCorr / __iEleCount
         if self.oArguments.debug:
-            sys.stderr.write( "DEBUG: Mean runway elevation (GPS) correction = %.1fm (N=%d)\n" % ( __fEleCorr, __iEleCount ) )
+            sys.stderr.write( "DEBUG[__process]: Mean runway elevation (GPS) correction = %.1fm (N=%d)\n" % ( __fEleCorr, __iEleCount ) )
 
         # Compute altitude AGL
-        __aAlt = numpy.zeros( __iDataLength )
-        for __i in range( __iDataLength ):
+        __aAlt = numpy.zeros( __iSplineLength )
+        for __i in range( __iSplineLength ):
             if ( __aAtt[__i] != 1 and __aHSpd[__i] > self.oArguments.stall_speed_takeoff ) or \
               __aHSpd[__i] > self.oArguments.stall_speed_landing:
                 __aAlt[__i] = __aEle[__i] - __fEleCorr - self.__rwyele( __aLat[__i], __aLon[__i] )
                 if __aAlt[__i] < 0:
                     __aAlt[__i] = 0
 
+        # Compute 2nd order data
+        # ... vertical speed
+        __tTCK = interpolate.splrep( __aEpoch, __aAlt )
+        __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
+
         # Precisely re-estimate attitude (climb/descent)
         __aAtt = self.__attitude( __aAlt, 5.0 )
 
-        # Compute vertical speed
-        __tTCK = interpolate.splrep( __aEpoch, __aAlt, s=0 )
-        __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
-
         # Detect "airborne" status
-        __aAirborne = numpy.zeros( __iDataLength, numpy.uint8 )
-        for __i in range( __iDataLength ):
+        __aAirborne = numpy.zeros( __iSplineLength, numpy.uint8 )
+        for __i in range( __iSplineLength ):
             # IF:
             # 1. we're not *on* ground AND
             # 2+3. horz. speed is above stall speed AND
@@ -518,7 +548,7 @@ class CGps2Logbook:
 
         # Output detected events
         # NOTE: touch-'n-go can not occur at the beginning/end of the analysis window
-        for __i in range( 1, __iDataLength ):
+        for __i in range( 1, __iSplineLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
                 sys.stdout.write( "%s.%sZ" % ( time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__i] ) ), \
                                                str( math.modf( __aEpoch[__i] )[0] )[2] ) )
@@ -536,7 +566,7 @@ class CGps2Logbook:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TAKEOFF' ) )
                 else:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHDOWN' ) )
-                    if __i<__iDataLength-self.oArguments.touchgo_filter/self.oArguments.time_resolution/2 and __aAirborne_touchgo[__i+1]:
+                    if __i<__iSplineLength-self.oArguments.touchgo_filter/self.oArguments.time_resolution/2 and __aAirborne_touchgo[__i+1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'LANDING' ) )
@@ -556,28 +586,34 @@ class CGps2Logbook:
 
         # DEBUG: plot interpolated data graphs
         if self.oArguments.debug:
+            # ... compute raw distance
+            __aDistRaw = numpy.zeros( __iDataLength )
+            for __i in range( 1, __iDataLength ):
+                __aDistRaw[__i] = __aDistRaw[__i-1] + distanceRL( self.lLat[__i-1], self.lLon[__i-1], self.lLat[__i], self.lLon[__i] )
             # ... transform raw elevation to raw altitude AGL
-            for __i in range( __iDataLength ):
+            for __i in range( __iSplineLength ):
                 __aEle[__i] -= __fEleCorr + self.__rwyele( __aLat[__i], __aLon[__i] )
-            for __i in range( len( self.lEpoch ) ):
-                self.lEle[__i] -= __fEleCorr + self.__rwyele( self.lLat[__i], self.lLon[__i] )
-            # ... filter-out errors derivative artifacts
+            __aEleRaw = numpy.zeros( __iDataLength )
             for __i in range( __iDataLength ):
+                __aEleRaw[__i] = self.lEle[__i] - __fEleCorr - self.__rwyele( self.lLat[__i], self.lLon[__i] )
+            # ... filter-out errors derivative artifacts
+            for __i in range( __iSplineLength ):
                 if __aVSpd[__i] > 25.0:
                     __aVSpd[__i] = 25.0
                 elif __aVSpd[__i] < -25.0:
                     __aVSpd[__i] = -25.0
             # ... plot data
-            plot.plot( self.lEpoch, self.lEle, color='g', linestyle='None', marker='o' )
+            plot.plot( self.lEpoch, __aDistRaw*0.1, color='b', linestyle='None', marker='o' )
+            plot.plot( __aEpoch, __aDist*0.1, color='b' )
+            plot.plot( self.lEpoch, __aEleRaw, color='g', linestyle='None', marker='o' )
             plot.plot( __aEpoch, __aEle, color='g' )
             plot.plot( __aEpoch, __aAlt, color='r' )
-            plot.plot( self.lEpoch, self.lHSpd, color='b', linestyle='None', marker='o' )
             plot.plot( __aEpoch, __aHSpd, color='m' )
             plot.plot( __aEpoch, __aVSpd, color='c' )
             plot.plot( __aEpoch, __aAtt*self.oArguments.stall_speed_landing, color='c', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne*self.oArguments.stall_speed_takeoff, color='k', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne_clean*self.oArguments.stall_speed_landing, color='k' )
-            plot.legend( [ 'Altitude (GPS)', 'Altitude (raw)', 'Altitude', 'H.Speed (GPS)', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne (raw)', 'Airborne' ], loc='best' )
+            plot.legend( [ 'Distance (GPS)', 'Distance', 'Elevation (GPS)', 'Elevation', 'Altitude', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne (raw)', 'Airborne' ], loc='best' )
             plot.show()
 
 
@@ -617,11 +653,12 @@ class CGps2Logbook:
         self.lLat = []
         self.lLon = []
         self.lEle = []
-        self.lBrng = []
-        self.lHSpd = []
+        self.lLatErr = []
+        self.lLonErr = []
+        self.lEleErr = []
 
         # Parse the DSV file
-        # FORMAT: Epoch,Latitude,Longitude,Elevation
+        # FORMAT: Timestamp,Latitude[deg],Longitude[deg],Elevation[m],LatitudeError[m],LongitudeError[m],ElevationError[m]
         # NOTE: we don't use GPS-provide course data, since GPS do not get those "natively",
         #       but rather derive them from position data (the same way as we do here, first crudely,
         #       then elaborately using splines first derivative)
@@ -639,9 +676,10 @@ class CGps2Logbook:
         __fLatPrev = 0.0
         __fLonPrev = 0.0
         for __lRow in csv.reader( iter( sys.stdin.readline, '' ), delimiter=self.oArguments.delimiter ):
-            if len( __lRow ) == 0: continue
+            __iRowLength = len( __lRow )
+            if __iRowLength == 0: continue
             if __lRow[0].strip().startswith( '#' ): continue
-            if len( __lRow ) < 4 and not ( len( __lRow ) == 0 and __lRow[0].strip() ):
+            if __iRowLength < 4 and not ( __iRowLength == 0 and __lRow[0].strip() ):
                 sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
                 continue
 
@@ -650,6 +688,10 @@ class CGps2Logbook:
             if not __sTime or not __sLat or not __sLon or not __sEle:
                 sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
                 continue
+            if __iRowLength >= 7:
+                ( __sLatErr, __sLonErr, __sEleErr ) = tuple( __lRow )[4:7]
+            else:
+                ( __sLatErr, __sLonErr, __sEleErr ) = ( '0', '0', '0' )
             try:
                 try:
                     __fEpoch = float( __sTime )
@@ -658,6 +700,9 @@ class CGps2Logbook:
                 __fLat = float( __sLat )
                 __fLon = float( __sLon )
                 __fEle = float( __sEle )
+                __fLatErr = float( __sLatErr )
+                __fLonErr = float( __sLonErr )
+                __fEleErr = float( __sEleErr )
             except Exception:
                 sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
                 continue
@@ -709,8 +754,9 @@ class CGps2Logbook:
                 self.lLat.append( __fLat )
                 self.lLon.append( __fLon )
                 self.lEle.append( __fEle )
-                self.lBrng.append( __fBrng )
-                self.lHSpd.append( __fHSpd )
+                self.lLatErr.append( __fLatErr )
+                self.lLonErr.append( __fLonErr )
+                self.lEleErr.append( __fEleErr )
                 __iDataLength += 1
 
             # Process
@@ -737,8 +783,9 @@ class CGps2Logbook:
                 self.lLat = []
                 self.lLon = []
                 self.lEle = []
-                self.lBrng = []
-                self.lHSpd = []
+                self.lLatErr = []
+                self.lLonErr = []
+                self.lEleErr = []
 
         # Process (end of file)
         # IF:
