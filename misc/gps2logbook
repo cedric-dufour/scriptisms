@@ -434,32 +434,35 @@ class CGps2Logbook:
             sys.stderr.write( "DEBUG[__process]: Interpolated data timespan = %.1fs (N=%d)\n" % ( __aEpoch[__iSplineLength-1]-__aEpoch[0], __iSplineLength ) )
         # ... latitude
         __aW = numpy.ones( __iDataLength )
-        __fS = 0.0
+        __fWTot = 0.0
         for __i in range( __iDataLength ):
             if self.lLatErr[__i] > 0.0:
-                __aW = ( 100.0 - self.lLatErr[__i] ) / 100.0
-                if __aW < 0.0: __aW = 0.0
-                __fS = __iDataLength
+                __aW[__i] = ( 100.0 - self.lLatErr[__i] ) / 100.0
+                if __aW[__i] < 0.0: __aW[__i] = 0.0
+            __fWTot += __aW[__i]
+        __fS = __iDataLength - __fWTot
         __tTCK = interpolate.splrep( self.lEpoch, self.lLat, w=__aW, s=__fS )
         __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
         # ... longitude
         __aW = numpy.ones( __iDataLength )
-        __fS = 0.0
+        __fWTot = 0.0
         for __i in range( __iDataLength ):
             if self.lLonErr[__i] > 0.0:
-                __aW = ( 100.0 - self.lLonErr[__i] ) / 100.0
-                if __aW < 0.0: __aW = 0.0
-                __fS = __iDataLength
+                __aW[__i] = ( 100.0 - self.lLonErr[__i] ) / 100.0
+                if __aW[__i] < 0.0: __aW[__i] = 0.0
+            __fWTot += __aW[__i]
+        __fS = __iDataLength - __fWTot
         __tTCK = interpolate.splrep( self.lEpoch, self.lLon, w=__aW, s=__fS )
         __aLon = interpolate.splev( __aEpoch, __tTCK, der=0 )
         # ... elevation
         __aW = numpy.ones( __iDataLength )
-        __fS = 0.0
+        __fWTot = 0.0
         for __i in range( __iDataLength ):
             if self.lEleErr[__i] > 0.0:
-                __aW = ( 100.0 - self.lEleErr[__i] ) / 100.0
-                if __aW < 0.0: __aW = 0.0
-                __fS = __iDataLength
+                __aW[__i] = ( 100.0 - self.lEleErr[__i] ) / 100.0
+                if __aW[__i] < 0.0: __aW[__i] = 0.0
+            __fWTot += __aW[__i]
+        __fS = __iDataLength - __fWTot
         __tTCK = interpolate.splrep( self.lEpoch, self.lEle, w=__aW, s=__fS )
         __aEle = interpolate.splev( __aEpoch, __tTCK, der=0 )
 
@@ -551,7 +554,7 @@ class CGps2Logbook:
         for __i in range( 1, __iSplineLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
                 sys.stdout.write( "%s.%sZ" % ( time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__i] ) ), \
-                                               str( math.modf( __aEpoch[__i] )[0] )[2] ) )
+                                               ( "%.3f" % math.modf( __aEpoch[__i] )[0])[2:] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLat[__i] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, self.__rwyele( __aLat[__i], __aLon[__i] ) ) )
