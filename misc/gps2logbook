@@ -503,6 +503,7 @@ class CGps2Logbook:
         if self.oArguments.debug:
             sys.stderr.write( "DEBUG[__process]: 3D smoothing factor = %f\n" % __fSmoothingFactor3D )
         __aAlt = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
         # Compute distance, bearing and horizontal speed
         __aDist = numpy.zeros( __iSplineLength )
@@ -564,7 +565,7 @@ class CGps2Logbook:
             if __fAlt > __fAltMax: __fAltMax = __fAlt
         if self.oArguments.debug:
             sys.stderr.write( "DEBUG[__process]: Distance span = %.1f / Altitude span = %.1f\n" % ( __fDistMax - __fDistMin, __fAltMax - __fAltMin ) )
-        if __fDistMax - __fDistMin < 250.0 or __fAltMax - __fAltMin < 25.0:
+        if __fDistMax - __fDistMin < 100.0 or __fAltMax - __fAltMin < 35.0:
             if self.oArguments.debug:
                 sys.stderr.write( "DEBUG[__process]: ABORT\n" )
             return
@@ -589,6 +590,7 @@ class CGps2Logbook:
         for __i in __lSplineRange:
             __fAlt = __aAlt[__i]
             if __fAlt < 100.0 and \
+              abs( __aVSpd[__i] ) < 1.0 and \
               ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                 __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aAltCorr[__i] = __fAlt
@@ -609,16 +611,20 @@ class CGps2Logbook:
             return
         for __i in __lSplineRange:
             if __fAlt >= 100.0 or \
+              abs( __aVSpd[__i] ) >= 1.0 or \
               not ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                     __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aAltCorr[__i] = __fAltCorr
         # ... smoothing and derivation (speed)
         __aW = numpy.zeros( __iSplineLength )
         for __i in __lSplineRange:
-            if ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
-              __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing:
+            if __fAlt < 100.0 and \
+              abs( __aVSpd[__i] ) < 1.0 and \
+              ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+                __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aW[__i] = 1.0
-            if ( __aAtt[__i] != 1 and __aHSpd[__i] > 1.1*self.oArguments.stall_speed_landing ) or \
+            if abs( __aVSpd[__i] ) >= 2.5 or \
+              ( __aAtt[__i] != 1 and __aHSpd[__i] > 1.1*self.oArguments.stall_speed_landing ) or \
               __aHSpd[__i] > 1.1*self.oArguments.stall_speed_takeoff:
                 __aW[__i] = 1.0
         __tTCK = interpolate.splrep( __aEpoch, __aAltCorr, k=3, w=__aW, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
@@ -627,7 +633,6 @@ class CGps2Logbook:
             __aAlt[__i] -= __aAltCorr[__i]
         __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
-        __aVAcc = interpolate.splev( __aEpoch, __tTCK, der=2 )
 
         # Detect "airborne" status
         __aAirborne = numpy.zeros( __iSplineLength, numpy.uint8 )
@@ -703,13 +708,13 @@ class CGps2Logbook:
             plot.plot( __aEpoch, __aAlt, color='r' )
             plot.plot( __aEpoch, __aAltCorr, color='r', linestyle=':' )
             plot.plot( __aEpoch, __aHSpd, color='m' )
-            plot.plot( __aEpoch, __aHAcc, color='m', linestyle=':' )
+            #plot.plot( __aEpoch, __aHAcc, color='m', linestyle=':' )
             plot.plot( __aEpoch, __aVSpd, color='c' )
-            plot.plot( __aEpoch, __aVAcc, color='c', linestyle=':' )
+            #plot.plot( __aEpoch, __aVAcc, color='c', linestyle=':' )
             plot.plot( __aEpoch, 20.0*__aAtt, color='y', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne*self.oArguments.stall_speed_takeoff, color='k', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne_clean*self.oArguments.stall_speed_landing, color='k' )
-            #plot.legend( [ 'Dist. (GPS)', 'Dist.', 'Alt. (GPS)', 'Alt.', 'Alt. (corr.)', 'H.Spd', 'V.Spd' ], loc='best' )
+            plot.legend( [ 'Dist. (GPS)', 'Dist.', 'Alt. (GPS)', 'Alt.', 'Alt. (corr.)', 'H.Spd', 'V.Spd', 'Attitude', 'Airborne (RAW)', 'Airborne' ], loc='best' )
             plot.show()
 
 
