@@ -46,9 +46,9 @@ WGS84B = 6356752.3142 # polar radius
 # FUNCTIONS
 #------------------------------------------------------------------------------
 
-def distanceRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
+def trackRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
     """
-    Loxodrome (rhumb line) distance between two geographical points.
+    Loxodrome (rhumb line) track (distance, bearing) between two geographical points.
     """
 
     # Units conversion
@@ -71,33 +71,11 @@ def distanceRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
         else:
             __fLonD = GPS_PI*2.0 + __fLonD
     __fDistance = ( WGS84A + WGS84B ) / 2.0 * math.sqrt( __fLatD*__fLatD + __fLonD*__fLonD * __fQ*__fQ )
-    return __fDistance
-
-
-def bearingRL( _fLat1, _fLon1, _fLat2, _fLon2 ):
-    """
-    Loxodrome (rhumb line) bearing between two geographical points.
-    """
-
-    # Units conversion
-    _fLat1 *= DEG_2_RAD
-    _fLon1 *= DEG_2_RAD
-    _fLat2 *= DEG_2_RAD
-    _fLon2 *= DEG_2_RAD
-
-    # Formula shamelessly copied from http://www.movable-type.co.uk/scripts/latlong.html
-    __fLonD = _fLon2 - _fLon1
-    __fPhiD = math.log( math.tan( _fLat2/2.0 + GPS_PI/4.0 ) / math.tan( _fLat1/2.0 + GPS_PI/4.0 ) )
-    if abs( __fLonD ) > GPS_PI:
-        if __fLonD > 0.0:
-            __fLonD = __fLonD - GPS_PI*2.0
-        else:
-            __fLonD = GPS_PI*2.0 + __fLonD
     __fBearing = math.atan2( __fLonD, __fPhiD )
     __fBearing *= RAD_2_DEG
     if __fBearing < 0:
         __fBearing += 360.0
-    return __fBearing;
+    return ( __fDistance, __fBearing )
 
 
 def destinationRL( _fLat1, _fLon1, _fBrng, _fDist ):
@@ -170,6 +148,33 @@ def skeleton( _aArray, _iMaxN ):
 # CLASSES
 #------------------------------------------------------------------------------
 
+# GPS data container
+class CGpsData:
+
+    #------------------------------------------------------------------------------
+    # CONSTRUCTORS / DESTRUCTOR
+    #------------------------------------------------------------------------------
+
+    def __init__( self ):
+        self.reset()
+
+    def reset( self ):
+        self.iTrigCount = 0
+        self.fTrigEpoch = 0.0
+        self.bDataFill = False
+        self.bDataProcessed = False
+        self.iDataLength = 0
+        self.fEpochPrev = 0.0
+        self.fLatPrev = 0.0
+        self.fLonPrev = 0.0
+        self.lEpoch = []
+        self.lLat = []
+        self.lLon = []
+        self.lEle = []
+        self.lLatErr = []
+        self.lLonErr = []
+        self.lEleErr = []
+
 
 # GPS to Logbook data converter class
 class CGps2Logbook:
@@ -182,20 +187,17 @@ class CGps2Logbook:
     #------------------------------------------------------------------------------
 
     def __init__( self ):
-        # Variables
+       # Variables
         self.oArgumentParser = None
         self.oArguments = None
         self.fRwyLat = None,
         self.fRwyLon = None,
         self.fRwyLength = None,
-        self.fRwyAxis = None,
-        self.lEpoch = None
-        self.lLat = None
-        self.lLon = None
-        self.lEle = None
-        self.lLatErr = None
-        self.lLonErr = None
-        self.lEleErr = None
+        self.fRwyHeading = None,
+        self.iNoiseFilterLength = None
+        self.aNoiseFilterKernel = None
+        self.iTouchgoFilterLength = None
+        self.aTouchgoFilterKernel = None
         self.__initArgumentParser()
 
 
@@ -257,14 +259,14 @@ class CGps2Logbook:
 
         # ... stall speed (landing)
         self.oArgumentParser.add_argument( '-Vs0', '--stall_speed_landing', type=float,
-                                           default=-999,
+                                           default=15.0,
                                            metavar='<speed>',
                                            help='Aircraft stall speed (landing, Vs0), in meters per second [m/s]' )
 
 
         # ... stall speed (take-off)
         self.oArgumentParser.add_argument( '-Vs1', '--stall_speed_takeoff', type=float,
-                                           default=-999,
+                                           default=25.0,
                                            metavar='<speed>',
                                            help='Aircraft stall speed (take-off, Vs1), in meters per second [m/s]' )
 
@@ -280,27 +282,21 @@ class CGps2Logbook:
                                            metavar='<angle>',
                                            help='Wind direction, in degrees [deg]' )
 
-        # ... time resolution
-        self.oArgumentParser.add_argument( '-T', '--time_resolution', type=float,
-                                           default=0.5,
-                                           metavar='<seconds>',
-                                           help='Time resolution, in seconds [s]' )
-
         # ... analysis windows length
-        self.oArgumentParser.add_argument( '-La', '--analysis_length', type=int,
-                                           default=60,
+        self.oArgumentParser.add_argument( '-La', '--analysis_length', type=float,
+                                           default=300.0,
                                            metavar='<seconds>',
                                            help='Analysis window length, in seconds [s]' )
 
         # ... noise filter length
-        self.oArgumentParser.add_argument( '-Ln', '--noise_filter', type=int,
-                                           default=5,
+        self.oArgumentParser.add_argument( '-Ln', '--noise_filter', type=float,
+                                           default=5.0,
                                            metavar='<seconds>',
                                            help='Noise filter length, in seconds [s]' )
 
         # ... touch-n-go filter length
-        self.oArgumentParser.add_argument( '-Ltg', '--touchgo_filter', type=int,
-                                           default=30,
+        self.oArgumentParser.add_argument( '-Ltg', '--touchgo_filter', type=float,
+                                           default=30.0,
                                            metavar='<seconds>',
                                            help='Touch-\'n-Go filter length, in seconds [s]' )
 
@@ -309,6 +305,19 @@ class CGps2Logbook:
                                            default=',',
                                            metavar='<character>',
                                            help='GPS data (DSV) file delimiter' )
+
+        # ... time resolution
+        self.oArgumentParser.add_argument( '--time_resolution', type=float,
+                                           default=0.1,
+                                           metavar='<seconds>',
+                                           help='Time resolution, in seconds [s]' )
+
+        # ... maximum acceleration
+        self.oArgumentParser.add_argument( '--max_acceleration', type=float,
+                                           default=2.5,
+                                           metavar='<acceleration>',
+                                           help='Maximum horizontal/vertical acceleration, in meters per square second [m/s^2]' )
+
         # ... debug
         self.oArgumentParser.add_argument( '--debug', action='store_true',
                                            default=False,
@@ -357,12 +366,10 @@ class CGps2Logbook:
             sys.stderr.write( 'ERROR: Missing or invalid runway width (runway_width)\n' )
             return 1
         if self.oArguments.stall_speed_landing < 0:
-            sys.stderr.write( 'ERROR: Missing or invalid aircraft stall speed (stall_speed_landing)\n' )
+            sys.stderr.write( 'ERROR: Invalid landing stall speed (stall_speed_landing)\n' )
             return 1
         if self.oArguments.stall_speed_takeoff < 0:
-            self.oArguments.stall_speed_takeoff = self.oArguments.stall_speed_landing
-        if self.oArguments.time_resolution < 0.1 or self.oArguments.time_resolution > 1.0:
-            sys.stderr.write( 'ERROR: Missing or invalid time resolution (time_resolution)\n' )
+            sys.stderr.write( 'ERROR: Invalid takeoff stall speed (stall_speed_takeoff)\n' )
             return 1
         if self.oArguments.analysis_length < 30:
             sys.stderr.write( 'ERROR: Invalid analysis window length (analysis_length)\n' )
@@ -372,6 +379,12 @@ class CGps2Logbook:
             return 1
         if self.oArguments.touchgo_filter < self.oArguments.noise_filter:
             sys.stderr.write( 'ERROR: Invalid Touch-\'n-Go filter length (touchgo_filter)\n' )
+            return 1
+        if self.oArguments.time_resolution < 0.1 or self.oArguments.time_resolution > 1.0:
+            sys.stderr.write( 'ERROR: Missing or invalid time resolution (time_resolution)\n' )
+            return 1
+        if self.oArguments.max_acceleration < 0.1 or self.oArguments.max_acceleration > 100.0:
+            sys.stderr.write( 'ERROR: Missing or invalid maximum acceleration (max_acceleration)\n' )
             return 1
         return 0
 
@@ -389,172 +402,262 @@ class CGps2Logbook:
         Returns the runway elevation at the given geographical point.
         """
 
-        __fThrDist = distanceRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, _fLat, _fLon )
-        __fThrBrng = bearingRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, _fLat, _fLon )
+        ( __fThrDist, __fThrAzim ) = trackRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, _fLat, _fLon )
         return \
           self.oArguments.runway_threshold_elevation_1 + \
           ( self.oArguments.runway_threshold_elevation_2 - self.oArguments.runway_threshold_elevation_1 ) * \
-          math.cos( self.fRwyAxis - __fThrBrng ) * __fThrDist / self.fRwyLength
+          math.cos( ( self.fRwyHeading - __fThrAzim ) * DEG_2_RAD ) * __fThrDist / self.fRwyLength
 
 
-    def __attitude( self, _aAlt, _fAttWdwLength ):
+    def __attitude( self, _aAlt, _iAttWdwLength ):
         # Estimate attitude (climb/descent)
         __iDataLength = len( _aAlt )
-        __iAttWdwLength = int( _fAttWdwLength / self.oArguments.time_resolution )
         __aAtt = numpy.zeros( __iDataLength, numpy.int8 )
-        for __i in range( __iAttWdwLength+1, __iDataLength-__iAttWdwLength-1 ):
+        for __i in range( _iAttWdwLength+1, __iDataLength-_iAttWdwLength-1 ):
             __fAltB = 0.0
             __fAltA = 0.0
-            for __j in range( 1, __iAttWdwLength+1 ):
+            for __j in range( 1, _iAttWdwLength+1 ):
                 __fAltB += _aAlt[__i-__j]
                 __fAltA += _aAlt[__i+__j]
-            __fAltB /= __iAttWdwLength
-            __fAltA /= __iAttWdwLength
-            if __fAltA - __fAltB > 1.0:
+            __fAltB /= _iAttWdwLength
+            __fAltA /= _iAttWdwLength
+            if __fAltA - __fAltB > 0.1:
                 __aAtt[__i] = 1
-            elif __fAltA - __fAltB < -1.0:
+            elif __fAltA - __fAltB < -0.1:
                 __aAtt[__i] = -1
         return __aAtt
 
 
-    def __process( self ):
+    def __process( self, _sIdent, _oGpsData ):
         """
         Process the data window and output touchdown/airbone data.
         """
 
-        # Data window length
-        __iDataLength = len( self.lEpoch )
         if self.oArguments.debug:
-            sys.stderr.write( "DEBUG[__process]: GPS data timespan = %.1fs (N=%d)\n" % ( self.lEpoch[__iDataLength-1]-self.lEpoch[0], __iDataLength ) )
+            sys.stderr.write( "DEBUG[__process]: Aircraft = %s\n" % _sIdent )
 
-        # Interpolate/smooth data
-        __aEpoch = numpy.arange( int(self.lEpoch[0]), int(self.lEpoch[__iDataLength-1])+1+self.oArguments.time_resolution, self.oArguments.time_resolution )
-        __iSplineLength = len( __aEpoch )
+        # Data length
+        __iDataLength = len( _oGpsData.lEpoch )
+        __lDataRange = range( __iDataLength )
         if self.oArguments.debug:
-            sys.stderr.write( "DEBUG[__process]: Interpolated data timespan = %.1fs (N=%d)\n" % ( __aEpoch[__iSplineLength-1]-__aEpoch[0], __iSplineLength ) )
+            sys.stderr.write( "DEBUG[__process]: GPS data time start = %s.%sZ\n" % \
+                              ( time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( _oGpsData.lEpoch[0] ) ), ( "%.3f" % math.modf( _oGpsData.lEpoch[0] )[0])[2:] ) )
+            sys.stderr.write( "DEBUG[__process]: GPS data timespan = %.1fs (N=%d)\n" % \
+                              ( _oGpsData.lEpoch[__iDataLength-1]-_oGpsData.lEpoch[0], __iDataLength ) )
+
+        # Interpolate data
+        __aEpoch = numpy.arange( _oGpsData.lEpoch[0], _oGpsData.lEpoch[__iDataLength-1]+self.oArguments.time_resolution, self.oArguments.time_resolution )
+        __iSplineLength = len( __aEpoch )
+        __lSplineRange = range( __iSplineLength )
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: Interpolated data timespan = %.1fs (N=%d)\n" % \
+                              ( __aEpoch[__iSplineLength-1]-__aEpoch[0], __iSplineLength ) )
         # ... latitude
-        __aW = numpy.ones( __iDataLength )
-        __fWTot = 0.0
-        for __i in range( __iDataLength ):
-            if self.lLatErr[__i] > 0.0:
-                __aW[__i] = ( 100.0 - self.lLatErr[__i] ) / 100.0
-                if __aW[__i] < 0.0: __aW[__i] = 0.0
-            __fWTot += __aW[__i]
-        __fS = __iDataLength - __fWTot
-        __tTCK = interpolate.splrep( self.lEpoch, self.lLat, w=__aW, s=__fS )
+        __tTCK = interpolate.splrep( _oGpsData.lEpoch, _oGpsData.lLat, k=3, s=0 )
         __aLat = interpolate.splev( __aEpoch, __tTCK, der=0 )
         # ... longitude
-        __aW = numpy.ones( __iDataLength )
-        __fWTot = 0.0
-        for __i in range( __iDataLength ):
-            if self.lLonErr[__i] > 0.0:
-                __aW[__i] = ( 100.0 - self.lLonErr[__i] ) / 100.0
-                if __aW[__i] < 0.0: __aW[__i] = 0.0
-            __fWTot += __aW[__i]
-        __fS = __iDataLength - __fWTot
-        __tTCK = interpolate.splrep( self.lEpoch, self.lLon, w=__aW, s=__fS )
+        __tTCK = interpolate.splrep( _oGpsData.lEpoch, _oGpsData.lLon, k=3, s=0 )
         __aLon = interpolate.splev( __aEpoch, __tTCK, der=0 )
         # ... elevation
-        __aW = numpy.ones( __iDataLength )
-        __fWTot = 0.0
-        for __i in range( __iDataLength ):
-            if self.lEleErr[__i] > 0.0:
-                __aW[__i] = ( 100.0 - self.lEleErr[__i] ) / 100.0
-                if __aW[__i] < 0.0: __aW[__i] = 0.0
-            __fWTot += __aW[__i]
-        __fS = __iDataLength - __fWTot
-        __tTCK = interpolate.splrep( self.lEpoch, self.lEle, w=__aW, s=__fS )
+        __tTCK = interpolate.splrep( _oGpsData.lEpoch, _oGpsData.lEle, k=3, s=0 )
         __aEle = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        # ... latitude error
+        __tTCK = interpolate.splrep( _oGpsData.lEpoch, _oGpsData.lLatErr, k=3, s=0 )
+        __aLatErr = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        # ... longitude error
+        __tTCK = interpolate.splrep( _oGpsData.lEpoch, _oGpsData.lLonErr, k=3, s=0 )
+        __aLonErr = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        # ... elevation error
+        __tTCK = interpolate.splrep( _oGpsData.lEpoch, _oGpsData.lEleErr, k=3, s=0 )
+        __aEleErr = interpolate.splev( __aEpoch, __tTCK, der=0 )
 
-        # Compute 1st order data
-        # ... distance and bearing
+        # Compute altitude AGL and vertical speed
+        __aAlt = numpy.zeros( __iSplineLength )
+        for __i in __lSplineRange:
+            __aAlt[__i] = __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
+        # ... smoothing and derivation (speed)
+        __aW = numpy.ones( __iSplineLength )
+        __fWTot = 0.0
+        for __i in __lSplineRange:
+            __aW[__i] = ( 150.0 - abs( __aEleErr[__i] ) ) / 150.0
+            if __aW[__i] < 0.0: __aW[__i] = 0.0
+            __fWTot += __aW[__i]
+        __fError3D = 1 - __fWTot / __iSplineLength
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: 3D error factor = %f\n" % __fError3D )
+        __fSmoothingFactor3D = 0.0
+        for __n in range( 30 ):
+            # ... look for a smoothing factor that keeps acceleration below specified limit
+            __fSmoothingFactor3D = 100.0 / 10**((30.0-__n)/10.0)
+            try:
+                __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW, s=__iSplineLength*(__fSmoothingFactor3D*__fError3D)**2 )
+                __aVAcc = interpolate.splev( __aEpoch, __tTCK, der=2 )
+            except Exception:
+                continue
+            __fVAccMax = 0.0
+            for __i in __lSplineRange:
+                __fVAcc = abs( __aVAcc[__i] )
+                if __fVAcc > __fVAccMax: __fVAccMax = __fVAcc
+            if __fVAccMax <= self.oArguments.max_acceleration:
+                break
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: 3D smoothing factor = %f\n" % __fSmoothingFactor3D )
+        __aAlt = interpolate.splev( __aEpoch, __tTCK, der=0 )
+
+        # Compute distance, bearing and horizontal speed
         __aDist = numpy.zeros( __iSplineLength )
         __aBrng = numpy.zeros( __iSplineLength )
-        for __i in range( 1, __iSplineLength ):
-            __aDist[__i] = __aDist[__i-1] + distanceRL( __aLat[__i-1], __aLon[__i-1], __aLat[__i], __aLon[__i] )
-            __aBrng[__i] = bearingRL( __aLat[__i-1], __aLon[__i-1], __aLat[__i], __aLon[__i] )
+        for __i in __lSplineRange[1:]:
+            ( __fDist, __fBrng ) = trackRL( __aLat[__i-1], __aLon[__i-1], __aLat[__i], __aLon[__i] )
+            __aDist[__i] = __aDist[__i-1] + __fDist
+            __aBrng[__i] = __fBrng
         __aBrng[0] = __aBrng[1]
-
-        # Compute 2nd order data
-        # ... horizontal speed
-        __tTCK = interpolate.splrep( __aEpoch, __aDist )
+        # ... smoothing and derivation (speed)
+        __aW = numpy.ones( __iSplineLength )
+        __fWTot = 0.0
+        for __i in __lSplineRange:
+            __fWLat = ( 100.0 - abs( __aLatErr[__i] ) ) / 100.0
+            if __fWLat < 0.0: __fWLat = 0.0
+            __fWLon = ( 100.0 - abs( __aLonErr[__i] ) ) / 100.0
+            if __fWLon < 0.0: __fWLon = 0.0
+            __aW[__i] = math.sqrt( ( __fWLat**2 + __fWLon**2 ) / 2.0 )
+            __fWTot += __aW[__i]
+        __fError2D = 1 - __fWTot / __iSplineLength
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: 2D error factor = %f\n" % __fError2D )
+        __fSmoothingFactor2D = 0.0
+        for __n in range( 30 ):
+            # ... look for a smoothing factor that keeps acceleration below specified limit
+            __fSmoothingFactor2D = 100.0 / 10**((30.0-__n)/10.0)
+            try:
+                __tTCK = interpolate.splrep( __aEpoch, __aDist, k=3, w=__aW, s=__iSplineLength*(__fSmoothingFactor2D*__fError2D)**2 )
+                __aHAcc = interpolate.splev( __aEpoch, __tTCK, der=2 )
+            except Exception:
+                continue
+            __fHAccMax = 0.0
+            for __i in __lSplineRange:
+                __fHAcc = abs( __aHAcc[__i] )
+                if __fHAcc > __fHAccMax: __fHAccMax = __fHAcc
+            if __fHAccMax <= self.oArguments.max_acceleration:
+                break
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: 2D smoothing factor = %f\n" % __fSmoothingFactor2D )
+        __aDist = interpolate.splev( __aEpoch, __tTCK, der=0 )
         __aHSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
+        __tTCK = interpolate.splrep( __aEpoch, __aBrng, k=3, w=__aW, s=__iSplineLength*(__fSmoothingFactor2D*__fError2D)**2 )
+        __aBrng = interpolate.splev( __aEpoch, __tTCK, der=0 )
         # ... correct wind speed
         for __i in range( __iSplineLength ):
             __aHSpd[__i] += self.oArguments.wind_speed * math.cos( ( __aBrng[__i] - self.oArguments.wind_direction ) * DEG_2_RAD )
 
-        # Roughly estimate attitude (climb/descent)
-        __aAtt = self.__attitude( __aEle, 10.0 )
-
-        # Compute mean elevation correction
-        # NOTE: lower stall speed by 20% to account for wind speed errors
-        __fEleCorr = 0.0
-        __iEleCount = 0
-        for __i in range( __iSplineLength ):
-            if ( __aAtt[__i] == 1 and __aHSpd[__i] <= 0.8*self.oArguments.stall_speed_takeoff ) or \
-              __aHSpd[__i] <= 0.8*self.oArguments.stall_speed_landing:
-                __fEleCorr += __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
-                __iEleCount += 1
-        if __iEleCount > 0:
-            __fEleCorr = __fEleCorr / __iEleCount
+        # Check distance and altitude span
+        __fDistMin = 9999999.0
+        __fDistMax = -9999999.0
+        __fAltMin = 9999999.0
+        __fAltMax = -9999999.0
+        for __i in __lSplineRange:
+            __fDist = __aDist[__i]
+            if __fDist < __fDistMin: __fDistMin = __fDist
+            if __fDist > __fDistMax: __fDistMax = __fDist
+            __fAlt = __aAlt[__i]
+            if __fAlt < __fAltMin: __fAltMin = __fAlt
+            if __fAlt > __fAltMax: __fAltMax = __fAlt
         if self.oArguments.debug:
-            sys.stderr.write( "DEBUG[__process]: Mean runway elevation (GPS) correction = %.1fm (N=%d)\n" % ( __fEleCorr, __iEleCount ) )
+            sys.stderr.write( "DEBUG[__process]: Distance span = %.1f / Altitude span = %.1f\n" % ( __fDistMax - __fDistMin, __fAltMax - __fAltMin ) )
+        if __fDistMax - __fDistMin < 250.0 or __fAltMax - __fAltMin < 25.0:
+            if self.oArguments.debug:
+                sys.stderr.write( "DEBUG[__process]: ABORT\n" )
+            return
 
-        # Compute altitude AGL
-        __aAlt = numpy.zeros( __iSplineLength )
-        for __i in range( __iSplineLength ):
-            if ( __aAtt[__i] != 1 and __aHSpd[__i] > self.oArguments.stall_speed_takeoff ) or \
-              __aHSpd[__i] > self.oArguments.stall_speed_landing:
-                __aAlt[__i] = __aEle[__i] - __fEleCorr - self.__rwyele( __aLat[__i], __aLon[__i] )
-                if __aAlt[__i] < 0:
-                    __aAlt[__i] = 0
+        # Attitude (climb/descent)
+        __fHSpdMin = 9999999.0
+        for __i in __lSplineRange:
+            if __aHSpd[__i] < __fHSpdMin: __fHSpdMin = __aHSpd[__i]
+        __aAtt = numpy.ones( __iSplineLength, numpy.int8 )
+        __iAtt = -1
+        for __i in __lSplineRange:
+            if __aHSpd[__i] - __fHSpdMin < 1.0:
+                __iAtt = 0
+            elif __iAtt == 0:
+                __iAtt = 1
+            __aAtt[__i] = __iAtt
 
-        # Compute 2nd order data
-        # ... vertical speed
-        __tTCK = interpolate.splrep( __aEpoch, __aAlt )
+        # Compute altitude correction
+        __aAltCorr = numpy.zeros( __iSplineLength )
+        __fAltCorr = 0.0
+        __iAltCorr = 0
+        for __i in __lSplineRange:
+            __fAlt = __aAlt[__i]
+            if __fAlt < 100.0 and \
+              ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+                __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
+                __aAltCorr[__i] = __fAlt
+                __fAltCorr += __fAlt
+                __iAltCorr += 1
+        if __iAltCorr == 0:
+            if self.oArguments.debug:
+                sys.stderr.write( "DEBUG[__process]: Negative, Ghost Rider, the pattern is full!\n" )
+                sys.stderr.write( "DEBUG[__process]: ABORT\n" )
+            return
+        __fAltCorr /= __iAltCorr
+        if self.oArguments.debug:
+            sys.stderr.write( "DEBUG[__process]: Mean altitude correction = %.1fm (N=%d)\n" % ( __fAltCorr, __iAltCorr ) )
+        if __fAltCorr > 100.0:
+            if self.oArguments.debug:
+                sys.stderr.write( "DEBUG[__process]: Negative, Ghost Rider, the pattern is full!\n" )
+                sys.stderr.write( "DEBUG[__process]: ABORT\n" )
+            return
+        for __i in __lSplineRange:
+            if __fAlt >= 100.0 or \
+              not ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+                    __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
+                __aAltCorr[__i] = __fAltCorr
+        # ... smoothing and derivation (speed)
+        __aW = numpy.zeros( __iSplineLength )
+        for __i in __lSplineRange:
+            if ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+              __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing:
+                __aW[__i] = 1.0
+            if ( __aAtt[__i] != 1 and __aHSpd[__i] > 1.1*self.oArguments.stall_speed_landing ) or \
+              __aHSpd[__i] > 1.1*self.oArguments.stall_speed_takeoff:
+                __aW[__i] = 1.0
+        __tTCK = interpolate.splrep( __aEpoch, __aAltCorr, k=3, w=__aW, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
+        __aAltCorr = interpolate.splev( __aEpoch, __tTCK, der=0 )
+        for __i in __lSplineRange:
+            __aAlt[__i] -= __aAltCorr[__i]
+        __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
-
-        # Precisely re-estimate attitude (climb/descent)
-        __aAtt = self.__attitude( __aAlt, 5.0 )
+        __aVAcc = interpolate.splev( __aEpoch, __tTCK, der=2 )
 
         # Detect "airborne" status
         __aAirborne = numpy.zeros( __iSplineLength, numpy.uint8 )
-        for __i in range( __iSplineLength ):
+        for __i in __lSplineRange:
             # IF:
-            # 1. we're not *on* ground AND
-            # 2+3. horz. speed is above stall speed AND
-            # 4. altitude above ground level is above 0.5m OR
-            # 5. climb speed is above 0.1m/s (20ft/min) OR
-            # 6. descent speed is above -0.1m/s (-20ft/min)
-            if not __aAlt[__i] <= 0 and \
-              ( ( __aAtt[__i] < 1 and __aHSpd[__i] > self.oArguments.stall_speed_landing ) or \
-                __aHSpd[__i] > self.oArguments.stall_speed_takeoff ) and \
-              ( __aAlt[__i] > 0.1 or \
-                ( __aAtt[__i] > 0 and __aVSpd[__i] > 0.1 ) or \
-                ( __aAtt[__i] < 0 and __aVSpd[__i] < -0.1 ) ):
+            if __aAlt[__i] > 10.0 or \
+              ( not ( ( __aAtt[__i] == 1 and __aHSpd[__i] < self.oArguments.stall_speed_takeoff ) or \
+                      __aHSpd[__i] < self.oArguments.stall_speed_landing ) and \
+                ( __aAlt[__i] > 1.0 or abs( __aVSpd[__i] ) > 1.0 ) ):
                 __aAirborne[__i] = 1
 
         # Filter out data imprecisions/errors noise
-        # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
-        __iKLength = int( self.oArguments.noise_filter / self.oArguments.time_resolution )
-        if __iKLength % 2 == 0: __iKLength += 1
-        __aK = numpy.ones( __iKLength, numpy.uint8 )
-        __aAirborne_clean = cv2.morphologyEx( __aAirborne, cv2.MORPH_OPEN, __aK )
-        __aAirborne_clean = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, __aK )
+        __aAirborne_clean = cv2.morphologyEx( __aAirborne, cv2.MORPH_CLOSE, self.aNoiseFilterKernel )
+        __aAirborne_clean = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_OPEN, self.aNoiseFilterKernel )
 
         # Filter-out touch-'n-go data
         # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
-        __iKLength = int( self.oArguments.touchgo_filter / self.oArguments.time_resolution )
-        if __iKLength % 2 == 0: __iKLength += 1
-        __aK = numpy.ones( __iKLength, numpy.uint8 )
-        __aAirborne_touchgo = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, __aK )
+        if __iSplineLength > self.iTouchgoFilterLength:
+            __aAirborne_touchgo = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, self.aTouchgoFilterKernel )
+        else:
+            __aAirborne_touchgo = __aAirborne_clean
 
         # Output detected events
         # NOTE: touch-'n-go can not occur at the beginning/end of the analysis window
         for __i in range( 1, __iSplineLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
-                sys.stdout.write( "%s.%sZ" % ( time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__i] ) ), \
-                                               ( "%.3f" % math.modf( __aEpoch[__i] )[0])[2:] ) )
+                sys.stdout.write( "%s" % _sIdent )
+                sys.stdout.write( "%s%s.%sZ" % ( self.oArguments.delimiter, \
+                                                 time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__i] ) ), \
+                                                 ( "%.3f" % math.modf( __aEpoch[__i] )[0])[2:] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLat[__i] ) )
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, self.__rwyele( __aLat[__i], __aLon[__i] ) ) )
@@ -563,60 +666,50 @@ class CGps2Logbook:
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aVSpd[__i] ) )
                 if __aAirborne_clean[__i]:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'AIRBORNE' ) )
-                    if __i>self.oArguments.touchgo_filter/self.oArguments.time_resolution/2 and __aAirborne_touchgo[__i-1]:
+                    if __i > self.iTouchgoFilterLength/2 and __aAirborne_touchgo[__i-1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TAKEOFF' ) )
                 else:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHDOWN' ) )
-                    if __i<__iSplineLength-self.oArguments.touchgo_filter/self.oArguments.time_resolution/2 and __aAirborne_touchgo[__i+1]:
+                    if __i < self.iTouchgoFilterLength/2 and __aAirborne_touchgo[__i+1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'LANDING' ) )
-                if math.cos( ( __aBrng[__i] - self.fRwyAxis ) * DEG_2_RAD ) > 0.0:
-                    sys.stdout.write( "%s%01d" % ( self.oArguments.delimiter, int( self.fRwyAxis/10.0 ) ) )
-                    __fThrDist = distanceRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, __aLat[__i], __aLon[__i] )
-                    __fThrBrng = bearingRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, __aLat[__i], __aLon[__i] )
-                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.cos( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
-                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
+                if math.cos( ( __aBrng[__i] - self.fRwyHeading ) * DEG_2_RAD ) > 0.0:
+                    sys.stdout.write( "%s%01d" % ( self.oArguments.delimiter, int( self.fRwyHeading/10.0 ) ) )
+                    ( __fThrDist, __fThrAzim ) = trackRL( self.oArguments.runway_threshold_latitude_1, self.oArguments.runway_threshold_longitude_1, __aLat[__i], __aLon[__i] )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.cos( ( __fThrAzim - self.fRwyHeading ) * DEG_2_RAD ) ) ) )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrAzim - self.fRwyHeading ) * DEG_2_RAD ) ) ) )
                 else:
-                    sys.stdout.write( "%s%01d" % ( self.oArguments.delimiter, int( self.fRwyAxis/10.0+18.0 ) ) )
-                    __fThrDist = distanceRL( self.oArguments.runway_threshold_latitude_2, self.oArguments.runway_threshold_longitude_2, __aLat[__i], __aLon[__i] )
-                    __fThrBrng = bearingRL( self.oArguments.runway_threshold_latitude_2, self.oArguments.runway_threshold_longitude_2, __aLat[__i], __aLon[__i] )
-                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.cos( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
-                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrBrng - self.fRwyAxis ) * DEG_2_RAD ) ) ) )
+                    sys.stdout.write( "%s%01d" % ( self.oArguments.delimiter, int( self.fRwyHeading/10.0+18.0 ) ) )
+                    ( __fThrDist, __fThrAzim ) = trackRL( self.oArguments.runway_threshold_latitude_2, self.oArguments.runway_threshold_longitude_2, __aLat[__i], __aLon[__i] )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.cos( ( __fThrAzim - self.fRwyHeading ) * DEG_2_RAD ) ) ) )
+                    sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrAzim - self.fRwyHeading ) * DEG_2_RAD ) ) ) )
                 sys.stdout.write( "\n" )
 
         # DEBUG: plot interpolated data graphs
         if self.oArguments.debug:
-            # ... compute raw distance
-            __aDistRaw = numpy.zeros( __iDataLength )
-            for __i in range( 1, __iDataLength ):
-                __aDistRaw[__i] = __aDistRaw[__i-1] + distanceRL( self.lLat[__i-1], self.lLon[__i-1], self.lLat[__i], self.lLon[__i] )
-            # ... transform raw elevation to raw altitude AGL
-            for __i in range( __iSplineLength ):
-                __aEle[__i] -= __fEleCorr + self.__rwyele( __aLat[__i], __aLon[__i] )
-            __aEleRaw = numpy.zeros( __iDataLength )
-            for __i in range( __iDataLength ):
-                __aEleRaw[__i] = self.lEle[__i] - __fEleCorr - self.__rwyele( self.lLat[__i], self.lLon[__i] )
-            # ... filter-out errors derivative artifacts
-            for __i in range( __iSplineLength ):
-                if __aVSpd[__i] > 25.0:
-                    __aVSpd[__i] = 25.0
-                elif __aVSpd[__i] < -25.0:
-                    __aVSpd[__i] = -25.0
+            # ... compute GPS data
+            __aDistGPS = numpy.zeros( __iDataLength )
+            __aAltGPS = numpy.zeros( __iDataLength )
+            for __i in __lDataRange:
+                if __i>0: __aDistGPS[__i] = __aDistGPS[__i-1] + trackRL( _oGpsData.lLat[__i-1], _oGpsData.lLon[__i-1], _oGpsData.lLat[__i], _oGpsData.lLon[__i] )[0]
+                __aAltGPS[__i] = _oGpsData.lEle[__i] - self.__rwyele( _oGpsData.lLat[__i], _oGpsData.lLon[__i] ) - __fAltCorr
             # ... plot data
-            plot.plot( self.lEpoch, __aDistRaw*0.1, color='b', linestyle='None', marker='o' )
+            plot.plot( _oGpsData.lEpoch, __aDistGPS*0.1, color='b', linestyle='None', marker='o' )
             plot.plot( __aEpoch, __aDist*0.1, color='b' )
-            plot.plot( self.lEpoch, __aEleRaw, color='g', linestyle='None', marker='o' )
-            plot.plot( __aEpoch, __aEle, color='g' )
+            plot.plot( _oGpsData.lEpoch, __aAltGPS, color='g', linestyle='None', marker='o' )
             plot.plot( __aEpoch, __aAlt, color='r' )
+            plot.plot( __aEpoch, __aAltCorr, color='r', linestyle=':' )
             plot.plot( __aEpoch, __aHSpd, color='m' )
+            plot.plot( __aEpoch, __aHAcc, color='m', linestyle=':' )
             plot.plot( __aEpoch, __aVSpd, color='c' )
-            plot.plot( __aEpoch, __aAtt*self.oArguments.stall_speed_landing, color='c', linestyle=':' )
+            plot.plot( __aEpoch, __aVAcc, color='c', linestyle=':' )
+            plot.plot( __aEpoch, 20.0*__aAtt, color='y', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne*self.oArguments.stall_speed_takeoff, color='k', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne_clean*self.oArguments.stall_speed_landing, color='k' )
-            plot.legend( [ 'Distance (GPS)', 'Distance', 'Elevation (GPS)', 'Elevation', 'Altitude', 'H.Speed', 'V.Speed', 'Attitude', 'Airborne (raw)', 'Airborne' ], loc='best' )
+            #plot.legend( [ 'Dist. (GPS)', 'Dist.', 'Alt. (GPS)', 'Alt.', 'Alt. (corr.)', 'H.Spd', 'V.Spd' ], loc='best' )
             plot.show()
 
 
@@ -640,44 +733,35 @@ class CGps2Logbook:
                       self.oArguments.runway_threshold_longitude_1,
                       self.oArguments.runway_threshold_latitude_2,
                       self.oArguments.runway_threshold_longitude_2 )
-        self.fRwyLength = \
-          distanceRL( self.oArguments.runway_threshold_latitude_1,
-                      self.oArguments.runway_threshold_longitude_1,
-                      self.oArguments.runway_threshold_latitude_2,
-                      self.oArguments.runway_threshold_longitude_2 )
-        self.fRwyAxis = \
-          bearingRL( self.oArguments.runway_threshold_latitude_1,
-                     self.oArguments.runway_threshold_longitude_1,
-                     self.oArguments.runway_threshold_latitude_2,
-                     self.oArguments.runway_threshold_longitude_2 )
+        ( self.fRwyLength, self.fRwyHeading ) = \
+          trackRL( self.oArguments.runway_threshold_latitude_1,
+                   self.oArguments.runway_threshold_longitude_1,
+                   self.oArguments.runway_threshold_latitude_2,
+                   self.oArguments.runway_threshold_longitude_2 )
 
-        # Prepare the data container
-        self.lEpoch = []
-        self.lLat = []
-        self.lLon = []
-        self.lEle = []
-        self.lLatErr = []
-        self.lLonErr = []
-        self.lEleErr = []
+        # Morphological filtering kernels
+        # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
+        # ... noise filter
+        self.iNoiseFilterLength = int( self.oArguments.noise_filter / self.oArguments.time_resolution )
+        __iKLength = self.iNoiseFilterLength
+        if __iKLength % 2 == 0: __iKLength += 1
+        self.aNoiseFilterKernel = numpy.ones( __iKLength, numpy.uint8 )
+        # ... touch-'n-go filter
+        self.iTouchgoFilterLength = int( self.oArguments.touchgo_filter / self.oArguments.time_resolution )
+        __iKLength = self.iTouchgoFilterLength
+        if __iKLength % 2 == 0: __iKLength += 1
+        self.aTouchgoFilterKernel = numpy.ones( __iKLength, numpy.uint8 )
 
         # Parse the DSV file
-        # FORMAT: Timestamp,Latitude[deg],Longitude[deg],Elevation[m],LatitudeError[m],LongitudeError[m],ElevationError[m]
+        # FORMAT: Ident,DateTime,Latitude[deg],Longitude[deg],Elevation[m],LatitudeError[m],LongitudeError[m],ElevationError[m]
         # NOTE: we don't use GPS-provide course data, since GPS do not get those "natively",
         #       but rather derive them from position data (the same way as we do here, first crudely,
         #       then elaborately using splines first derivative)
         __oTimeEpochStart = parser.parse( '1970-01-01T00:00:00Z' )
-        __iTrigCount = 0
-        __fTrigEpoch = 0.0
         __fRefEle = ( self.oArguments.runway_threshold_elevation_1 + self.oArguments.runway_threshold_elevation_2 ) / 2.0
         __fRefDist = self.fRwyLength / 2.0
         __fRefHWidth = self.oArguments.runway_width / 2.0
-        __bDataFill = False
-        __bDataProcessed = False
-        __fDataEpoch = 0.0
-        __iDataLength = 0
-        __fEpochPrev = 0.0
-        __fLatPrev = 0.0
-        __fLonPrev = 0.0
+        __dGpsData = {}
         for __lRow in csv.reader( iter( sys.stdin.readline, '' ), delimiter=self.oArguments.delimiter ):
             __iRowLength = len( __lRow )
             if __iRowLength == 0: continue
@@ -687,12 +771,12 @@ class CGps2Logbook:
                 continue
 
             # Retrieve geolocalization data
-            ( __sTime, __sLat, __sLon, __sEle ) = tuple( __lRow )[:4]
-            if not __sTime or not __sLat or not __sLon or not __sEle:
+            ( __sIdent, __sTime, __sLat, __sLon, __sEle ) = tuple( __lRow )[:5]
+            if not __sIdent or not __sTime or not __sLat or not __sLon or not __sEle:
                 sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
                 continue
-            if __iRowLength >= 7:
-                ( __sLatErr, __sLonErr, __sEleErr ) = tuple( __lRow )[4:7]
+            if __iRowLength >= 8:
+                ( __sLatErr, __sLonErr, __sEleErr ) = tuple( __lRow )[5:8]
             else:
                 ( __sLatErr, __sLonErr, __sEleErr ) = ( '0', '0', '0' )
             try:
@@ -710,93 +794,104 @@ class CGps2Logbook:
                 sys.stderr.write( "WARNING: Invalid data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
                 continue
 
+            # Retrieve GPS data container
+            if __dGpsData.has_key( __sIdent ):
+                __oGpsData = __dGpsData[__sIdent]
+            else:
+                __oGpsData = CGpsData()
+                __dGpsData[__sIdent] = __oGpsData
+
             # Compute (crude) course data
             __bPrev = False
-            if __fEpochPrev > 0.0:
-                __fBrng = bearingRL( __fLatPrev, __fLonPrev, __fLat, __fLon )
-                __fHSpd = distanceRL( __fLatPrev, __fLonPrev, __fLat, __fLon ) / ( __fEpoch - __fEpochPrev ) + \
-                  self.oArguments.wind_speed * math.cos( ( __fBrng - self.oArguments.wind_direction ) * DEG_2_RAD )
+            if __oGpsData.fEpochPrev > 0.0:
+                ( __fDist, __fBrng ) = trackRL( __oGpsData.fLatPrev, __oGpsData.fLonPrev, __fLat, __fLon )
+                try:
+                    __fHSpd = __fDist / ( __fEpoch - __oGpsData.fEpochPrev )
+                except Exception:
+                    sys.stderr.write( "WARNING: Duplicated data; %s\n" % self.oArguments.delimiter.join( __lRow ) )
+                    continue
+                __fHSpd += self.oArguments.wind_speed * math.cos( ( __fBrng - self.oArguments.wind_direction ) * DEG_2_RAD )
                 __bPrev = True
-            __fEpochPrev = __fEpoch
-            __fLatPrev = __fLat
-            __fLonPrev = __fLon
+            __oGpsData.fEpochPrev = __fEpoch
+            __oGpsData.fLatPrev = __fLat
+            __oGpsData.fLonPrev = __fLon
             if not __bPrev:
                 continue
 
             # Compute runway axis crossing angle
-            __fAxisXAng = abs( __fBrng - self.fRwyAxis )
+            __fAxisXAng = abs( __fBrng - self.fRwyHeading )
             if __fAxisXAng > 90.0:
                 __fAxisXAng = abs( 180.0 - __fAxisXAng )
 
             # Detect whether point is worth considering
-            __fRwyDist = distanceRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
-            __fRwyBrng = bearingRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
+            ( __fRwyDist, __fRwyAzim ) = trackRL( self.fRwyLat, self.fRwyLon, __fLat, __fLon )
+            __fRwyOffset = __fRwyDist * abs( math.sin( ( __fRwyAzim - self.fRwyHeading ) * DEG_2_RAD ) )
+            # sys.stderr.write( "DEBUG[main]: %.1f, %.1f, %.1f, %.1f, %.1f\n" % \
+            #                   ( __fHSpd, __fAxisXAng, __fEle, __fRwyDist, __fRwyOffset ) )
             # IF:
-            # 1. ship is moving fast enough (> 2.5m/s, 5kt)
-            # 2. not cross the runway axis
-            # 3. below the decision altitude
-            # 4. close enough to (or *on*) the runway
-            if __fHSpd > 2.5 and \
-              __fAxisXAng < 60.0 and \
-              __fEle < __fRefEle + 150.0 and \
-              __fRwyDist < __fRefDist + 250.0 and \
+            # 1. ship is moving
+            # 2. below the decision altitude
+            # 3-9. close enough to (or *on*) the runway
+            if __fHSpd > 1.0 and \
+              __fEle < __fRefEle + 300.0 and \
+              __fRwyOffset < __fRefHWidth + 250.0 and \
+              __fRwyDist < __fRefDist + 750.0 and \
               ( __fRwyDist > __fRefDist or \
-                __fRwyDist * abs( math.sin( ( __fRwyBrng - self.fRwyAxis ) * DEG_2_RAD ) ) < __fRefHWidth + 5.0 ):
-                __iTrigCount += 1
+                __fHSpd > 10.0 or \
+                (  __fRwyOffset < __fRefHWidth + 10.0 and __fAxisXAng < 60.0 ) ):
+                # sys.stderr.write( "DEBUG[main]: TRIGGER\n" )
+                __oGpsData.iTrigCount += 1
             else:
-                __iTrigCount -= 1
-            if __iTrigCount >= 5:
-                __iTrigCount = 5
+                __oGpsData.iTrigCount -= 1
+            if __oGpsData.iTrigCount >= 5:
+                __oGpsData.iTrigCount = 5
 
             # Store data
-            # IF: worthy data trigger has been activated
-            if __iTrigCount > 0:
-                if __iTrigCount == 1:
-                    __fDataEpoch = __fEpoch
-                self.lEpoch.append( __fEpoch )
-                self.lLat.append( __fLat )
-                self.lLon.append( __fLon )
-                self.lEle.append( __fEle )
-                self.lLatErr.append( __fLatErr )
-                self.lLonErr.append( __fLonErr )
-                self.lEleErr.append( __fEleErr )
-                __iDataLength += 1
+            # IF:
+            # 1. worthy data trigger has been activated
+            # 2. time gap is below analysis window length
+            if __oGpsData.iTrigCount > 0 and \
+              ( __oGpsData.iDataLength == 0 or __fEpoch - __oGpsData.lEpoch[0] < self.oArguments.analysis_length ):
+                # sys.stderr.write( "DEBUG[main]: %.1f, %.1f, %.1f, %.1f, %.1f\n" % \
+                #                 ( __fHSpd, __fAxisXAng, __fEle, __fRwyDist, __fRwyDist * abs( math.sin( ( __fRwyAzim - self.fRwyHeading ) * DEG_2_RAD ) ) ) )
+                __oGpsData.lEpoch.append( __fEpoch )
+                __oGpsData.lLat.append( __fLat )
+                __oGpsData.lLon.append( __fLon )
+                __oGpsData.lEle.append( __fEle )
+                __oGpsData.lLatErr.append( __fLatErr )
+                __oGpsData.lLonErr.append( __fLonErr )
+                __oGpsData.lEleErr.append( __fEleErr )
+                __oGpsData.iDataLength += 1
 
             # Process
             # IF:
             # 1. data (from the same analysis window) haven't already been processed
-            # 2. enough data are available AND
-            # 3. analysis window length is reached OR
-            # 4. or worthy data are no longer available
-            if not __bDataProcessed and \
-              __iDataLength >= 5 and \
-              ( __fEpoch - __fDataEpoch >= self.oArguments.analysis_length or \
-                __iTrigCount <= 0 ):
-                self.__process()
-                __bDataProcessed = True
+            # 2+3. enough data are available AND
+            # 4. analysis window length is reached OR
+            # 5. or worthy data are no longer available
+            if not __oGpsData.bDataProcessed and \
+              __oGpsData.iDataLength >= 10 and \
+              __oGpsData.lEpoch[__oGpsData.iDataLength-1] - __oGpsData.lEpoch[0] >= self.oArguments.noise_filter and \
+              ( __oGpsData.lEpoch[__oGpsData.iDataLength-1] - __oGpsData.lEpoch[0] >= self.oArguments.analysis_length or \
+                __oGpsData.iTrigCount <= 0 ):
+                self.__process( __sIdent, __oGpsData )
+                __oGpsData.bDataProcessed = True
 
             # Stop accumulating and clear data ("untrigger")
             # IF: worthy data trigger has starved
-            if __iTrigCount <= 0:
-                __iTrigCount = 0
-                __bDataProcessed = False
-                __fDataEpoch = 0.0
-                __iDataLength = 0
-                self.lEpoch = []
-                self.lLat = []
-                self.lLon = []
-                self.lEle = []
-                self.lLatErr = []
-                self.lLonErr = []
-                self.lEleErr = []
+            if __oGpsData.iTrigCount <= 0:
+                __oGpsData.reset()
 
         # Process (end of file)
         # IF:
         # 1. data (from the same analysis window) haven't already been processed
-        # 2. enough data are available AND
-        if not __bDataProcessed and \
-            __iDataLength >= 5:
-            self.__process()
+        # 2+3. enough data are available AND
+        for __sIdent in __dGpsData.keys():
+            __oGpsData = __dGpsData[__sIdent]
+            if not __oGpsData.bDataProcessed and \
+              __oGpsData.iDataLength >= 10 and \
+              __oGpsData.lEpoch[__oGpsData.iDataLength-1] - __oGpsData.lEpoch[0] >= self.oArguments.noise_filter:
+              self.__process( __sIdent, __oGpsData )
 
 
 #------------------------------------------------------------------------------
