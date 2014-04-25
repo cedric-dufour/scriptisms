@@ -476,13 +476,13 @@ class CGps2Logbook:
         for __i in __lSplineRange:
             __aAlt[__i] = __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
         # ... smoothing and derivation (speed)
-        __aW = numpy.ones( __iSplineLength )
-        __fWTot = 0.0
+        __aW3D = numpy.ones( __iSplineLength )
+        __fW3DTot = 0.0
         for __i in __lSplineRange:
-            __aW[__i] = ( 150.0 - abs( __aEleErr[__i] ) ) / 150.0
-            if __aW[__i] < 0.0: __aW[__i] = 0.0
-            __fWTot += __aW[__i]
-        __fError3D = 1 - __fWTot / __iSplineLength
+            __aW3D[__i] = ( 150.0 - abs( __aEleErr[__i] ) ) / 150.0
+            if __aW3D[__i] < 0.0: __aW3D[__i] = 0.0
+            __fW3DTot += __aW3D[__i]
+        __fError3D = 1 - __fW3DTot / __iSplineLength
         if self.oArguments.debug:
             sys.stderr.write( "DEBUG[__process]: 3D error factor = %f\n" % __fError3D )
         __fSmoothingFactor3D = 0.0
@@ -490,7 +490,7 @@ class CGps2Logbook:
             # ... look for a smoothing factor that keeps acceleration below specified limit
             __fSmoothingFactor3D = 100.0 / 10**((30.0-__n)/10.0)
             try:
-                __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW, s=__iSplineLength*(__fSmoothingFactor3D*__fError3D)**2 )
+                __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW3D, s=__iSplineLength*(__fSmoothingFactor3D*__fError3D)**2 )
                 __aVAcc = interpolate.splev( __aEpoch, __tTCK, der=2 )
             except Exception:
                 continue
@@ -514,16 +514,16 @@ class CGps2Logbook:
             __aBrng[__i] = __fBrng
         __aBrng[0] = __aBrng[1]
         # ... smoothing and derivation (speed)
-        __aW = numpy.ones( __iSplineLength )
-        __fWTot = 0.0
+        __aW2D = numpy.ones( __iSplineLength )
+        __fW2DTot = 0.0
         for __i in __lSplineRange:
             __fWLat = ( 100.0 - abs( __aLatErr[__i] ) ) / 100.0
             if __fWLat < 0.0: __fWLat = 0.0
             __fWLon = ( 100.0 - abs( __aLonErr[__i] ) ) / 100.0
             if __fWLon < 0.0: __fWLon = 0.0
-            __aW[__i] = math.sqrt( ( __fWLat**2 + __fWLon**2 ) / 2.0 )
-            __fWTot += __aW[__i]
-        __fError2D = 1 - __fWTot / __iSplineLength
+            __aW2D[__i] = math.sqrt( ( __fWLat**2 + __fWLon**2 ) / 2.0 )
+            __fW2DTot += __aW2D[__i]
+        __fError2D = 1 - __fW2DTot / __iSplineLength
         if self.oArguments.debug:
             sys.stderr.write( "DEBUG[__process]: 2D error factor = %f\n" % __fError2D )
         __fSmoothingFactor2D = 0.0
@@ -531,7 +531,7 @@ class CGps2Logbook:
             # ... look for a smoothing factor that keeps acceleration below specified limit
             __fSmoothingFactor2D = 100.0 / 10**((30.0-__n)/10.0)
             try:
-                __tTCK = interpolate.splrep( __aEpoch, __aDist, k=3, w=__aW, s=__iSplineLength*(__fSmoothingFactor2D*__fError2D)**2 )
+                __tTCK = interpolate.splrep( __aEpoch, __aDist, k=3, w=__aW2D, s=__iSplineLength*(__fSmoothingFactor2D*__fError2D)**2 )
                 __aHAcc = interpolate.splev( __aEpoch, __tTCK, der=2 )
             except Exception:
                 continue
@@ -545,7 +545,7 @@ class CGps2Logbook:
             sys.stderr.write( "DEBUG[__process]: 2D smoothing factor = %f\n" % __fSmoothingFactor2D )
         __aDist = interpolate.splev( __aEpoch, __tTCK, der=0 )
         __aHSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
-        __tTCK = interpolate.splrep( __aEpoch, __aBrng, k=3, w=__aW, s=__iSplineLength*(__fSmoothingFactor2D*__fError2D)**2 )
+        __tTCK = interpolate.splrep( __aEpoch, __aBrng, k=3, w=__aW2D, s=__iSplineLength*(__fSmoothingFactor2D*__fError2D)**2 )
         __aBrng = interpolate.splev( __aEpoch, __tTCK, der=0 )
         # ... correct wind speed
         for __i in range( __iSplineLength ):
@@ -616,22 +616,22 @@ class CGps2Logbook:
                     __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aAltCorr[__i] = __fAltCorr
         # ... smoothing and derivation (speed)
-        __aW = numpy.zeros( __iSplineLength )
+        __aW3DCorr = numpy.zeros( __iSplineLength )
         for __i in __lSplineRange:
             if __fAlt < 100.0 and \
               abs( __aVSpd[__i] ) < 1.0 and \
               ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                 __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
-                __aW[__i] = 1.0
+                __aW3DCorr[__i] = 1.0
             if abs( __aVSpd[__i] ) >= 2.5 or \
-              ( __aAtt[__i] != 1 and __aHSpd[__i] > 1.1*self.oArguments.stall_speed_landing ) or \
-              __aHSpd[__i] > 1.1*self.oArguments.stall_speed_takeoff:
-                __aW[__i] = 1.0
-        __tTCK = interpolate.splrep( __aEpoch, __aAltCorr, k=3, w=__aW, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
+              ( __aAtt[__i] != 1 and __aHSpd[__i] > 1.2*self.oArguments.stall_speed_landing ) or \
+              __aHSpd[__i] > 1.2*self.oArguments.stall_speed_takeoff:
+                __aW3DCorr[__i] = 1.0
+        __tTCK = interpolate.splrep( __aEpoch, __aAltCorr, k=3, w=__aW3DCorr, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
         __aAltCorr = interpolate.splev( __aEpoch, __tTCK, der=0 )
         for __i in __lSplineRange:
             __aAlt[__i] -= __aAltCorr[__i]
-        __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
+        __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW3D, s=__iSplineLength*(__fSmoothingFactor3D*__fError3D)**2 )
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
         # Detect "airborne" status
