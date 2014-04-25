@@ -714,6 +714,7 @@ class CGps2Logbook:
             plot.plot( __aEpoch, 20.0*__aAtt, color='y', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne*self.oArguments.stall_speed_takeoff, color='k', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne_clean*self.oArguments.stall_speed_landing, color='k' )
+            plot.title( "%s: %s - %s" % ( _sIdent, time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[0] ) ), time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__iSplineLength-1] ) ) ) )
             plot.legend( [ 'Dist. (GPS)', 'Dist.', 'Alt. (GPS)', 'Alt.', 'Alt. (corr.)', 'H.Spd', 'V.Spd', 'Attitude', 'Airborne (RAW)', 'Airborne' ], loc='best' )
             plot.show()
 
