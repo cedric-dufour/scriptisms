@@ -427,6 +427,8 @@ class CGps2Logbook:
                               ( _oGpsData.lEpoch[__iDataLength-1]-_oGpsData.lEpoch[0], __iDataLength ) )
 
         # Interpolate data
+        # NOTE: Objective is to obtain time-consistent data, matching the target time resolution
+        #       No smoothing is applied yet (s=0)
         __aEpoch = numpy.arange( _oGpsData.lEpoch[0], _oGpsData.lEpoch[__iDataLength-1]+self.oArguments.time_resolution, self.oArguments.time_resolution )
         __iSplineLength = len( __aEpoch )
         __lSplineRange = range( __iSplineLength )
@@ -453,6 +455,10 @@ class CGps2Logbook:
         __aEleErr = interpolate.splev( __aEpoch, __tTCK, der=0 )
 
         # Compute altitude AGL and vertical speed
+        # NOTE: This is a 1st pass; we shall compute an "altitude error profile" in a 2nd-pass
+        #       Smoothing is applied, with a smoothing factor (s=...) adapted such as to match
+        #       the target maximum acceleration constraint (iow. remain precise enough but get
+        #       rid of transients/instabilities artefacts)
         __aAlt = numpy.zeros( __iSplineLength )
         for __i in __lSplineRange:
             __aAlt[__i] = __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
@@ -487,6 +493,9 @@ class CGps2Logbook:
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
         # Compute distance, bearing and horizontal speed
+        # NOTE: Smoothing is applied, with a smoothing factor (s=...) adapted such as to match
+        #       the target maximum acceleration constraint (iow. remain precise enough but get
+        #       rid of transients/instabilities artefacts)
         __aDist = numpy.zeros( __iSplineLength )
         __aBrng = numpy.zeros( __iSplineLength )
         for __i in __lSplineRange[1:]:
@@ -533,6 +542,10 @@ class CGps2Logbook:
             __aHSpd[__i] += self.oArguments.wind_speed * math.cos( ( __aBrng[__i] - self.oArguments.wind_direction ) * DEG_2_RAD )
 
         # Check distance and altitude span
+        # NOTE: This allows to get rid of aircrafts:
+        #        1. moving on the ground
+        #        2. making low-altitude passes
+        #       in the vicinity of the runway
         __fDistMin = 9999999.0
         __fDistMax = -9999999.0
         __fAltMin = 9999999.0
@@ -552,6 +565,7 @@ class CGps2Logbook:
             return
 
         # Attitude (climb/descent)
+        # NOTE: This will be used to determine whether landing or take-off stall speed must be used
         __fHSpdMin = 9999999.0
         for __i in __lSplineRange:
             if __aHSpd[__i] < __fHSpdMin: __fHSpdMin = __aHSpd[__i]
@@ -565,6 +579,18 @@ class CGps2Logbook:
             __aAtt[__i] = __iAtt
 
         # Compute altitude correction
+        # NOTE: GPS elevation data precision s***! We must thus correct:
+        #        1. referential offset (e.g. WGS-84 vs AMSL elevation)
+        #        2. data imprecisions
+        #       We do this by:
+        #        1. assuming we're *on* ground (AGL=0) when speed is 10% (error margin) below stall speed
+        #        2. computing the mean altitude correction when 1. is satisfied
+        #        3. using 2. when 1. is *not* satisfied
+        #        4. spline-smoothing the results with weight factors that are:
+        #            a. W=1 when 1. is satisfied
+        #            b. W=1 when speed is 20% above stall speed
+        #            c. W=0 in-between
+        #       Then apply the correction and re-compute the vertical speed (that is the 2nd-pass mentioned above)
         __aAltCorr = numpy.zeros( __iSplineLength )
         __fAltCorr = 0.0
         __iAltCorr = 0
@@ -616,9 +642,13 @@ class CGps2Logbook:
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
         # Detect "airborne" status
+        # NOTE: This is the tricky part (given the imprecisions/errors on the altitude)
         __aAirborne = numpy.zeros( __iSplineLength, numpy.uint8 )
         for __i in __lSplineRange:
             # IF:
+            # 1. we're definitely airborne
+            # 2-3. we're not below stall speed
+            # 4. altitude or (absolute) vertical speed are above threshold
             if __aAlt[__i] > 10.0 or \
               ( not ( ( __aAtt[__i] == 1 and __aHSpd[__i] < self.oArguments.stall_speed_takeoff ) or \
                       __aHSpd[__i] < self.oArguments.stall_speed_landing ) and \
@@ -630,14 +660,14 @@ class CGps2Logbook:
         __aAirborne_clean = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_OPEN, self.aNoiseFilterKernel )
 
         # Filter-out touch-'n-go data
-        # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
+        # NOTE: Data analysis window length MUST be above kernel length prevent morphological filtering artifacts
         if __iSplineLength > self.iTouchgoFilterLength:
             __aAirborne_touchgo = cv2.morphologyEx( __aAirborne_clean, cv2.MORPH_CLOSE, self.aTouchgoFilterKernel )
         else:
             __aAirborne_touchgo = __aAirborne_clean
 
         # Output detected events
-        # NOTE: touch-'n-go can not occur at the beginning/end of the analysis window
+        # NOTE: Touch-'n-go can not occur at the beginning/end of the analysis window
         for __i in range( 1, __iSplineLength ):
             if __aAirborne_clean[__i] != __aAirborne_clean[__i-1]:
                 sys.stdout.write( "%s" % _sIdent )
@@ -674,7 +704,7 @@ class CGps2Logbook:
                     sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __fThrDist * abs( math.sin( ( __fThrAzim - self.fRwyHeading ) * DEG_2_RAD ) ) ) )
                 sys.stdout.write( "\n" )
 
-        # DEBUG: plot interpolated data graphs
+        # DEBUG: plot interpolated data graphs (I love looking at those! :-) )
         if self.oArguments.debug:
             # ... compute GPS data
             __aDistGPS = numpy.zeros( __iDataLength )
@@ -727,7 +757,7 @@ class CGps2Logbook:
                    self.oArguments.runway_threshold_longitude_2 )
 
         # Morphological filtering kernels
-        # NOTE: kernel length MUST be odd to prevent morphological filtering artifacts
+        # NOTE: Kernel length MUST be odd to prevent morphological filtering artifacts
         # ... noise filter
         self.iNoiseFilterLength = int( self.oArguments.noise_filter / self.oArguments.time_resolution )
         __iKLength = self.iNoiseFilterLength
@@ -741,9 +771,9 @@ class CGps2Logbook:
 
         # Parse the DSV file
         # FORMAT: Ident,DateTime,Latitude[deg],Longitude[deg],Elevation[m],LatitudeError[m],LongitudeError[m],ElevationError[m]
-        # NOTE: we don't use GPS-provide course data, since GPS do not get those "natively",
-        #       but rather derive them from position data (the same way as we do here, first crudely,
-        #       then elaborately using splines first derivative)
+        # NOTE: We don't use GPS-provide course data, since GPS do not get those "natively",
+        #       but rather derive them from position data (the same way as we'll do here, elaborately,
+        #       using splines first and second derivatives
         __oTimeEpochStart = parser.parse( '1970-01-01T00:00:00Z' )
         __fRefEle = ( self.oArguments.runway_threshold_elevation_1 + self.oArguments.runway_threshold_elevation_2 ) / 2.0
         __fRefDist = self.fRwyLength / 2.0
@@ -834,6 +864,9 @@ class CGps2Logbook:
                 __oGpsData.iTrigCount = 5
 
             # Store data
+            # NOTE: No actual processing/detection takes place here
+            #       We merely store "worthy" data and wait until enough of those have
+            #       been accumulated to launch the actual processing/detection algorithm
             # IF:
             # 1. worthy data trigger has been activated
             # 2. time gap is below analysis window length
@@ -870,11 +903,11 @@ class CGps2Logbook:
                 __oGpsData.reset()
 
         # Process (end of file)
-        # IF:
-        # 1. data (from the same analysis window) haven't already been processed
-        # 2+3. enough data are available AND
         for __sIdent in __dGpsData.keys():
             __oGpsData = __dGpsData[__sIdent]
+            # IF:
+            # 1. data (from the same analysis window) haven't already been processed
+            # 2+3. enough data are available AND
             if not __oGpsData.bDataProcessed and \
               __oGpsData.iDataLength >= 10 and \
               __oGpsData.lEpoch[__oGpsData.iDataLength-1] - __oGpsData.lEpoch[0] >= self.oArguments.noise_filter:
