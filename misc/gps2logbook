@@ -409,25 +409,6 @@ class CGps2Logbook:
           math.cos( ( self.fRwyHeading - __fThrAzim ) * DEG_2_RAD ) * __fThrDist / self.fRwyLength
 
 
-    def __attitude( self, _aAlt, _iAttWdwLength ):
-        # Estimate attitude (climb/descent)
-        __iDataLength = len( _aAlt )
-        __aAtt = numpy.zeros( __iDataLength, numpy.int8 )
-        for __i in range( _iAttWdwLength+1, __iDataLength-_iAttWdwLength-1 ):
-            __fAltB = 0.0
-            __fAltA = 0.0
-            for __j in range( 1, _iAttWdwLength+1 ):
-                __fAltB += _aAlt[__i-__j]
-                __fAltA += _aAlt[__i+__j]
-            __fAltB /= _iAttWdwLength
-            __fAltA /= _iAttWdwLength
-            if __fAltA - __fAltB > 0.1:
-                __aAtt[__i] = 1
-            elif __fAltA - __fAltB < -0.1:
-                __aAtt[__i] = -1
-        return __aAtt
-
-
     def __process( self, _sIdent, _oGpsData ):
         """
         Process the data window and output touchdown/airbone data.
