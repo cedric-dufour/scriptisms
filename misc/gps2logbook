@@ -597,8 +597,8 @@ class CGps2Logbook:
         for __i in __lSplineRange:
             __fAlt = __aAlt[__i]
             if __fAlt < 100.0 and \
-              abs( __aVSpd[__i] ) < 1.0 and \
-              ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+              ( ( abs( __aVSpd[__i] ) < 1.0 and __aHSpd[__i] < 10.0 ) or \
+                (__aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                 __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aAltCorr[__i] = __fAlt
                 __fAltCorr += __fAlt
@@ -618,27 +618,28 @@ class CGps2Logbook:
             return
         for __i in __lSplineRange:
             if __fAlt >= 100.0 or \
-              abs( __aVSpd[__i] ) >= 1.0 or \
-              not ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+              not ( ( abs( __aVSpd[__i] ) >= 1.0 and __aHSpd[__i] < 10.0 )  or \
+                    ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                     __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aAltCorr[__i] = __fAltCorr
         # ... smoothing and derivation (speed)
         __aW3DCorr = numpy.zeros( __iSplineLength )
         for __i in __lSplineRange:
             if __fAlt < 100.0 and \
-              abs( __aVSpd[__i] ) < 1.0 and \
-              ( ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
+              ( ( abs( __aVSpd[__i] ) < 1.0 and __aHSpd[__i] < 10.0 ) or \
+                ( __aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                 __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aW3DCorr[__i] = 1.0
             if abs( __aVSpd[__i] ) >= 2.5 or \
               ( __aAtt[__i] != 1 and __aHSpd[__i] > 1.2*self.oArguments.stall_speed_landing ) or \
               __aHSpd[__i] > 1.2*self.oArguments.stall_speed_takeoff:
                 __aW3DCorr[__i] = 1.0
-        __tTCK = interpolate.splrep( __aEpoch, __aAltCorr, k=3, w=__aW3DCorr, s=__iSplineLength*(0.1*__fSmoothingFactor3D*__fError3D)**2 )
+        __tTCK = interpolate.splrep( __aEpoch, __aAltCorr, k=3, w=__aW3DCorr, s=__iSplineLength*(__fSmoothingFactor3D*__fError3D)**2 )
         __aAltCorr = interpolate.splev( __aEpoch, __tTCK, der=0 )
         for __i in __lSplineRange:
             __aAlt[__i] -= __aAltCorr[__i]
-        __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW3D, s=__iSplineLength*(__fSmoothingFactor3D*__fError3D)**2 )
+        # ... NOTE: altitude and correction already have been smoothed; we shall not smooth any further (s=0)
+        __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW3D, s=0 )
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
         # Detect "airborne" status
