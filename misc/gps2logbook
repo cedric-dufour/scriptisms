@@ -312,11 +312,17 @@ class CGps2Logbook:
                                            metavar='<seconds>',
                                            help='Time resolution, in seconds [s]' )
 
-        # ... maximum acceleration
-        self.oArgumentParser.add_argument( '--max_acceleration', type=float,
+        # ... maximum horizontal acceleration
+        self.oArgumentParser.add_argument( '--max_horz_acceleration', type=float,
+                                           default=5.0,
+                                           metavar='<acceleration>',
+                                           help='Maximum horizontal acceleration, in meters per square second [m/s^2]' )
+
+        # ... maximum vertical acceleration
+        self.oArgumentParser.add_argument( '--max_vert_acceleration', type=float,
                                            default=2.5,
                                            metavar='<acceleration>',
-                                           help='Maximum horizontal/vertical acceleration, in meters per square second [m/s^2]' )
+                                           help='Maximum vertical acceleration, in meters per square second [m/s^2]' )
 
         # ... debug
         self.oArgumentParser.add_argument( '--debug', action='store_true',
@@ -383,8 +389,11 @@ class CGps2Logbook:
         if self.oArguments.time_resolution < 0.1 or self.oArguments.time_resolution > 1.0:
             sys.stderr.write( 'ERROR: Missing or invalid time resolution (time_resolution)\n' )
             return 1
-        if self.oArguments.max_acceleration < 0.1 or self.oArguments.max_acceleration > 100.0:
-            sys.stderr.write( 'ERROR: Missing or invalid maximum acceleration (max_acceleration)\n' )
+        if self.oArguments.max_horz_acceleration < 0.1 or self.oArguments.max_horz_acceleration > 100.0:
+            sys.stderr.write( 'ERROR: Missing or invalid maximum acceleration (max_horz_acceleration)\n' )
+            return 1
+        if self.oArguments.max_vert_acceleration < 0.1 or self.oArguments.max_vert_acceleration > 100.0:
+            sys.stderr.write( 'ERROR: Missing or invalid maximum acceleration (max_vert_acceleration)\n' )
             return 1
         return 0
 
@@ -463,7 +472,7 @@ class CGps2Logbook:
         for __i in __lSplineRange:
             __aAlt[__i] = __aEle[__i] - self.__rwyele( __aLat[__i], __aLon[__i] )
         # ... smoothing and derivation (speed)
-        __aW3D = numpy.ones( __iSplineLength )
+        __aW3D = numpy.zeros( __iSplineLength )
         __fW3DTot = 0.0
         for __i in __lSplineRange:
             __aW3D[__i] = ( 150.0 - abs( __aEleErr[__i] ) ) / 150.0
@@ -485,7 +494,7 @@ class CGps2Logbook:
             for __i in __lSplineRange:
                 __fVAcc = abs( __aVAcc[__i] )
                 if __fVAcc > __fVAccMax: __fVAccMax = __fVAcc
-            if __fVAccMax <= self.oArguments.max_acceleration:
+            if __fVAccMax <= self.oArguments.max_vert_acceleration:
                 break
         if self.oArguments.debug:
             sys.stderr.write( "DEBUG[__process]: 3D smoothing factor = %f\n" % __fSmoothingFactor3D )
@@ -504,7 +513,7 @@ class CGps2Logbook:
             __aBrng[__i] = __fBrng
         __aBrng[0] = __aBrng[1]
         # ... smoothing and derivation (speed)
-        __aW2D = numpy.ones( __iSplineLength )
+        __aW2D = numpy.zeros( __iSplineLength )
         __fW2DTot = 0.0
         for __i in __lSplineRange:
             __fWLat = ( 100.0 - abs( __aLatErr[__i] ) ) / 100.0
@@ -529,7 +538,7 @@ class CGps2Logbook:
             for __i in __lSplineRange:
                 __fHAcc = abs( __aHAcc[__i] )
                 if __fHAcc > __fHAccMax: __fHAccMax = __fHAcc
-            if __fHAccMax <= self.oArguments.max_acceleration:
+            if __fHAccMax <= self.oArguments.max_horz_acceleration:
                 break
         if self.oArguments.debug:
             sys.stderr.write( "DEBUG[__process]: 2D smoothing factor = %f\n" % __fSmoothingFactor2D )
