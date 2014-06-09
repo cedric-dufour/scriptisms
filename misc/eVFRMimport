@@ -979,7 +979,7 @@ END_OF_BASE64_ENCODED_DATA
         sed -i "s|%VERSION%|${version}|g" AndroidManifest.xml
         mkdir build
         ${APK_SDK}/platform-tools/aapt package -f -I ${APK_SDK}/platforms/android-16/android.jar -M AndroidManifest.xml -m -J build -F eVFRManual.resources.apk -S res -A "${DST_DIR}" || continue
-        javac -bootclasspath ${APK_SDK}/platforms/android-16/android.jar -sourcepath src -sourcepath build -d build src/ch/skyguide/eVFRManual/eVFRManualActivity.java || continue
+        javac -source 1.6 -target 1.6 -bootclasspath ${APK_SDK}/platforms/android-16/android.jar -sourcepath src -sourcepath build -d build src/ch/skyguide/eVFRManual/eVFRManualActivity.java || continue
         ${APK_SDK}/platform-tools/dx --dex --output=eVFRManual.dex build || continue
         ${APK_SDK}/tools/apkbuilder eVFRManual.unsigned.apk -u -z eVFRManual.resources.apk -f eVFRManual.dex || continue
         if [ -n "${APK_KEYSTORE}" ]; then
