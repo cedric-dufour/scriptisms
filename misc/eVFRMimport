@@ -983,7 +983,7 @@ END_OF_BASE64_ENCODED_DATA
         ${APK_SDK}/platform-tools/dx --dex --output=eVFRManual.dex build || continue
         ${APK_SDK}/tools/apkbuilder eVFRManual.unsigned.apk -u -z eVFRManual.resources.apk -f eVFRManual.dex || continue
         if [ -n "${APK_KEYSTORE}" ]; then
-          jarsigner  -keystore "${APK_KEYSTORE}" -signedjar eVFRManual.unaligned.apk eVFRManual.unsigned.apk "${APK_KEYALIAS}" || continue
+          jarsigner -sigalg SHA1withRSA -digestalg SHA1 -keystore "${APK_KEYSTORE}" -signedjar eVFRManual.unaligned.apk eVFRManual.unsigned.apk "${APK_KEYALIAS}" || continue
         else
           echo "WARNING[$$]: Keystore not specified; using Android debug key" >&2
           keytool -genkey -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -dname 'CN=Android Debug,O=Android,C=US' || continue
