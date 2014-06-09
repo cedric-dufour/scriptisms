@@ -27,6 +27,7 @@ import matplotlib.pyplot as plot
 import numpy
 from scipy import interpolate
 import time
+import textwrap
 import sys
 
 
@@ -207,7 +208,16 @@ class CGps2Logbook:
         """
 
         # Create argument parser
-        self.oArgumentParser = argparse.ArgumentParser( 'GPS to Logbook data converter' )
+        self.oArgumentParser = argparse.ArgumentParser( prog=sys.argv[0].split('/')[-1],
+            formatter_class = argparse.RawDescriptionHelpFormatter,
+            description = 'GPS to Logbook data converter',
+            epilog = textwrap.dedent( '''\
+                Input file (DSV) fields:
+
+                  Id,Time,Lat[deg],Lon[deg],Ele[m],LatErr[m],LonErr[m],EleErr[m]
+                  [or]
+                  Id,Time,Lat[deg],Lon[deg],Ele[m]
+                ''' ) )
 
         # ... input file
         # self.oArgumentParser.add_argument( 'gps_data_file', type=str,
@@ -260,68 +270,68 @@ class CGps2Logbook:
         # ... stall speed (landing)
         self.oArgumentParser.add_argument( '-Vs0', '--stall_speed_landing', type=float,
                                            default=15.0,
-                                           metavar='<speed>',
+                                           metavar='<speed:15.0>',
                                            help='Aircraft stall speed (landing, Vs0), in meters per second [m/s]' )
 
 
         # ... stall speed (take-off)
         self.oArgumentParser.add_argument( '-Vs1', '--stall_speed_takeoff', type=float,
                                            default=25.0,
-                                           metavar='<speed>',
+                                           metavar='<speed:25.0>',
                                            help='Aircraft stall speed (take-off, Vs1), in meters per second [m/s]' )
 
         # ... wind speed
         self.oArgumentParser.add_argument( '-Ws', '--wind_speed', type=float,
                                            default=0,
-                                           metavar='<speed>',
+                                           metavar='<speed:0>',
                                            help='Wind speed, in meters per second [m/s]' )
 
         # ... wind direction
         self.oArgumentParser.add_argument( '-Wd', '--wind_direction', type=float,
                                            default=0,
-                                           metavar='<angle>',
+                                           metavar='<angle:0>',
                                            help='Wind direction, in degrees [deg]' )
 
         # ... analysis windows length
         self.oArgumentParser.add_argument( '-La', '--analysis_length', type=float,
                                            default=300.0,
-                                           metavar='<seconds>',
+                                           metavar='<seconds:300.0>',
                                            help='Analysis window length, in seconds [s]' )
 
         # ... noise filter length
         self.oArgumentParser.add_argument( '-Ln', '--noise_filter', type=float,
                                            default=5.0,
-                                           metavar='<seconds>',
+                                           metavar='<seconds:5.0>',
                                            help='Noise filter length, in seconds [s]' )
 
         # ... touch-n-go filter length
         self.oArgumentParser.add_argument( '-Ltg', '--touchgo_filter', type=float,
-                                           default=30.0,
-                                           metavar='<seconds>',
+                                           default=60.0,
+                                           metavar='<seconds:30.0>',
                                            help='Touch-\'n-Go filter length, in seconds [s]' )
 
         # ... delimiter
         self.oArgumentParser.add_argument( '-d', '--delimiter', type=str,
                                            default=',',
-                                           metavar='<character>',
+                                           metavar='<character:\',\'>',
                                            help='GPS data (DSV) file delimiter' )
 
         # ... time resolution
         self.oArgumentParser.add_argument( '--time_resolution', type=float,
                                            default=0.1,
-                                           metavar='<seconds>',
+                                           metavar='<seconds:0.1>',
                                            help='Time resolution, in seconds [s]' )
 
         # ... maximum horizontal acceleration
         self.oArgumentParser.add_argument( '--max_horz_acceleration', type=float,
                                            default=5.0,
-                                           metavar='<acceleration>',
+                                           metavar='<acceleration:5.0>',
                                            help='Maximum horizontal acceleration, in meters per square second [m/s^2]' )
 
         # ... maximum vertical acceleration
         self.oArgumentParser.add_argument( '--max_vert_acceleration', type=float,
                                            default=2.5,
-                                           metavar='<acceleration>',
+                                           metavar='<acceleration:2.5>',
                                            help='Maximum vertical acceleration, in meters per square second [m/s^2]' )
 
         # ... debug
@@ -579,11 +589,14 @@ class CGps2Logbook:
         for __i in __lSplineRange:
             if __aHSpd[__i] < __fHSpdMin: __fHSpdMin = __aHSpd[__i]
         __aAtt = numpy.ones( __iSplineLength, numpy.int8 )
+        # ... start by "descent"
         __iAtt = -1
         for __i in __lSplineRange:
             if __aHSpd[__i] - __fHSpdMin < 1.0:
+                # ... horizontal speed has reached minimum; switch to "ground roll"
                 __iAtt = 0
             elif __iAtt == 0:
+                # ... after "ground roll", switch to "climb"
                 __iAtt = 1
             __aAtt[__i] = __iAtt
 
@@ -606,7 +619,7 @@ class CGps2Logbook:
         for __i in __lSplineRange:
             __fAlt = __aAlt[__i]
             if __fAlt < 100.0 and \
-              ( ( abs( __aVSpd[__i] ) < 1.0 and __aHSpd[__i] < 10.0 ) or \
+              ( ( abs( __aVSpd[__i] ) < 1.0 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ) or \
                 (__aAtt[__i] == 1 and __aHSpd[__i] < 0.9*self.oArguments.stall_speed_takeoff ) or \
                 __aHSpd[__i] < 0.9*self.oArguments.stall_speed_landing ):
                 __aAltCorr[__i] = __fAlt
@@ -651,6 +664,12 @@ class CGps2Logbook:
         __tTCK = interpolate.splrep( __aEpoch, __aAlt, k=3, w=__aW3D, s=0 )
         __aVSpd = interpolate.splev( __aEpoch, __tTCK, der=1 )
 
+        # Compute "Air Speed" (more or less)
+        __aASpd = numpy.zeros( __iSplineLength )
+        for __i in __lSplineRange:
+            __aASpd[__i] = math.sqrt( __aHSpd[__i]**2 + __aVSpd[__i]**2 )
+
+
         # Detect "airborne" status
         # NOTE: This is the tricky part (given the imprecisions/errors on the altitude)
         __aAirborne = numpy.zeros( __iSplineLength, numpy.uint8 )
@@ -660,8 +679,8 @@ class CGps2Logbook:
             # 2-3. we're not below stall speed
             # 4. altitude or (absolute) vertical speed are above threshold
             if __aAlt[__i] > 10.0 or \
-              ( not ( ( __aAtt[__i] == 1 and __aHSpd[__i] < self.oArguments.stall_speed_takeoff ) or \
-                      __aHSpd[__i] < self.oArguments.stall_speed_landing ) and \
+              ( not ( ( __aAtt[__i] == 1 and __aASpd[__i] < self.oArguments.stall_speed_takeoff ) or \
+                      __aASpd[__i] < self.oArguments.stall_speed_landing ) and \
                 ( __aAlt[__i] > 1.0 or abs( __aVSpd[__i] ) > 1.0 ) ):
                 __aAirborne[__i] = 1
 
@@ -688,7 +707,7 @@ class CGps2Logbook:
                 sys.stdout.write( "%s%.6f" % ( self.oArguments.delimiter, __aLon[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, self.__rwyele( __aLat[__i], __aLon[__i] ) ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aBrng[__i] ) )
-                sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aHSpd[__i] ) )
+                sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aASpd[__i] ) )
                 sys.stdout.write( "%s%.1f" % ( self.oArguments.delimiter, __aVSpd[__i] ) )
                 if __aAirborne_clean[__i]:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'AIRBORNE' ) )
@@ -698,7 +717,7 @@ class CGps2Logbook:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TAKEOFF' ) )
                 else:
                     sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHDOWN' ) )
-                    if __i < self.iTouchgoFilterLength/2 and __aAirborne_touchgo[__i+1]:
+                    if __i < __iSplineLength - self.iTouchgoFilterLength/2 and __aAirborne_touchgo[__i+1]:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'TOUCHGO' ) )
                     else:
                         sys.stdout.write( "%s%s" % ( self.oArguments.delimiter, 'LANDING' ) )
@@ -728,7 +747,7 @@ class CGps2Logbook:
             plot.plot( _oGpsData.lEpoch, __aAltGPS, color='g', linestyle='None', marker='o' )
             plot.plot( __aEpoch, __aAlt, color='r' )
             plot.plot( __aEpoch, __aAltCorr, color='r', linestyle=':' )
-            plot.plot( __aEpoch, __aHSpd, color='m' )
+            plot.plot( __aEpoch, __aASpd, color='m' )
             #plot.plot( __aEpoch, __aHAcc, color='m', linestyle=':' )
             plot.plot( __aEpoch, __aVSpd, color='c' )
             #plot.plot( __aEpoch, __aVAcc, color='c', linestyle=':' )
@@ -736,7 +755,7 @@ class CGps2Logbook:
             plot.plot( __aEpoch, __aAirborne*self.oArguments.stall_speed_takeoff, color='k', linestyle=':' )
             plot.plot( __aEpoch, __aAirborne_clean*self.oArguments.stall_speed_landing, color='k' )
             plot.title( "%s: %s - %s" % ( _sIdent, time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[0] ) ), time.strftime( '%Y-%m-%dT%H:%M:%S', time.gmtime( __aEpoch[__iSplineLength-1] ) ) ) )
-            plot.legend( [ 'Dist. (GPS)', 'Dist.', 'Alt. (GPS)', 'Alt.', 'Alt. (corr.)', 'H.Spd', 'V.Spd', 'Attitude', 'Airborne (RAW)', 'Airborne' ], loc='best' )
+            plot.legend( [ 'Dist. (GPS)', 'Dist.', 'Alt. (GPS)', 'Alt.', 'Alt. (corr.)', 'A.Spd', 'V.Spd', 'Attitude', 'Airborne (RAW)', 'Airborne' ], loc='best' )
             plot.show()
 
 
