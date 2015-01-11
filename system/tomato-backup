@@ -1,0 +1,99 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [options] <device>
+
+SYNOPSIS:
+  Perform the backup of the configuration of devices running Tomato firmware
+  (http://en.wikipedia.org/wiki/Tomato_%28firmware%29).
+
+OPTIONS:
+  -W, --web <wgetrc>
+    Performs the (standard) backup via the device web GUI.
+    The '<device>' must then be specified as an URL.
+    The mandatory 'wget' configuration must include the device access
+    credentials ('http-user' and 'http-password').
+
+  -S, --ssh
+    Performs the (nvram) backup via the device SSH CLI.
+    The '<device>' must then be specified as an IP address or hostname.
+    SSH password will be prompted via stderr/stdin.
+
+  -o, --output <path>
+    Path where to save the backup output (default:stdout).
+
+  --gpg-decrypt
+    Decrypt the specified 'wgetrc' configuration file using GnuPG.
+    Decryption password will be prompted via stderr/stdin.
+EOF
+
+# Arguments
+DEVICE=
+BACKUP_WEB=
+BACKUP_SSH=
+PATH_WGETRC=
+PATH_OUTPUT='-'
+GPG_DECRYPT=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    -W|--web)
+      BACKUP_WEB='yes'
+      BACKUP_SSH=
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing/empty 'wget' configuration path" >&2 && exit 1
+      PATH_WGETRC="${1}"
+      ;;
+    -S|--ssh)
+      BACKUP_SSH='yes'
+      BACKUP_WEB=
+      ;;
+    -o|--output)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing/empty output path" >&2 && exit 1
+      PATH_OUTPUT="${1}"
+      ;;
+    --gpg-decrypt)
+      GPG_DECRYPT='yes'
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+    *)
+      [ -n "${DEVICE}" ] && echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      DEVICE="${1}"
+      ;;
+  esac
+  shift
+done
+
+
+## Backup
+
+# SSH (nvram) backup
+if [ -n "${BACKUP_SSH}" ]; then
+  [ "${PATH_OUTPUT}" != '-' ] && exec 3>&1 1>"${PATH_OUTPUT}"
+  ssh -t -l root ${DEVICE} 'nvram export --set' | grep '^nvram set'
+  [ "${PATH_OUTPUT}" != '-' ] && exec 1>&3
+fi
+
+# Web (standard) backup
+if [ -n "${BACKUP_WEB}" ]; then
+  [ ! -r "${PATH_WGETRC}" ] && echo "ERROR: Invalid/unreadable 'wget' configuration (${PATH_WGETRC})" >&2 && exit 1
+  if [ -e ~/.wgetrc ]; then
+    mv ~/.wgetrc ~/.wgetrc.$$.bak || exit 1
+  fi
+  trap "rm -f ~/.wgetrc; [ -e ~/.wgetrc.$$.bak ] && mv ~/.wgetrc.$$.bak ~/.wgetrc" EXIT
+  touch ~/.wgetrc || exit 1
+  chmod go= ~/.wgetrc || exit 1
+  if [ -n "${GPG_DECRYPT}" ]; then
+    gpg --decrypt "${PATH_WGETRC}" > ~/.wgetrc || exit 1
+  else
+    cat "${PATH_WGETRC}" > ~/.wgetrc || exit 1
+  fi
+  HTTP_ID="$(wget --quiet --no-http-keep-alive -O- "${DEVICE##/}/admin-config.asp" | grep "'http_id': *'TID[^']*'" | sed "s|^.*'TID|TID|;s|'.*\$||")"
+  [ "${HTTP_ID:0:3}" != 'TID' ] && echo "ERROR: Failed to retrieve device HTTP ID" && exit 1
+  wget --quiet --no-http-keep-alive -O"${PATH_OUTPUT}" "${DEVICE##/}/cfg/tomato.cfg?_http_id=${HTTP_ID}"
+fi
+

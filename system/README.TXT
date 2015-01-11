@@ -56,3 +56,8 @@ tar-backup
 Backup (tar) given directories according to the parameters specified in the
 configuration file(s).
 
+tomato-backup
+-------------
+Backup configuration - NVRAM or standard (web) - of devices running Tomato
+firmware.
+
