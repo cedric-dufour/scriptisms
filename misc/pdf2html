@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Command-line
+
+## Usage
 [ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
 USAGE: ${0##*/} [<option> ...] <source-pdf> <destination-dir>
 
@@ -8,32 +9,42 @@ SYNOPSIS:
   Convert the given PDF file to HTML and PNG images for easier/faster browsing.
 
 OPTIONS:
-  -d, --output-dpi     Output PNG images resolution (DPI) [default:150]
+  -d, --output-dpi <int>
+    Output PNG images resolution (DPI) [default:150]
 
-  -s, --size           Output PNG images maximum width/height (pixels) [default:none]
-  -sx, --size-x        Output PNG images maximum width (pixels) [default:none]
-  -sy, --size-y        Output PNG images maximum height (pixels) [default:none]
+  -s, --size <int>
+  -sx, --size-x <int>
+  -sy, --size-y <int>
+    Output PNG images maximum width/height (pixels) [default:none]
 
-  -p, --include-pdf    Include original PDF file along the HTML/PNG output
+  -p, --include-pdf
+    Include original PDF file along the HTML/PNG output
 
-  -cs, --charset       Filesystem character encoding [default:UTF-8]
+  -co, --color {8bit-opt|8bit|rgb}
+    Color encoding [default:8bit-opt]
 
-  -nf, --no-frameset   Do not use FRAMESET in generated HTML
+  -cs, --charset <string>
+    Filesystem character encoding [default:UTF-8]
+
+  -nf, --no-frameset
+    Do not use FRAMESET in generated HTML
 
   -h, --html-template  HTML template used to replace the PDF file
-      Any included '%FILE%', '%ID%' and '%PAGES%' anchors will be replaced with
-      the approriate corresponding values.
-      If not specified, the built-in template will be used.
+    Any included '%FILE%', '%ID%' and '%PAGES%' anchors will be replaced with
+    the approriate corresponding values.
+    If not specified, the built-in template will be used.
 
 AUTHOR:
   Cedric Dufour - http://cedric.dufour.name
 EOF
 
-# Arguments
+
+## Arguments
 IMG_DPI=150
 IMG_X=
 IMG_Y=
 PDF_INCL=
+COLOR='8bit-opt'
 CHARSET='UTF-8'
 HTML_NOFRM=
 HTML_TMPL=
@@ -51,6 +62,8 @@ while [ -n "${1}" ]; do
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-sx)' >&2 && exit 1; IMG_Y="${1}";;
     '-p'|'--include-pdf')
       PDF_INCL='yes';;
+    '-co'|'--color')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-co)' >&2 && exit 1; COLOR="${1}";;
     '-cs'|'--charset')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-cs)' >&2 && exit 1; CHARSET="${1}";;
     '-nf'|'--no-frameset')
@@ -67,17 +80,22 @@ while [ -n "${1}" ]; do
   shift
 done
 
-# Check dependencies
-[ -z "$(which convert)" ] && echo "ERROR[$$]: 'convert' cannot be found (ImageMagick)" >&2 && exit 1
 
-# Check directories and files
+## Checks
+
+# Dependencies
+[ -z "$(which pdftoppm)" ] && echo "ERROR[$$]: 'pdftoppm' cannot be found (poppler-utils)" >&2 && exit 1
+[ -z "$(which convert)" ] && echo "ERROR[$$]: 'convert' cannot be found (imagemagick)" >&2 && exit 1
+
+# Directories and files
 DST_DIR="${DST_DIR%%/}"
 [ ! -r "${SRC_PDF}" ] && echo "ERROR[$$]: Unable to read source PDF file (${SRC_PDF})" >&2 && exit 1
 [ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
 [ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
 [ -n "${HTML_TMPL}" ] && [ ! -r "${HTML_TMPL}" ] && echo "ERROR[$$]: Unable to read HTML template file (${HTML_TMPL})" >&2 && exit 1
 
-# Convert
+
+## Convert
 f_dst="${SRC_PDF##*/}"
 p_dst="${DST_DIR}/${f_dst}"
 f_dst_prefix="${f_dst%.*}"
@@ -100,10 +118,15 @@ if [ -n "${IMG_X}" -o -n "${IMG_Y}" ]; then
     resize="-filter blackman -resize 999999x${IMG_Y}>"
   fi
 fi
-pdftoppm -r ${IMG_DPI} -tiff -tiffcompression deflate "${SRC_PDF}" "${p_dst_prefix}/img" 2>/dev/null
+pdftoppm -r ${IMG_DPI} -cropbox -thinlinemode shape -tiff -tiffcompression deflate "${SRC_PDF}" "${p_dst_prefix}/img" 2>/dev/null
 for src_img in "${p_dst_prefix}/img"*.tif; do
   dst_img="$(echo "${src_img}" | sed 's/img-0*\([1-9][0-9]*\)\.tif/img-\1.png/')"
-  convert "${src_img}" -trim -fuzz 10% ${resize} -define png:color-type=3 -define png:bit-depth=8 -type palette -quality 90 "${dst_img}"
+  case "${COLOR}" in
+    8bit-opt) convert "${src_img}" -trim -fuzz 10% ${resize} -type optimize -quality 90 png8:"${dst_img}";;
+    8bit) convert "${src_img}" -trim -fuzz 10% ${resize} -type palette -quality 90 png8:"${dst_img}";;
+    rgb) convert "${src_img}" -trim -fuzz 10% ${resize} -quality 90 "${dst_img}";;
+    *) echo "ERROR[$$]: Invalid color encoding (${COLOR})" >&2; rm "${src_img}"; exit 1;;
+  esac
   rm "${src_img}"
 done
 pages_pdf="$(ls -1 "${p_dst_prefix}"/*.png | wc -l)"
@@ -221,6 +244,7 @@ ${PDF_INCL/yes/<TD><A HREF="${f_dst}" TARGET="PDF_${f_dst_id}_page">&nabla;</A><
 EOF
 fi
 
-# Done
+
+## Done
 exit 0
 
