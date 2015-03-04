@@ -11,42 +11,58 @@ SYNOPSIS:
   with the same arguments in order to benefit from multiple CPUs/cores.
 
 OPTIONS:
-  -d, --output-dpi     Output PNG images resolution (DPI) [default:100]
+  -d, --output-dpi <int>
+    Output PNG images resolution (DPI) [default:120]
 
-  -D, --input-dpi      Input PDF resolution (DPI) [default:3*image-dpi]
-      For PDF document containing bitmap images, setting this option to 2-4x
-      the output image resolution allows over-sampling of the input image
-      and anti-aliasing to kick in the conversion process.
+  -s, --size <int>
+  -sx, --size-x <int>
+  -sy, --size-y <int>
+    Output PNG images maximum width/height (pixels) [default:height=1000]
 
-  -p, --include-pdf    Include original PDF file along the HTML/PNG output
+  -p, --include-pdf
+    Include original PDF file along the HTML/PNG output
 
-  -cs, --charset       Filesystem character encoding [default:UTF-8]
+  -cs, --charset <string>
+    Filesystem character encoding [default:UTF-8]
 
-  -nf, --no-frameset   Do not use FRAMESET in generated HTML
+  -nf, --no-frameset
+    Do not use FRAMESET in generated HTML
 
-  -h, --html-template  HTML template used to replace the PDF file
-      Any included '%FILE%', '%ID%' and '%PAGES%' anchors will be replaced
-      with the approriate corresponding values.
-      If not specified, the built-in template will be used.
+  -h, --html-template
+    HTML template used to replace the PDF file
+    Any included '%FILE%', '%ID%' and '%PAGES%' anchors will be replaced
+    with the approriate corresponding values.
+    If not specified, the built-in template will be used.
 
-  -l, --lean-ui        Use custom 'left-hand' HTML for a leaner user-interface
+  -l, --lean-ui
+    Use custom 'left-hand' HTML for a leaner user-interface
 
-  -z, --gzip           Destination directory for .tar.gz archive
+  -z, --gzip <dir>
+    Destination directory for .tar.gz archive
 
-  -j, --bzip2          Destination directory for .tar.bz2 archive
+  -j, --bzip2 <dir>
+    Destination directory for .tar.bz2 archive
 
-  -a, --apk            Destination directory for .apk (Android) archive
-  --android-sdk        Path to the Android SDK (requires platform 'android-16')
-  --android-keystore   Path to your keystore (optional)
-  --android-keyalias   Alias of your signing key (optional)
+  -a, --apk <dir>
+    Destination directory for .apk (Android) archive
+
+  --android-sdk <dir>
+    Path to the Android SDK
+
+  --android-keystore <file>
+    Path to your keystore (optional)
+
+  --android-keyalias <string>
+    Alias of your signing key (optional)
 
 AUTHOR:
   Cedric Dufour - http://cedric.dufour.name
 EOF
 
 # Arguments
-IMG_DPI=100
-PDF_DPI=
+IMG_DPI=120
+IMG_X=
+IMG_Y=1000
 PDF_INCL=
 CHARSET='UTF-8'
 HTML_NOFRM=
@@ -64,8 +80,12 @@ while [ -n "${1}" ]; do
   case "${1}" in
     '-d'|'--output-dpi')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--output-dpi)' >&2 && exit 1; IMG_DPI="${1}";;
-    '-D'|'--input-dpi')
-      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--input-dpi)' >&2 && exit 1; PDF_DPI="${1}";;
+    '-s'|'--size')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-s)' >&2 && exit 1; IMG_X="${1}"; IMG_Y="${1}";;
+    '-sx'|'--size-x')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-sx)' >&2 && exit 1; IMG_X="${1}";;
+    '-sy'|'--size-y')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (-sx)' >&2 && exit 1; IMG_Y="${1}";;
     '-p'|'--include-pdf')
       PDF_INCL='yes';;
     '-cs'|'--charset')
@@ -97,8 +117,6 @@ while [ -n "${1}" ]; do
   esac
   shift
 done
-# NOTE: By default, let's use 3x over-sampling in order to cope with PDF containing bitmap images (and thus allow anti-aliasing nonetheless)
-[ -z "${PDF_DPI}" ] && PDF_DPI=$(( 3 * ${IMG_DPI} ))
 
 # Check dependencies
 [ -z "$(which pdf2html)" ] && echo "ERROR[$$]: 'pdf2html' cannot be found" >&2 && exit 1
@@ -165,7 +183,7 @@ IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -type f | sort); do
   echo "INFO[$$]: Importing ${p_src} -> ${p_dst}"
   case "${e_src}" in
     'pdf'|'PDF')
-      pdf2html -d ${IMG_DPI} -D ${PDF_DPI} ${PDF_INCL:+-p} ${CHARSET:+-cs} ${CHARSET:+${CHARSET}} ${HTML_NOFRM:+-nf} ${HTML_TMPL:+-h} ${HTML_TMPL:+${HTML_TMPL}} "${p_src}" "${d_dst}"
+      pdf2html -d ${IMG_DPI} ${IMG_X:+-sx} ${IMG_X:+${IMG_X}} ${IMG_Y:+-sy} ${IMG_Y:+${IMG_Y}} ${PDF_INCL:+-p} ${CHARSET:+-cs} ${CHARSET:+${CHARSET}} ${HTML_NOFRM:+-nf} ${HTML_TMPL:+-h} ${HTML_TMPL:+${HTML_TMPL}} "${p_src}" "${d_dst}"
       ;;
     *)
       cp "${p_src}" "${p_dst}"
@@ -336,6 +354,10 @@ if [ -n "${APK_DIR}" ]; then
     APK_SDK="$(pwd)"
     popd >/dev/null || continue
     APK_SDK="${APK_SDK%%/}"
+    APK_PLATFORM="$(ls -1d "${APK_SDK}"/platforms/* | sort -V | tail -n 1)"
+    [ -z "${APK_PLATFORM}" ] && echo "WARNING[$$]: Cannot find Android SDK platform (${APK_SDK}/platforms/...); skipping..." >&2 && continue
+    APK_TOOLS="$(ls -1d "${APK_SDK}"/build-tools/* | sort -V | tail -n 1)"
+    [ -z "${APK_TOOLS}" ] && echo "WARNING[$$]: Cannot find Android SDK build tools (${APK_SDK}/build-tools/...); skipping..." >&2 && continue
     
     # Check/create destination directory
     [ ! -d "${d_dst}" ] && mkdir -p "${d_dst}"
@@ -348,9 +370,6 @@ if [ -n "${APK_DIR}" ]; then
 
     # Check keystore
     [ -n "${APK_KEYSTORE}" -a ! -r "${APK_KEYSTORE}" ] && echo "WARNING[$$]: Missing/unreadable keystore (${APK_KEYSTORE}); skipping..." >&2 && continue
-
-    # Check Android platform
-    [ ! -d "${APK_SDK}/platforms/android-16" ] && echo "WARNING[$$]: Missing/invalid Android platform (android-16); skipping..." >&2 && continue
 
     p_dst="${d_dst}/eVFRManual-${version}.apk"
     atomic_begin
@@ -978,10 +997,10 @@ x2XoP1z3MxjDypSxryjE7WDeAABlTeDnrFToh4z5choX2rRAwpSxvR8pSWOj
 END_OF_BASE64_ENCODED_DATA
         sed -i "s|%VERSION%|${version}|g" AndroidManifest.xml
         mkdir build
-        ${APK_SDK}/platform-tools/aapt package -f -I ${APK_SDK}/platforms/android-16/android.jar -M AndroidManifest.xml -m -J build -F eVFRManual.resources.apk -S res -A "${DST_DIR}" || continue
-        javac -source 1.6 -target 1.6 -bootclasspath ${APK_SDK}/platforms/android-16/android.jar -sourcepath src -sourcepath build -d build src/ch/skyguide/eVFRManual/eVFRManualActivity.java || continue
-        ${APK_SDK}/platform-tools/dx --dex --output=eVFRManual.dex build || continue
-        ${APK_SDK}/tools/apkbuilder eVFRManual.unsigned.apk -u -z eVFRManual.resources.apk -f eVFRManual.dex || continue
+        ${APK_TOOLS}/aapt package -f -I ${APK_PLATFORM}/android.jar -M AndroidManifest.xml -m -J build -F eVFRManual.unsigned.apk -S res -A "${DST_DIR}" || continue
+        javac -source 1.6 -target 1.6 -bootclasspath ${APK_PLATFORM}/android.jar -sourcepath src -sourcepath build -d build src/ch/skyguide/eVFRManual/eVFRManualActivity.java || continue
+        ${APK_TOOLS}/dx --dex --output=classes.dex build || continue
+        ${APK_TOOLS}/aapt add -f eVFRManual.unsigned.apk classes.dex || continue
         if [ -n "${APK_KEYSTORE}" ]; then
           jarsigner -sigalg SHA1withRSA -digestalg SHA1 -keystore "${APK_KEYSTORE}" -signedjar eVFRManual.unaligned.apk eVFRManual.unsigned.apk "${APK_KEYALIAS}" || continue
         else
@@ -989,7 +1008,7 @@ END_OF_BASE64_ENCODED_DATA
           keytool -genkey -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -dname 'CN=Android Debug,O=Android,C=US' || continue
           jarsigner  -keystore debug.keystore -storepass android -keypass android -signedjar eVFRManual.unaligned.apk eVFRManual.unsigned.apk androiddebugkey || continue
         fi
-        ${APK_SDK}/tools/zipalign -f 4 eVFRManual.unaligned.apk "${p_dst}"
+        ${APK_TOOLS}/zipalign -f 4 eVFRManual.unaligned.apk "${p_dst}"
       done
       popd >/dev/null || exit 1
 
