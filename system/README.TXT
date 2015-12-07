@@ -1,6 +1,10 @@
 Utilities for Linux Systems Administration and Daily Use
 ========================================================
 
+asuswrt-*
+---------
+Backup/restore configuration - NVRAM only - of devices running AsusWRT firmware.
+
 dircksum
 --------
 Recursively compute and save/verify the checksum for the given directory.

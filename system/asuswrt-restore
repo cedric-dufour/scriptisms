@@ -1,0 +1,85 @@
+#!/bin/bash
+
+
+## Usage
+[ "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<backup.nvram.cfg>]
+
+SYNOPSIS:
+  Create AsusWRT NVRAM restoration script based on the given backup file
+  (or standard input if ommitted).
+
+OPTIONS:
+  -i, --ini <path>
+    Path to the NVRAM Save/Restore INI file (default:asuswrt-restore.ini).
+    (http://forums.smallnetbuilder.com/showthread.php?t=19521)
+
+  -o, --output <path>
+    Path where to save the restoration script (default:stdout).
+
+  -M, --migration
+    Exclude NVRAM settings that MUST NOT be applied to a different device
+    than the one from which the backup file originated.
+EOF
+
+# Arguments
+NVRAM_BKP=
+NVRAM_INI="$(dirname ${0})/asuswrt-restore.ini"
+PATH_OUTPUT='-'
+MIGRATION=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    -i|--ini)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing/empty INI path" >&2 && exit 1
+      NVRAM_INI="${1}"
+      ;;
+    -o|--output)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing/empty output path" >&2 && exit 1
+      PATH_OUTPUT="${1}"
+      ;;
+    -M|--migration)
+      shift
+      MIGRATION=yes
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+    *)
+      [ -n "${NVRAM_BKP}" ] && echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      NVRAM_BKP="${1}"
+      ;;
+  esac
+  shift
+done
+
+
+## Checks
+if [ -n "${NVRAM_BKP}" ]; then
+  [ ! -r "${NVRAM_BKP}" ] && echo "ERROR: Missing/unreadable NVRAM backup file" >&2 && exit 1
+else
+  NVRAM_BKP='-'
+fi
+[ ! -r "${NVRAM_INI}" ] && echo "ERROR: Missing/unreadable NVRAM Save/Restore INI file" >&2 && exit 1
+
+
+## Script
+
+# Filter the backup file according to the INI file
+[ -z "${MIGRATION}" ] && GREP_FILTER='^ *(#|\[|$)' || GREP_FILTER='^ *(#|\[|@|$)'
+echo ${GREP_FILTER}
+[ "${PATH_OUTPUT}" != '-' ] && exec 3>&1 1>"${PATH_OUTPUT}"
+join -t'=' -j 1 -o '2.1 2.2' \
+  <(egrep -v "${GREP_FILTER}" "${NVRAM_INI}" | sort -u | sed 's/^@//') \
+  <(sort -t'=' -k1,1 "${NVRAM_BKP}") \
+| tr '\n' '\0' \
+| sed 's/\r//g;s/\x0/\\n/g;s/\\n\([^=]*\)=/\n\1=/g' \
+| sed 's/"/\\"/g;s/^\([^=]*\)=\(.*[^-.0-9].*\)$/\1="\2"/;s/^/nvram set /'
+cat << EOF
+nvram commit
+sleep 5
+reboot
+EOF
+[ "${PATH_OUTPUT}" != '-' ] && exec 1>&3
+

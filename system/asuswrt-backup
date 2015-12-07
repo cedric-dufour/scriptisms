@@ -1,0 +1,49 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [options] <device>
+
+SYNOPSIS:
+  Backup the NVRAM from the given device (running AsusWRT firmware).
+
+OPTIONS:
+  -o, --output <path>
+    Path where to save the backup output (default:stdout).
+EOF
+
+# Arguments
+DEVICE=
+PATH_OUTPUT='-'
+while [ -n "${1}" ]; do
+  case "${1}" in
+    -o|--output)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing/empty output path" >&2 && exit 1
+      PATH_OUTPUT="${1}"
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+    *)
+      [ -n "${DEVICE}" ] && echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+      DEVICE="${1}"
+      ;;
+  esac
+  shift
+done
+
+
+## Backup
+
+# SSH (nvram) backup
+[ "${PATH_OUTPUT}" != '-' ] && exec 3>&1 1>"${PATH_OUTPUT}"
+ssh -o ForwardX11=no -l admin ${DEVICE} 'nvram show'
+e=$?
+[ "${PATH_OUTPUT}" != '-' ] && exec 1>&3
+
+# Done
+[ ${e} -ne 0 ] && echo "ERROR: Failed to dump NVRAM content from device (${DEVICE})" && exit ${e}
+exit 0
+
