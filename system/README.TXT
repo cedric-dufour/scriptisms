@@ -65,3 +65,7 @@ tomato-backup
 Backup configuration - NVRAM or standard (web) - of devices running Tomato
 firmware.
 
+zfs [directory]
+---------------
+A bunch of scripts to go along ZFS on Linux
+

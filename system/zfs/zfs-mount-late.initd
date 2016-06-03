@@ -1,0 +1,132 @@
+#!/bin/bash
+#
+# zfs-mount-late  This script mounts late ZFS resources (e.g. for NFS exports).
+#
+# chkconfig:    2345 05 95
+# description:  Mount late ZFS resources.
+# probe: true
+#
+### BEGIN INIT INFO
+# Provides:       zfs-mount-late
+# Required-Start: zfs-mount
+# Required-Stop:  zfs-mount
+# X-Start-Before: nfs-kernel-server
+# X-Stop-After:   nfs-kernel-server
+# Default-Start:  2 3 4 5
+# Default-Stop:   0 1 6
+# Short-Description: Mount late ZFS resources.
+### END INIT INFO
+
+# Source the common init script
+. /etc/zfs/common.init
+servicename=zfs-mount-late
+
+# Source default
+ZFS_MOUNT_FILTER=
+[ -e /etc/default/zfs-mount-late ] && . /etc/default/zfs-mount-late
+[ -z "${ZFS_MOUNT_FILTER}" ] && exit 0
+
+# ----------------------------------------------------
+
+# Helper functions
+# NOTE: we cannot use /etc/zfs/common.init functions, as we need to index
+# fstab and mtab according to the mount point (and not the device/fs)
+declare -A MTAB2
+declare -A FSTAB2
+
+read_mtab2() {
+        for mntpnt in "${!MTAB2[@]}" ; do unset MTAB2["$mntpnt"] ; done
+        while read -r fs mntpnt fstype opts blah ; do
+                fs=`printf '%b\n' "$fs"`
+                MTAB2["$mntpnt"]=$fs
+        done < <(grep -E "$1" /etc/mtab)
+}
+
+in_mtab2() {
+        [ -n "${MTAB2[$1]}" ]
+        return $?
+}
+
+read_fstab2() {
+        for mntpnt in "${!FSTAB2[@]}" ; do unset FSTAB2["$mntpnt"] ; done
+        while read -r fs mntpnt fstype opts blah ; do
+                fs=`printf '%b\n' "$fs"`
+                FSTAB2["$mntpnt"]=$fs
+        done < <(grep -E "$1" /etc/fstab)
+}
+
+# Mount datasets/filesystems
+do_mount()
+{
+	read_mtab2  "${ZFS_MOUNT_FILTER}"
+	read_fstab2 "${ZFS_MOUNT_FILTER}"
+
+	$log_begin_msg "Mounting volumes registered in fstab: "
+	for mntpnt in "${!FSTAB2[@]}" ; do
+		if in_mtab2 "$mntpnt" ; then continue ; fi
+
+		$log_progress_msg "$mntpnt "
+		mount "$mntpnt"
+	done
+
+	$log_end_msg 0
+}
+
+# Unmount filesystems
+do_unmount()
+{
+	read_mtab2  "${ZFS_MOUNT_FILTER}"
+	read_fstab2 "${ZFS_MOUNT_FILTER}"
+
+	$log_begin_msg "Unmounting volumes registered in fstab: "
+	for mntpnt in "${!FSTAB2[@]}" ; do
+		if ! in_mtab2 "$mntpnt" ; then continue ; fi
+
+		$log_progress_msg "$mntpnt "
+		umount "$mntpnt"
+	done
+
+	$log_end_msg 0
+}
+
+# Output the status and list of mounts
+status()
+{
+	[ ! -f "$LOCKDIR/$servicename" ] && return 3
+
+	grep -E "${ZFS_MOUNT_FILTER}" /etc/mtab
+}
+
+start()
+{
+	do_mount
+	touch "$LOCKDIR/$servicename"
+}
+
+stop()
+{
+	do_unmount
+	rm -f "$LOCKDIR/$servicename"
+}
+
+# ----------------------------------------------------
+
+case "$1" in
+	(start)
+		start
+		;;
+	(stop)
+		stop
+		;;
+	(status)
+		status
+		;;
+	(force-reload|condrestart|reload|restart)
+		# no-op
+		;;
+	(*)
+		[ -n "$1" ] && echo "Error: Unknown command $1."
+		echo "Usage: $0 {start|stop|status}"
+		exit 3
+		;;
+esac

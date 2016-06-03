@@ -1,0 +1,181 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<options>] <zfs-src> <[host:]zfs-dst>
+
+SYSNOPSIS:
+  Backup the given ZFS source dataset to the given destination dataset,
+  optionally on the given host (via SSH), using ZFS send/receive stanza
+  and automatically managed snapshots.
+
+OPTIONS:
+  -I --init
+    Initialize the backup (perform the first snapshot/backup).
+
+  -P --previous
+    Specify the previous snapshot to use (default is automatically detected)
+
+  -R --read-only
+    Switch the destination dataset to read-only mode after backup.
+
+  -U --user <username>
+    Login name for remote (SSH) hosts
+
+  -V --verbose
+    Verbose dataset stream transfer
+
+  -D --dry-run
+    Simulate dataset stream transfer; no backup is actually performed
+
+  --no-replication
+    Disable full dataset replication; previous destination backup snapshots
+    are preserved
+EOF
+
+# Arguments
+ZFS_BACKUP_SRC=
+ZFS_BACKUP_DST=
+ZFS_BACKUP_HOST=
+ZFS_BACKUP_INIT=
+ZFS_BACKUP_SNAPSHOT_PREV=
+ZFS_BACKUP_RDONLY=
+ZFS_BACKUP_USER="$(whoami)"
+ZFS_BACKUP_VERBOSE=
+ZFS_BACKUP_DRYRUN=
+ZFS_BACKUP_REPL=yes
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    -I|--init)
+      ZFS_BACKUP_INIT=yes
+      ;;
+
+    -P|--previous)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing option argument (--previous)" >&2 && exit 1
+      ZFS_BACKUP_SNAPSHOT_PREV="${1}"
+      ;;
+
+    -R|--read-only)
+      ZFS_BACKUP_RDONLY=yes
+      ;;
+
+    -U|--user)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing option argument (--user)" >&2 && exit 1
+      ZFS_BACKUP_USER="${1}"
+      ;;
+
+    -V|--verbose)
+      ZFS_BACKUP_VERBOSE=yes
+      ;;
+
+    -D|--dry-run)
+      ZFS_BACKUP_DRYRUN=yes
+      ZFS_BACKUP_VERBOSE=yes
+      ;;
+
+    --no-replication)
+      ZFS_BACKUP_REPL=
+      ;;
+
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+
+    *)
+      if [ -n "${ZFS_BACKUP_DST}" ]; then
+        echo "ERROR: Too many arguments" >&2 && exit 1
+      elif [ -n "${ZFS_BACKUP_SRC}" ]; then
+        ZFS_BACKUP_HOST="${1%:*}"
+        ZFS_BACKUP_DST="${1#*:}"
+        [ "${ZFS_BACKUP_HOST}" == "${ZFS_BACKUP_DST}" ] && ZFS_BACKUP_HOST=localhost
+      else
+        ZFS_BACKUP_SRC="${1}"
+      fi
+
+  esac
+
+  shift
+done
+
+# Parameters
+ZFS_BACKUP_NAME="${ZFS_BACKUP_SRC//\//_}/${ZFS_BACKUP_HOST}:${ZFS_BACKUP_DST//\//_}"
+
+
+## Backup
+
+# Retrieve backup snaphosts list
+# ... list
+if [ -z "${ZFS_BACKUP_SNAPSHOT_PREV}" ]; then
+  ZFS_BACKUP_SNAPSHOTS="$(zfs list -Hp -t snapshot -r ${ZFS_BACKUP_SRC} | cut -f1 | grep -E "@[0-9]{8}T[0-9]{6}-backup:${ZFS_BACKUP_HOST}:${ZFS_BACKUP_DST//\//_}\$" | sort)"
+else
+  ZFS_BACKUP_SNAPSHOTS="$(zfs list -Hp -t snapshot -r ${ZFS_BACKUP_SRC} | cut -f1 | grep -E "^${ZFS_BACKUP_SNAPSHOT_PREV}\$" | sort)"
+fi
+[ $(echo "${ZFS_BACKUP_SNAPSHOTS}" | wc -l) -gt 1 ] && echo "ERROR: Too many snapshots found (${ZFS_BACKUP_NAME})" >&2 && exit 1
+# ... previous
+ZFS_BACKUP_SNAPSHOT_PREV="${ZFS_BACKUP_SNAPSHOTS}"
+[ -z "${ZFS_BACKUP_SNAPSHOT_PREV}" -a -z "${ZFS_BACKUP_INIT}" ] && echo "ERROR: No previous snapshot found (${ZFS_BACKUP_NAME})" >&2 && exit 1
+[ -n "${ZFS_BACKUP_SNAPSHOT_PREV}" -a -n "${ZFS_BACKUP_INIT}" ] && echo "ERROR: Previous snapshot found; can not initialize (${ZFS_BACKUP_NAME})" >&2 && exit 1
+
+# Create backup snapshot
+ZFS_BACKUP_TIMESTAMP="$(date +'%Y%m%dT%H%M%S')"
+ZFS_BACKUP_SNAPSHOT_NOW="${ZFS_BACKUP_SRC}@${ZFS_BACKUP_TIMESTAMP}-backup:${ZFS_BACKUP_HOST}:${ZFS_BACKUP_DST//\//_}"
+zfs snapshot -r ${ZFS_BACKUP_SNAPSHOT_NOW}
+[ $? -ne 0 ] && echo "ERROR: Failed to perform source snapshot (${ZFS_BACKUP_NAME})" >&2 && exit 1
+
+# Perform backup
+
+# ... commands
+ZFS_BACKUP_SET_RDWR="zfs set readonly=off ${ZFS_BACKUP_DST}"
+ZFS_BACKUP_SEND="zfs send -p ${ZFS_BACKUP_REPL:+-R} ${ZFS_BACKUP_VERBOSE:+-v} ${ZFS_BACKUP_SNAPSHOT_PREV:+-I} ${ZFS_BACKUP_SNAPSHOT_PREV} ${ZFS_BACKUP_SNAPSHOT_NOW}"
+ZFS_BACKUP_RECV="zfs receive -F ${ZFS_BACKUP_VERBOSE:+-v} ${ZFS_BACKUP_DRYRUN:+-n} ${ZFS_BACKUP_DST}"
+ZFS_BACKUP_SET_RDONLY="zfs set readonly=on ${ZFS_BACKUP_DST}"
+if [ "${ZFS_BACKUP_HOST}" != 'localhost' ]; then
+  ZFS_BACKUP_SET_RDWR="ssh -l ${ZFS_BACKUP_USER} ${ZFS_BACKUP_HOST} '${ZFS_BACKUP_SET_RDWR}'"
+  ZFS_BACKUP_RECV="ssh -l ${ZFS_BACKUP_USER} ${ZFS_BACKUP_HOST} '${ZFS_BACKUP_RECV}'"
+  ZFS_BACKUP_SET_RDONLY="ssh -l ${ZFS_BACKUP_USER} ${ZFS_BACKUP_HOST} '${ZFS_BACKUP_SET_RDONLY}'"
+fi
+
+# ... set destination dataset read-write
+if [ -z "${ZFS_BACKUP_INIT}" ]; then
+  eval "${ZFS_BACKUP_SET_RDWR}"
+  if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to switch destination to read-write mode (${ZFS_BACKUP_NAME})" >&2
+    zfs destroy ${ZFS_BACKUP_SNAPSHOT_NOW}
+    exit 1
+  fi
+fi
+
+# ... send/receive dataset stream
+eval "${ZFS_BACKUP_SEND} | ${ZFS_BACKUP_RECV}"
+if [ $? -ne 0 ]; then
+  echo "ERROR: Failed to perform backup for given source/destination (${ZFS_BACKUP_NAME})" >&2
+  zfs destroy ${ZFS_BACKUP_SNAPSHOT_NOW}
+  exit 1
+fi
+
+# ... set destination dataset read-only
+if [ -n "${ZFS_BACKUP_RDONLY}" ]; then
+  eval "${ZFS_BACKUP_SET_RDONLY}"
+  if [ $? -ne 0 ]; then
+    echo "WARNING: Failed to switch destination to read-only mode (${ZFS_BACKUP_NAME})" >&2
+  fi
+fi
+
+# Destroy unnecessary snaphots
+if [ -n "${ZFS_BACKUP_DRYRUN}" ]; then
+  zfs destroy ${ZFS_BACKUP_SNAPSHOT_NOW}
+elif [ -z "${ZFS_BACKUP_INIT}" ]; then
+  zfs destroy ${ZFS_BACKUP_SNAPSHOT_PREV}
+  [ "${ZFS_BACKUP_HOST}" != 'localhost' ] && ssh -l ${ZFS_BACKUP_USER} ${ZFS_BACKUP_HOST} "zfs destroy ${ZFS_BACKUP_SNAPSHOT_PREV}"
+fi
+if [ $? -ne 0 ]; then
+  echo "WARNING: Failed to destroy source snapshot (${ZFS_BACKUP_NAME})" >&2
+fi
+
+# Done
+exit 0
+

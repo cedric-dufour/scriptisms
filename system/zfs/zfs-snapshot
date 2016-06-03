@@ -1,0 +1,80 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 3 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<options>] <zfs-src> [<zfs-src> ...]
+
+SYSNOPSIS:
+  Snapshot the given ZFS source dataset, automatically managing snapshot
+  types (suffix) and retention factor.
+
+OPTIONS:
+  -T --type <suffix>
+    Snapshot type/suffix; typically: hourly, daily, weekly, etc.
+
+  -R --retention <factor>
+    Quantity of snapshots to preserve for the given type/suffix.
+EOF
+
+# Arguments
+ZFS_SNAPSHOT_SRC_a=()
+ZFS_SNAPSHOT_TYPE=
+ZFS_SNAPSHOT_RETF=1
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    -T|--type)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing option argument (--type)" >&2 && exit 1
+      ZFS_SNAPSHOT_TYPE="${1}"
+      ;;
+
+    -R|--retention)
+      shift
+      [ -z "${1}" ] && echo "ERROR: Missing option argument (--retention)" >&2 && exit 1
+      ZFS_SNAPSHOT_RETF="${1}"
+      ;;
+
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+
+    *)
+      ZFS_SNAPSHOT_SRC_a+=( "${1}" )
+      ;;
+
+  esac
+
+  shift
+done
+
+# Checks
+[ -z "${ZFS_SNAPSHOT_TYPE}" ] && echo "ERROR: Snapshot type must be specified (--type)" >&2 && exit 1
+[ "${ZFS_SNAPSHOT_RETF}" != '0' -a "$(( ${ZFS_SNAPSHOT_RETF} + 0 ))" != "${ZFS_SNAPSHOT_RETF}" ] && echo "ERROR: Rentention factor must be integer (--retention)" >&2 && exit 1
+[ ${ZFS_SNAPSHOT_RETF} -lt 1 ] && echo "ERROR: Retention factor must be positive (--retention)" >&2 && exit 1
+
+
+## Snapshot
+ZFS_SNAPSHOT_TIMESTAMP="$(date +'%Y%m%dT%H%M%S')"
+
+# Loop through sources
+for ZFS_SNAPSHOT_SRC_i in ${!ZFS_SNAPSHOT_SRC_a[@]}; do
+  ZFS_SNAPSHOT_SRC="${ZFS_SNAPSHOT_SRC_a[${ZFS_SNAPSHOT_SRC_i}]}"
+
+  # Create snapshot
+  ZFS_SNAPSHOT_DST="${ZFS_SNAPSHOT_SRC}@${ZFS_SNAPSHOT_TIMESTAMP}-${ZFS_SNAPSHOT_TYPE}"
+  zfs snapshot -r ${ZFS_SNAPSHOT_DST}
+  [ $? -ne 0 ] && echo "WARNING: Failed to perform snapshot (${ZFS_SNAPSHOT_DST})" >&2 && continue
+
+  # Destroy unnecessary snaphots
+  ZFS_SNAPSHOT_LIST="$(zfs list -Hp -t snapshot -r ${ZFS_SNAPSHOT_SRC} | cut -f1 | grep -E "@[0-9]{8}T[0-9]{6}-${ZFS_SNAPSHOT_TYPE}\$" | sort)"
+  for snapshot in $(echo "${ZFS_SNAPSHOT_LIST}" | head -n -${ZFS_SNAPSHOT_RETF}); do
+    zfs destroy ${snapshot}
+    [ $? -ne 0 ] && echo "WARNING: Failed to destroy snapshot (${snapshot})" >&2
+  done
+done
+
+# Done
+exit 0
+

@@ -1,0 +1,4 @@
+# ZFS late mount resources filter (grep -E stanza)
+# No mount will occur if left empty
+ZFS_MOUNT_FILTER='^/?zfs/?.* /export'
+
