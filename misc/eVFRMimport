@@ -11,6 +11,9 @@ SYNOPSIS:
   with the same arguments in order to benefit from multiple CPUs/cores.
 
 OPTIONS:
+  -v, --version <YYMMDD>
+    eVFR Manual version [default:latest]
+
   -d, --output-dpi <int>
     Output PNG images resolution (DPI) [default:120]
 
@@ -60,6 +63,7 @@ AUTHOR:
 EOF
 
 # Arguments
+VERSION=
 IMG_DPI=120
 IMG_X=
 IMG_Y=1000
@@ -78,6 +82,8 @@ APK_KEYSTORE=
 APK_KEYALIAS=
 while [ -n "${1}" ]; do
   case "${1}" in
+    '-v'|'--version')
+      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--version)' >&2 && exit 1; VERSION="${1}";;
     '-d'|'--output-dpi')
       shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--output-dpi)' >&2 && exit 1; IMG_DPI="${1}";;
     '-s'|'--size')
@@ -120,18 +126,29 @@ done
 
 # Check dependencies
 [ -z "$(which pdf2html)" ] && echo "ERROR[$$]: 'pdf2html' cannot be found" >&2 && exit 1
+[ -z "$(which uudecode)" ] && echo "ERROR[$$]: 'uudecode' cannot be found" >&2 && exit 1
 
-# Check directories and files
+# Check directories
 SRC_DIR=${SRC_DIR%%/}
 [ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid source directory (${SRC_DIR})" >&2 && exit 1
 [ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unable to read from source directory (${SRC_DIR})" >&2 && exit 1
-[ ! -e "${SRC_DIR}/eVFRM_list.xml" ] && echo "ERROR[$$]: Missing 'eVFRM_list.xml' in source directory (${SRC_DIR})" >&2 && exit 1
 [ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
 [ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
 pushd "${DST_DIR}" >/dev/null || exit 1
 DST_DIR="$(pwd)"
 popd >/dev/null || exit 1
 DST_DIR=${DST_DIR%%/}
+
+# Check/retrieve version
+[ -z "${VERSION}" ] && VERSION="$(find "${SRC_DIR}" -maxdepth 1 -type d -name "??????" | sed 's/^.*\///' | sort -rn | head -n 1)"
+[ -z "${VERSION}" ] && echo "ERROR[$$]: Unable to retrieve (latest) version" >&2 && exit 1
+SRC_DIR_VER="${SRC_DIR}/${VERSION}"
+[ ! -d "${SRC_DIR_VER}" ] && "ERROR[$$]: Invalid version directory (${SRC_DIR_VER})" >&2 && exit 1
+[ ! -r "${SRC_DIR_VER}" ] && echo "ERROR[$$]: Unable to read from version directory (${SRC_DIR_VER})" >&2 && exit 1
+[ ! -e "${SRC_DIR_VER}/index.html" ] && echo "ERROR[$$]: Missing 'index.html' file in version directory (${SRC_DIR_VER})" >&2 && exit 1
+[ ! -e "${SRC_DIR_VER}/Full" ] && echo "ERROR[$$]: Missing 'Full' (AIP) directory in version directory (${SRC_DIR_VER})" >&2 && exit 1
+[ ! -e "${SRC_DIR_VER}/VFG" ] && echo "ERROR[$$]: Missing 'VFG' (VFR Guide) directory in version directory (${SRC_DIR_VER})" >&2 && exit 1
+DST_DIR_VER="${DST_DIR}/${VERSION}"
 
 # Lock function
 DST_LOCK="${DST_DIR}/.lock"
@@ -154,7 +171,8 @@ function atomic_end {
 trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}"; exit 2' INT TERM
 
 # Loop through files 
-IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -type f | sort); do
+IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -path "${SRC_DIR_VER}/*" -type f | sort); do
+
   # Compute destination file name
   e_src="${p_src##*.}"
   case "${e_src}" in
@@ -167,6 +185,10 @@ IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -type f | sort); do
   f_src="$(basename ${p_src})"
   d_dst="$(dirname ${p_dst})"
   f_dst="$(basename ${p_dst})"
+
+  # Ignore irrelevant files
+  [ "${f_src}" == 'EntireVFRM.zip' ] && continue
+  [ "${f_src}" == 'Thumbs.db' ] && continue
 
   # Check/create destination directory
   [ ! -d "${d_dst}" ] && mkdir -p "${d_dst}"
@@ -193,14 +215,16 @@ IFS=$'\n'; for p_src in $(find "${SRC_DIR}" -type f | sort); do
 done
 
 # Finalize
-version="$(fgrep -i '<eAip wef=' "${SRC_DIR}/eVFRM_list.xml" | sort | tail -n 1 | sed 's/.*<eAip wef="//;s/".*//')"
 atomic_begin
 if [ ! -e "${DST_DIR}/index.html" ]; then
   touch "${DST_DIR}/index.html"
   atomic_end
 
+  echo "INFO[$$]: Add version to cover page..."
+  sed -i "s|\\(Aeronautical Information Publication\\)|\\1\\n<br>Version: ${VERSION}|i" "${DST_DIR_VER}/html/cover.html"
+
   echo "INFO[$$]: Fixing broken links..."
-  sed -i 's|href="../../../index.html" target="_top"|href="http://www.skyguide.ch/" target="_top"|' "${DST_DIR}/${version}/html/commands.html"
+  sed -i 's|href="../../../index.html" target="_top"|href="http://www.skyguide.ch/" target="_top"|' "${DST_DIR_VER}/html/commands.html"
 
   echo "INFO[$$]: Fixing browsing menus..."
   find "${DST_DIR}" -name 'tree_items_*.js' -exec sed -i 's/\.pdf/.html/g' {} \;
@@ -209,23 +233,23 @@ if [ ! -e "${DST_DIR}/index.html" ]; then
   cat << EOF > "${DST_DIR}/index.html"
 <HTML>
 <HEAD>
-<META HTTP-EQUIV="Refresh" CONTENT="0; url=./${version}/index.html" />
+<META HTTP-EQUIV="Refresh" CONTENT="0; url=./${VERSION}/index.html" />
 </HEAD>
 </HTML>
 EOF
 
   if [ -n "${HTML_LEAN}" ]; then
     echo "INFO[$$]: Creating lean index..."
-    # Hide "commands" frame
-    cat << EOF > "${DST_DIR}/${version}/index.html"
+
+    # Remove "commands" frame
+    cat << EOF > "${DST_DIR_VER}/index.html"
 <HTML>
 <HEAD>
 <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8" />
-<TITLE>eVFR Manual (${version})</title>
+<TITLE>eVFR Manual (${VERSION})</title>
 </HEAD>
 <FRAMESET COLS="200,*">
-<FRAMESET ROWS="0,23,*" BORDER="0">
-<FRAME NAME="eAISCommands" SRC="./html/commands.html" NORESIZE SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
+<FRAMESET ROWS="23,*" BORDER="0">
 <FRAME NAME="menu" ID="menu" SRC="./html/menu.html" NORESIZE SCROLLING="no" FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
 <FRAME NAME="navigation" ID="navigation" SRC="./html/navigation.html" NORESIZE FRAMEBORDER="0" MARGINHEIGHT="0" MARGINWIDTH="0" />
 </FRAMESET>
@@ -233,32 +257,23 @@ EOF
 </FRAMESET>
 </HTML>
 EOF
-    # Replace "commands" HTML
-    cat << EOF > "${DST_DIR}/${version}/html/commands.html"
-<HTML>
-<HEAD>
-<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8"/>
-<SCRIPT SRC="../scripts/determine_list.js" TYPE="text/javascript"></SCRIPT>
-</HEAD>
-<BODY STYLE="DISPLAY:none;" ONLOAD="buildList('../../eVFRM_list.xml')">
-<SELECT ID="selectX"></SELECT>
-</BODY>
-</HTML>
-EOF
+
     # Make navigation tree less space-wasting
-    sed -i 's|min-width:[^;]*|width:200px|i;s|font-family:[^;]*|font-family:sans-serif|i;s|font-size:[^;]*|font-size:10px|i' "${DST_DIR}/${version}/styles/navigation.css"
+    sed -i 's|min-width:[^;]*|width:200px|i;s|font-family:[^;]*|font-family:sans-serif|i;s|font-size:[^;]*|font-size:10px|i' "${DST_DIR_VER}/styles/navigation.css"
+
     # Allow wraping in navigation tree
-    sed -i 's| *nowrap||i' "${DST_DIR}/${version}/scripts/tree.js"
+    sed -i 's| *nowrap||i' "${DST_DIR_VER}/scripts/tree.js"
+
     # Replace space-wasting icons by smaller ones
     for image in folder.gif folderopen.gif foldersel.gif page.gif pagesel.gif join.gif joinbottom.gif line.gif; do
-cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR}/${version}/images/${image}"
+cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR_VER}/images/${image}"
 begin-base64 644 /dev/stdout
 R0lGODlhAgABAIABAAAAAP///yH5BAEKAAEALAAAAAACAAEAAAICTAoAOw==
 ====
 END_OF_BASE64_ENCODED_DATA
     done
     for image in plus.gif plusbottom.gif; do
-cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR}/${version}/images/${image}"
+cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR_VER}/images/${image}"
 begin-base64 644 /dev/stdout
 R0lGODlhDQARAKECAF5bTAAAAP///////yH5BAEAAAIALAAAAAANABEAAAIi
 lI+py+0PEZiUygWuCSf3wxmeKASmKYwp+LWluypqRUdRAQA7
@@ -266,7 +281,7 @@ lI+py+0PEZiUygWuCSf3wxmeKASmKYwp+LWluypqRUdRAQA7
 END_OF_BASE64_ENCODED_DATA
     done
     for image in minus.gif minusbottom.gif; do
-cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR}/${version}/images/${image}"
+cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR_VER}/images/${image}"
 begin-base64 644 /dev/stdout
 R0lGODlhDQARAKECAF5bTAAAAP///////yH5BAEAAAIALAAAAAANABEAAAId
 lI+py+1/gJwTgXUjtluH/wmZMXKaUpYnSVHQCxcAOw==
@@ -274,14 +289,14 @@ lI+py+1/gJwTgXUjtluH/wmZMXKaUpYnSVHQCxcAOw==
 END_OF_BASE64_ENCODED_DATA
     done
     for image in empty.gif; do
-cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR}/${version}/images/${image}"
+cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR_VER}/images/${image}"
 begin-base64 644 /dev/stdout
 R0lGODlhCwABAIABAAAAAP///yH5BAEKAAEALAAAAAALAAEAAAIDjI9RADs=
 ====
 END_OF_BASE64_ENCODED_DATA
     done
     for image in page.gif; do
-cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR}/${version}/images/${image}"
+cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR_VER}/images/${image}"
 begin-base64 644 /dev/stdout
 R0lGODlhCQARAIABAAAAAP///yH5BAEKAAEALAAAAAAJABEAAAIRjI+py+3f
 gEzgVItzuHbC/xUAOw==
@@ -289,7 +304,7 @@ gEzgVItzuHbC/xUAOw==
 END_OF_BASE64_ENCODED_DATA
     done
     for image in pagesel.gif; do
-cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR}/${version}/images/${image}"
+cat << END_OF_BASE64_ENCODED_DATA | uudecode > "${DST_DIR_VER}/images/${image}"
 begin-base64 644 /dev/stdout
 R0lGODlhCQARAIABAAAAAP///yH5BAEKAAEALAAAAAAJABEAAAIRjI+py+3f
 gEyyojoPBjTDDxUAOw==
@@ -312,7 +327,7 @@ if [ -n "${GZ_DIR}" ]; then
     [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}); skipping..." >&2 && continue
 
     # Create archive
-    p_dst="${d_dst}/eVFRManual-${version}.tar.gz"
+    p_dst="${d_dst}/eVFRManual-${VERSION}.tar.gz"
     atomic_begin
     if [ ! -e "${p_dst}" ]; then
       touch "${p_dst}"
@@ -333,7 +348,7 @@ if [ -n "${BZ2_DIR}" ]; then
     [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}); skipping..." >&2 && continue
 
     # Create archive
-    p_dst="${d_dst}/eVFRManual-${version}.tar.bz2"
+    p_dst="${d_dst}/eVFRManual-${VERSION}.tar.bz2"
     atomic_begin
     if [ ! -e "${p_dst}" ]; then
       touch "${p_dst}"
@@ -371,7 +386,7 @@ if [ -n "${APK_DIR}" ]; then
     # Check keystore
     [ -n "${APK_KEYSTORE}" -a ! -r "${APK_KEYSTORE}" ] && echo "WARNING[$$]: Missing/unreadable keystore (${APK_KEYSTORE}); skipping..." >&2 && continue
 
-    p_dst="${d_dst}/eVFRManual-${version}.apk"
+    p_dst="${d_dst}/eVFRManual-${VERSION}.apk"
     atomic_begin
     if [ ! -e "${p_dst}" ]; then
       touch "${p_dst}"
@@ -995,7 +1010,7 @@ x2XoP1z3MxjDypSxryjE7WDeAABlTeDnrFToh4z5choX2rRAwpSxvR8pSWOj
 +srAqM3e8BoMI8e+LT1/xgO495prSwtMmceIQB/+LuSKcKEg5ePg/A==
 ====
 END_OF_BASE64_ENCODED_DATA
-        sed -i "s|%VERSION%|${version}|g" AndroidManifest.xml
+        sed -i "s|%VERSION%|${VERSION}|g" AndroidManifest.xml
         mkdir build
         ${APK_TOOLS}/aapt package -f -I ${APK_PLATFORM}/android.jar -M AndroidManifest.xml -m -J build -F eVFRManual.unsigned.apk -S res -A "${DST_DIR}" || continue
         javac -source 1.6 -target 1.6 -bootclasspath ${APK_PLATFORM}/android.jar -sourcepath src -sourcepath build -d build src/ch/skyguide/eVFRManual/eVFRManualActivity.java || continue
