@@ -25,6 +25,10 @@ huawei-wctl
 -----------
 Control Huawei E303s-2 (and compatible) 3G/UMTS USB dongle via its web API.
 
+kernel [directory]
+------------------
+Deal with the Linux kernel with less headaches.
+
 kvm-helper
 ----------
 Launch a KVM virtual server (guest) with appropriate options for the

@@ -1,0 +1,39 @@
+#!/bin/bash
+
+
+## Usage
+[ $# -lt 2 -o "${0##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <oldconfig> <newconfig>
+
+SYNOPSIS:
+  This script extracts the differences between the two given kernel confi-
+  guration files and format them to be used with:
+
+    cd <kernel-source>
+    ./scripts/kconfig/merge_config.sh ...
+
+  It is recommended to verify the resuting configuration after merging:
+
+    make oldconfig
+EOF
+
+# Arguments
+KCONFIG_OLD="${1}"
+KCONFIG_NEW="${2}"
+
+
+## Diff
+kconfig_oldline=''
+kconfig_oldparam=''
+diff <(fgrep CONFIG_ "${KCONFIG_OLD}") <(fgrep CONFIG_ "${KCONFIG_NEW}") \
+| grep '^[<>]' \
+| sed 's/^< CONFIG_\([^=]*\)=[ym]$/# CONFIG_\1 is not set/;/^< # CONFIG_/d;/^< CONFIG_/d;s/^> //;/^[<>]\s*$/d' \
+| while read kconfig_newline; do
+    if [[ ${kconfig_newline} =~ (CONFIG_[_A-Z0-9]*) ]]; then
+      kconfig_newparam="${BASH_REMATCH[1]}"
+      [ "${kconfig_newparam}" != "${kconfig_oldparam}" -a -n "${kconfig_oldline}" ] && echo "${kconfig_oldline}"
+      kconfig_oldline="${kconfig_newline}"
+      kconfig_oldparam="${kconfig_newparam}"
+    fi
+done
+

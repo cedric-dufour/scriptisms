@@ -1,0 +1,163 @@
+#!/bin/bash
+
+## Usage
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<options>] <version> <flavor>
+
+SYNOPSIS:
+  Build the 'linux-image-<version>-<flavor>' Debian package using the ad-hoc
+  'make-kpkg' utility (from the 'kernel-package').
+
+OPTIONS:
+  -R, --revision <string>
+  Revision number (default: $(date +'%Y%m%da~custom'))
+
+  -C, --config <path-file>
+  Path to kernel configuration file (default: ./config-<version>-<flavor>)
+
+  -P, --patches <path-dir>
+  Path to kernel patches directory (default: none)
+  ('*.patch' files shall be processed according to standard 'sort' order)
+
+  -O, --overlay <path-dir>
+  Path to packaging overlay directory (default: none)
+EOF
+
+# Arguments
+MY_VERSION=
+MY_FLAVOR=
+MY_REVISION=
+MY_CONFIG=
+MY_PATCHES=
+MY_OVERLAY=
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    -R|--revision)
+      shift; MY_REVISION="${1}"
+      ;;
+
+    -C|--config)
+      shift; MY_CONFIG="${1}"
+      ;;
+
+    -P|--patches)
+      shift; MY_PATCHES="${1}"
+      ;;
+
+    -O|--overlay)
+      shift; MY_OVERLAY="${1}"
+      ;;
+
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2
+      exit 1
+      ;;
+
+    *)
+      if [ -z "${MY_VERSION}" ]; then
+        MY_VERSION="${1}"
+      elif [ -z "${MY_FLAVOR}" ]; then
+        MY_FLAVOR="${1}"
+      else
+        echo 'ERROR: Too many arguments' >&2
+        exit 1
+      fi
+      ;;
+
+  esac
+  shift
+done
+# ... checks
+[ -z "${MY_VERSION}" ] && echo 'ERROR: Missing <version> argument' >&2 && exit 1
+[[ ${MY_VERSION} =~ ^[0-9]{1,}\.[0-9]{1,}$ ]]; [ $? -ne 0 ] && echo "ERROR: Invalid <version> argument (${MY_VERSION})" >&2 && exit 1
+[ -z "${MY_FLAVOR}" ] && echo 'ERROR: Missing <flavor> argument' >&2 && exit 1
+[[ ${MY_FLAVOR} =~ ^[a-z0-9]{2,}$ ]]; [ $? -ne 0 ] && echo "ERROR: Invalid <flavor> argument (${MY_FLAVOR})" >&2 && exit 1
+# ... defaults
+[ -z "${MY_REVISION}" ] && MY_REVISION="$(date +'%Y%m%da~custom')"
+[ -z "${MY_CONFIG}" ] && MY_CONFIG="./config-${MY_VERSION}-${MY_FLAVOR}"
+# ... checks (cont'd)
+[ ! -r "${MY_CONFIG}" ] && echo "ERROR: Missing/unreadable kernel configuration file (${MY_CONFIG})" >&2 && exit 1
+[ -n "${MY_PATCHES}" -a ! -r "${MY_PATCHES}" ] && echo "ERROR: Missing/unreadable kernel patches directory (${MY_PATCHES})" >&2 && exit 1
+[ -n "${MY_OVERLAY}" -a ! -r "${MY_OVERLAY}" ] && echo "ERROR: Missing/unreadable packaging overlay directory (${MY_OVERLAY})" >&2 && exit 1
+
+
+## Let's rock 'n roll!
+
+# Parameters
+MY_SOURCE_PKG="linux-source-${MY_VERSION}"
+MY_SOURCE_TAR="/usr/src/linux-source-${MY_VERSION}.tar.xz"
+MY_SOURCE_DIR="./linux-source-${MY_VERSION}"
+
+# Retrieve source package
+echo
+echo "INFO: Retrieving latest kernel source package (${MY_SOURCE_PKG})"
+sudo apt-get install "${MY_SOURCE_PKG}"
+[ ! -r "${MY_SOURCE_TAR}" ] && echo "ERROR: Missing/unreadable kernel source tarball (${MY_SOURCE_TAR})" >&2 && exit 1
+
+
+# Remove existing source directory
+if [ -e "${MY_SOURCE_DIR}" ]; then
+  echo
+  echo "INFO: Removing existing source directory (${MY_SOURCE_DIR})"
+  echo 'PRESS <RETURN> TO PROCESS, <CTRL+C> TO ABORT...'; read
+  rm -rf "${MY_SOURCE_DIR}"
+fi
+
+# Uncompress source tarball
+echo
+echo "INFO: Uncompressing kernel source tarball (${MY_SOURCE_TAR})"
+tar -xJf "${MY_SOURCE_TAR}"
+[ ! -d "${MY_SOURCE_DIR}" ] && echo "ERROR: Missing kernel source directory (${MY_SOURCE_DIR})" >&2 && exit 1
+
+# Copy kernel configuration
+echo
+echo "INFO: Copying kernel configuration file (${MY_CONFIG})"
+cp -v "${MY_CONFIG}" "${MY_SOURCE_DIR}/.config"
+
+# Switch to kernel directory
+MY_PWD="$(pwd)"
+pushd "${MY_SOURCE_DIR}" </dev/null
+[ $? -ne 0 ] && echo "ERROR: Failed to switch to kernel source directory (${MY_SOURCE_DIR})" >&2 && exit 1
+trap 'popd' EXIT
+
+# Apply kernel patches
+if [ -n "${MY_PATCHES}" ]; then
+  echo
+  echo "INFO: Applying kernel patches (${MY_PATCHES}/*.patch)"
+  [ "${MY_PATCHES:0:1}" != '/' ] && MY_PATCHES="${MY_PWD}/${MY_PATCHES}"
+  find "${MY_PATCHES}" -name '*.patch' | sort | while read patch; do
+    patch -p1 < "${patch}"
+  done
+fi
+
+# Make kernel configuration
+echo
+echo 'INFO: Making kernel configuration'
+echo 'INFO: > make oldconfig'
+make oldconfig
+
+# Clean-up kernel build tree
+echo
+echo 'INFO: Cleaning-up kernel build tree'
+echo 'INFO: > make-kpkg clean'
+sed -i 's/^\s*EXTRAVERSION\s*=.*$/EXTRAVERSION =/' Makefile
+make-kpkg clean
+
+# Build and package kernel
+echo
+echo 'INFO: Building and packaging kernel'
+[ -n "${MY_OVERLAY}" -a "${MY_OVERLAY:0:1}" != '/' ] && MY_OVERLAY="${MY_PWD}/${MY_OVERLAY}"
+MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} ${MY_OVERLAY:+--overlay-dir="${MY_OVERLAY}"} kernel_image"
+echo "INFO: > ${MY_CMD}"
+echo 'PRESS <RETURN> TO PROCESS, <CTRL+C> TO ABORT...'; read
+eval "${MY_CMD}"
+
+# Done
+echo
+echo 'INFO: Done'
+trap - EXIT
+popd
+ls -al linux-image-*.deb
+exit 0
+
