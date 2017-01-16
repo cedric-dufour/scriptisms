@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Usage
+
+## Usage
 function _help {
 cat >&2 << EOF
 USAGE: ${0##*/} <mode> [...]
@@ -39,6 +40,9 @@ AVAILABLE MODES:
 
   - ${0##*/} vnc [[<host>]:display>]
     > Starts the VNC viewer
+
+  - ${0##*/} shutdown <image-hd>
+    > Send gracefull shutdown command to QEMU monitor
 
   - ${0##*/} start|stop
     > Starts/stops KVM (load/unload kernel modules; REQUIRES SUDO PRIVILEGES)
@@ -84,7 +88,7 @@ case "${MY_MODE}" in
     MY_HOSTNAME="${1}"; shift
     MY_HD2="${1}"; shift
     MY_HD2_FORMAT="${MY_HD2##*.}"; [ -z "${MY_HD2_FORMAT}" -o "${MY_HD2_FORMAT}" == "${MY_HD2}" ] && MY_HD2_FORMAT='raw';
-    MY_OPTION_RESOURCE="-drive file=${MY_HD2},if=virtio,media=disk,format=${MY_HD2_FORMAT},index=1"
+    MY_OPTION_RESOURCE="-drive file=${MY_HD2},if=virtio,media=disk,format=${MY_HD2_FORMAT},index=1,serial=$(echo "${MY_HD2}" | md5sum | cut -d' ' -f1)"
     MY_OPTION_BOOT='-boot c'
     ;;
 
@@ -93,7 +97,7 @@ case "${MY_MODE}" in
     MY_HD="${1}"; shift
     MY_HOSTNAME="${1}"; shift
     MY_ISO="${1}"; shift
-    MY_OPTION_RESOURCE="-drive file=${MY_ISO},media=cdrom,index=2"
+    MY_OPTION_RESOURCE="-drive file=${MY_ISO},media=cdrom,index=2,serial=$(echo "${MY_ISO}" | md5sum | cut -d' ' -f1)"
     MY_OPTION_BOOT='-boot d'
     ;;
 
@@ -104,7 +108,7 @@ case "${MY_MODE}" in
     MY_HD2="${1}"; shift
     MY_HD2_FORMAT="${MY_HD2##*.}"; [ -z "${MY_HD2_FORMAT}" -o "${MY_HD2_FORMAT}" == "${MY_HD2}" ] && MY_HD2_FORMAT='raw';
     MY_ISO="${1}"; shift
-    MY_OPTION_RESOURCE="-drive file=${MY_HD2},if=virtio,media=disk,format=${MY_HD2_FORMAT},index=1 -drive file=${MY_ISO},media=cdrom,index=2"
+    MY_OPTION_RESOURCE="-drive file=${MY_HD2},if=virtio,media=disk,format=${MY_HD2_FORMAT},index=1,serial=$(echo "${MY_HD2}" | md5sum | cut -d' ' -f1) -drive file=${MY_ISO},media=cdrom,index=2,serial=$(echo "${MY_ISO}" | md5sum | cut -d' ' -f1)"
     MY_OPTION_BOOT='-boot d'
     ;;
 
@@ -114,7 +118,7 @@ case "${MY_MODE}" in
     MY_HOSTNAME="${1}"; shift
     MY_ISO="${1}"; shift
     MY_ISO2="${1}"; shift
-    MY_OPTION_RESOURCE="-drive file=${MY_ISO},media=cdrom,index=2 -drive file=${MY_ISO2},media=cdrom,index=3"
+    MY_OPTION_RESOURCE="-drive file=${MY_ISO},media=cdrom,index=2,serial=$(echo "${MY_ISO}" | md5sum | cut -d' ' -f1) -drive file=${MY_ISO2},media=cdrom,index=3,serial=$(echo "${MY_ISO2}" | md5sum | cut -d' ' -f1)"
     MY_OPTION_BOOT='-boot d'
     ;;
 
@@ -122,12 +126,10 @@ case "${MY_MODE}" in
     [ $# -lt 2 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
     MY_HD="${1}"; shift
     MY_HOSTNAME="${1}"; shift
-    if [ -e '/usr/share/kvm/pxe-virtio.bin' ]; then
-      MY_OPTION_RESOURCE='-option-rom /usr/share/kvm/pxe-virtio.bin'
-    elif [ -e '/usr/share/qemu/pxe-virtio.rom' ]; then
-      MY_OPTION_RESOURCE='-option-rom /usr/share/qemu/pxe-virtio.rom'
+    if [ -e '/usr/lib/ipxe/qemu/pxe-virtio.rom' ]; then
+      MY_OPTION_RESOURCE='-option-rom /usr/lib/ipxe/qemu/pxe-virtio.rom'
     else
-      echo "ERROR: Missing 'pxe-virtio.bin' file" && exit 1
+      echo "ERROR: Missing 'pxe-virtio.rom' file" && exit 1
     fi
     MY_OPTION_BOOT='-boot n -no-reboot'
     ;;
@@ -137,13 +139,32 @@ case "${MY_MODE}" in
     exit $?
     ;;
 
-  'start')
-    sudo start qemu-kvm
+  'shutdown')
+    [ $# -lt 1 ] && echo "ERROR: Missing argument(s)" >&2 && exit 1;
+    MY_HD="${1}"; shift
+    MY_QEMU_MONITOR="${MY_HD%.*}.monitor.sock"
+    [ ! -e "${MY_QEMU_MONITOR}" ] && echo "ERROR: Missing QEMU monitor socket (${MY_QEMU_MONITOR})" >&2 && exit 1;
+    echo system_powerdown | socat - UNIX-CONNECT:"${MY_QEMU_MONITOR}"
     exit $?
     ;;
 
+  'start')
+    if [ -e /etc/init.d/vboxdrv ]; then
+      sudo /etc/init.d/vboxdrv stop || exit $?
+    fi
+    if [ -e /etc/init.d/qemu-kvm ]; then
+      sudo /etc/init.d/qemu-kvm start || exit $?
+    elif [ -e /etc/init.d/qemu-system-x86 ]; then
+      sudo /etc/init.d/qemu-system-x86 start || exit $?
+    fi
+    ;;
+
   'stop')
-    sudo stop qemu-kvm
+    if [ -e /etc/init.d/qemu-kvm ]; then
+      sudo /etc/init.d/qemu-kvm stop || exit $?
+    elif [ -e /etc/init.d/qemu-system-x86 ]; then
+      sudo /etc/init.d/qemu-system-x86 stop || exit $?
+    fi
     exit $?
     ;;
 
@@ -158,9 +179,10 @@ case "${MY_MODE}" in
 
 esac
 
-# KVM parameters
+
+## KVM parameters
 MY_HD_FORMAT="${MY_HD##*.}"; [ -z "${MY_HD_FORMAT}" -o "${MY_HD_FORMAT}" == "${MY_HD}" ] && MY_HD_FORMAT='raw';
-MY_KVM="kvm -drive file=${MY_HD},if=virtio,media=disk,format=${MY_HD_FORMAT},index=0,boot=on"
+MY_KVM="kvm -drive file=${MY_HD},if=virtio,media=disk,format=${MY_HD_FORMAT},index=0,serial=$(echo "${MY_HD}" | md5sum | cut -d' ' -f1)"
 
 # Network settings
 if [ -n "${MY_HOSTNAME}" ]; then
@@ -204,7 +226,7 @@ if [ -n "${MY_HOSTNAME}" ]; then
   [ -z "${MY_INTERFACE}" -a "${MY_MODE}" != 'info' ] && echo "ERROR: No available interface among configured ones (${MY_INTERFACES})" >&2 && exit 1;
 
   # UUID
-  MY_UUID="00000000-0000-0000-0000-${MY_MACADDRESS//:/}"
+  MY_UUID="4B564D20-4845-4C50-4552-${MY_MACADDRESS//:/}"  # KVM -HE-LP-ER-...
 
   # Info mode?
   if [ "${MY_MODE}" == 'info' ]; then
@@ -223,28 +245,35 @@ EOF
   MY_KVM="${MY_KVM} -uuid ${MY_UUID} -net nic,model=virtio,macaddr=${MY_MACADDRESS} -net tap,ifname=${MY_INTERFACE},script=no,downscript=no"
 fi
 
+# QEMU monitor socket
+MY_QEMU_MONITOR="${MY_HD%.*}.monitor.sock"
+
 # Options
 MY_OPTIONS=''
 MY_OPTION_MEMORY='-m 1024'
 MY_OPTION_RTC='-rtc base=utc'
 MY_OPTION_VNC='-vnc localhost:0'
+MY_OPTION_MONITOR="-monitor unix:'${MY_QEMU_MONITOR}',server,nowait"
 while [ -n "${1}" ]; do
   case "${1}" in
     '-boot') MY_OPTION_BOOT='';;
     '-m') MY_OPTION_MEMORY='';;
     '-rtc') MY_OPTION_RTC='';;
     '-vnc') MY_OPTION_VNC='';;
+    '-monitor') MY_OPTION_MONITOR='';;
   esac
   MY_OPTIONS="${MY_OPTIONS} ${1}"
   shift
 done
-MY_OPTIONS="${MY_OPTION_RESOURCE} ${MY_OPTION_BOOT} ${MY_OPTION_MEMORY} ${MY_OPTION_RTC} ${MY_OPTION_VNC} ${MY_OPTIONS}"
+MY_OPTIONS="${MY_OPTION_RESOURCE} ${MY_OPTION_BOOT} ${MY_OPTION_MEMORY} ${MY_OPTION_RTC} ${MY_OPTION_VNC} ${MY_OPTION_MONITOR} ${MY_OPTIONS}"
 MY_KVM="${MY_KVM} ${MY_OPTIONS}"
 
-# KVM start
+
+## KVM start
 [ -z "$(lsmod | fgrep kvm)" ] && echo "ERROR: KVM kernel modules are not loaded" >&2 &&  exit 1
 echo "${MY_KVM}" >&2
 echo 'PRESS <ENTER> TO CONTINUE, <CTRL+C> To ABORT...' >&2
 read
+trap "rm -f '${MY_QEMU_MONITOR}'" EXIT
 eval "${MY_KVM}"
 
