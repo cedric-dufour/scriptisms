@@ -10,17 +10,23 @@ SYNOPSIS:
 
 OPTIONS:
   -R, --revision <string>
-  Revision number (default: $(date +'%Y%m%da~custom'))
+    Revision number (default: $(date +'%Y%m%da~custom'))
 
   -C, --config <path-file>
-  Path to kernel configuration file (default: ./config-<version>-<flavor>)
+    Path to kernel configuration file (default: ./config-<version>-<flavor>)
 
   -P, --patches <path-dir>
-  Path to kernel patches directory (default: none)
-  ('*.patch' files shall be processed according to standard 'sort' order)
+    Path to kernel patches directory (default: none)
+    ('*.patch' files shall be processed according to standard 'sort' order)
 
   -O, --overlay <path-dir>
-  Path to packaging overlay directory (default: none)
+    Path to packaging overlay directory (default: none)
+
+  -A, --apt
+    Install/update the 'linux-source-<version>' package before proceeding
+
+  -j, --concurrency <integer>
+    Concurrency level (default: CPU cores quantity)
 EOF
 
 # Arguments
@@ -30,6 +36,8 @@ MY_REVISION=
 MY_CONFIG=
 MY_PATCHES=
 MY_OVERLAY=
+MY_APT=
+MY_CONCURRENCY=$(fgrep 'core id' /proc/cpuinfo | sort -u | wc -l)
 while [ -n "${1}" ]; do
   case "${1}" in
 
@@ -47,6 +55,14 @@ while [ -n "${1}" ]; do
 
     -O|--overlay)
       shift; MY_OVERLAY="${1}"
+      ;;
+
+    -A|--apt)
+      MY_APT='yes'
+      ;;
+
+    -j|--concurrency)
+      shift; MY_CONCURRENCY="${1}"
       ;;
 
     -*)
@@ -91,8 +107,12 @@ MY_SOURCE_DIR="./linux-source-${MY_VERSION}"
 
 # Retrieve source package
 echo
-echo "INFO: Retrieving latest kernel source package (${MY_SOURCE_PKG})"
-sudo apt-get install "${MY_SOURCE_PKG}"
+if [ -n "${MY_APT}" ]; then
+  echo "INFO: Retrieving latest kernel source package (${MY_SOURCE_PKG})"
+  sudo apt-get install "${MY_SOURCE_PKG}"
+else
+  echo "INFO: Using current kernel source package (${MY_SOURCE_PKG})"
+fi
 [ ! -r "${MY_SOURCE_TAR}" ] && echo "ERROR: Missing/unreadable kernel source tarball (${MY_SOURCE_TAR})" >&2 && exit 1
 
 
@@ -121,6 +141,17 @@ pushd "${MY_SOURCE_DIR}" </dev/null
 [ $? -ne 0 ] && echo "ERROR: Failed to switch to kernel source directory (${MY_SOURCE_DIR})" >&2 && exit 1
 trap 'popd' EXIT
 
+# Clean-up, retrieve and export kernel version
+echo
+echo 'INFO: Retrieving kernel version'
+echo 'INFO: > make kernelversion'
+sed -i 's/^\s*EXTRAVERSION\s*=.*$/EXTRAVERSION =/' Makefile
+MY_KERNELVERSION="$(make kernelversion)"
+echo "INFO: > export KERNELVERSION=${MY_KERNELVERSION}"
+export KERNELVERSION=${MY_KERNELVERSION}
+echo "INFO: > export KERNELFLAVOR=${MY_FLAVOR}"
+export KERNELFLAVOR=${MY_FLAVOR}
+
 # Apply kernel patches
 if [ -n "${MY_PATCHES}" ]; then
   echo
@@ -130,6 +161,12 @@ if [ -n "${MY_PATCHES}" ]; then
     patch -p1 < "${patch}"
   done
 fi
+
+# Setting concurrency level
+echo
+echo 'INFO: Setting concurrency level'
+echo "INFO: > export CONCURRENCY_LEVEL=${MY_CONCURRENCY}"
+export CONCURRENCY_LEVEL=${MY_CONCURRENCY}
 
 # Make kernel configuration
 echo
@@ -141,7 +178,6 @@ make oldconfig
 echo
 echo 'INFO: Cleaning-up kernel build tree'
 echo 'INFO: > make-kpkg clean'
-sed -i 's/^\s*EXTRAVERSION\s*=.*$/EXTRAVERSION =/' Makefile
 make-kpkg clean
 
 # Build and package kernel

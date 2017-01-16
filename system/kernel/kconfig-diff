@@ -3,37 +3,86 @@
 
 ## Usage
 [ $# -lt 2 -o "${0##*-}" == 'help' ] && cat << EOF && exit 1
-USAGE: ${0##*/} <oldconfig> <newconfig>
+USAGE: ${0##*/} [options] <kconfig-old> <kconfig-new>
 
 SYNOPSIS:
   This script extracts the differences between the two given kernel confi-
   guration files and format them to be used with:
 
     cd <kernel-source>
-    ./scripts/kconfig/merge_config.sh ...
+    ./scripts/kconfig/merge_config.sh -m <kconfig-base> <kconfig-diff>
 
   It is recommended to verify the resuting configuration after merging:
 
     make oldconfig
+
+OPTIONS:
+  --skip-orphaned
+    Do not output orphaned config parameters as "not set" (in ORPHANED section)
 EOF
 
 # Arguments
-KCONFIG_OLD="${1}"
-KCONFIG_NEW="${2}"
+KCONFIG_OLD=
+KCONFIG_NEW=
+KCONFIG_SKIPORPHANED=
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    --skip-orphaned)
+      KCONFIG_SKIPORPHANED='yes'
+      ;;
+
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+
+    *)
+      if [ -n "${KCONFIG_NEW}" ]; then
+        echo "ERROR: Too many arguments" >&2 && exit 1
+      elif [ -n "${KCONFIG_OLD}" ]; then
+        KCONFIG_NEW="${1}"
+      else
+        KCONFIG_OLD="${1}"
+      fi
+      ;;
+
+  esac
+  shift
+done
+# ... checks
+[ ! -r "${KCONFIG_OLD}" ] && echo "ERROR: Invalid/unreadable file (${KCONFIG_OLD})" >&2 && exit 1
+[ ! -r "${KCONFIG_NEW}" ] && echo "ERROR: Invalid/unreadable file (${KCONFIG_NEW})" >&2 && exit 1
 
 
 ## Diff
-kconfig_oldline=''
-kconfig_oldparam=''
-diff <(fgrep CONFIG_ "${KCONFIG_OLD}") <(fgrep CONFIG_ "${KCONFIG_NEW}") \
-| grep '^[<>]' \
-| sed 's/^< CONFIG_\([^=]*\)=[ym]$/# CONFIG_\1 is not set/;/^< # CONFIG_/d;/^< CONFIG_/d;s/^> //;/^[<>]\s*$/d' \
-| while read kconfig_newline; do
-    if [[ ${kconfig_newline} =~ (CONFIG_[_A-Z0-9]*) ]]; then
-      kconfig_newparam="${BASH_REMATCH[1]}"
-      [ "${kconfig_newparam}" != "${kconfig_oldparam}" -a -n "${kconfig_oldline}" ] && echo "${kconfig_oldline}"
-      kconfig_oldline="${kconfig_newline}"
-      kconfig_oldparam="${kconfig_newparam}"
-    fi
+
+# Old config
+declare -A KCONFIG_OLD_VALUE
+IFS=$'\n'; for kconfig in $(fgrep CONFIG_ "${KCONFIG_OLD}" | sed 's/^\s*#\s*\(CONFIG_[_A-Z0-9]*\)\s.*$/\1=#NOT_SET#/'); do
+  KCONFIG_OLD_VALUE["${kconfig%=*}"]="${kconfig#*=}"
+done
+
+# New config
+declare -A KCONFIG_NEW_VALUE
+IFS=$'\n'; for kconfig in $(fgrep CONFIG_ "${KCONFIG_NEW}" | sed 's/^\s*#\s*\(CONFIG_[_A-Z0-9]*\)\s.*$/\1=#NOT_SET#/'); do
+  KCONFIG_NEW_VALUE["${kconfig%=*}"]="${kconfig#*=}"
+done
+
+# Diff
+for kconfig in $(fgrep CONFIG_ "${KCONFIG_NEW}" | sed 's/\(^\|[^_A-Z0-9]*\)\(CONFIG_\)/\2/;s/[ =].*$//'); do
+  value_old="${KCONFIG_OLD_VALUE[${kconfig}]}"
+  value_new="${KCONFIG_NEW_VALUE[${kconfig}]}"
+  if [ -z "${value_old}" -o "${value_new}" != "${value_old}" ]; then
+    [ "${value_new}" == '#NOT_SET#' ] && echo "# ${kconfig} is not set" || echo "${kconfig}=${value_new}"
+  fi
+done
+[ -n "${KCONFIG_SKIPORPHANED}" ] && exit
+cat << EOF
+#
+# ORPHANED
+#
+EOF
+for kconfig in $(fgrep CONFIG_ "${KCONFIG_OLD}" | sed 's/\(^\|[^_A-Z0-9]*\)\(CONFIG_\)/\2/;s/[ =].*$//'); do
+  [ -z "${KCONFIG_NEW_VALUE[${kconfig}]}" ] && echo "# ${kconfig} is not set"
 done
 
