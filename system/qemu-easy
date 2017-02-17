@@ -1,0 +1,500 @@
+#!/bin/bash
+
+
+## Parameters
+DFLT_PATH_PXE='/usr/lib/ipxe/qemu/pxe-virtio.rom'
+DFLT_PATH_EFI='/usr/share/OVMF/OVMF_CODE.fd'
+DFLT_PATH_EFIVARS='/usr/share/OVMF/OVMF_VARS.fd'
+DFLT_QEMU_CMD='qemu-system-x86_64 -enable-kvm'
+DFLT_QEMU_RAM='1024'
+DFLT_QEMU_RTC='base=utc'
+DFLT_QEMU_VNC='localhost:0'
+
+
+## Usage
+function _help {
+cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  An easy wrapper for everyday-use of QEMU/KVM and local/test purposes.
+
+  Network settings - when applicable - are automatically adjusted to match
+  the given hostname, according to the corresponding IPv4 address and the
+  '~/.qemu/network.cfg' file, formatted as:
+    <ip-regexp>:<tap-if>[,<tap-if>,...]
+
+COMMAND: info
+  ${0##*/} info <hostname|ip-address>
+    > Display the virtual machine information (IP, MAC, UUID, etc.)
+
+COMMAND: start
+  ${0##*/} create [+<options>] [-<qemu-options>]
+    > Create (start) the given virtual machine
+
+  OPTIONS:
+    +hd <hd-image>
+      [REQUIRED] Add primary HD image with corresponding RAW/QCOW2 image
+
+    +hd2 <hd-image>
+      Add secondary HD image with corresponding RAW/QCOW2 image
+
+    +cd <iso-image>
+      Add primary CD/DVD drive with corresponding ISO image
+
+    +cd2 <iso-image>
+      Add secondary CD/DVD drive with corresponding ISO image
+
+    +net <hostname|ip-address>
+      Add network interface for corresponding host name
+      (which MUST match a valid IP address and network; see ~/.qemu/network.cfg)
+
+    +boot {hd|cd|net}
+      Boot device
+      Default: as per QEMU or OVMF/UEFI default
+
+    +uefi
+      Boot via Unified Extensible Firmware Interface (UEFI) instead of legacy BIOS
+
+    +blkdev <device-type>, +netdev <device-type>
+      Emulate the block or network subsystem using the given device type
+      Default: virtio-*
+
+    +qemu <command>
+      Actual QEMU command to execute
+      Default: ${DFLT_QEMU_CMD}
+
+    +monitor
+      Set the QEMU monitor on the foreground (standard input/output) instead of
+      virtual machine specific file/socket
+
+  QEMU OPTIONS (OVERRIDE):
+    -boot {order=...|once=...}
+      Boot devices/order
+      Default: depends on '+boot ...'
+
+    -m <kilobytes>
+      Assigned memory (RAM)
+      Default: ${DFLT_QEMU_RAM}
+
+    -rtc {base=utc|localtime|...}
+      Time reference for emulated Real Time Clock (RTC)
+      Default: ${DFLT_QEMU_RTC}
+
+    -vnc [<host>]:<display>
+      VNC binding address and display
+      Default: ${DFLT_QEMU_VNC}
+
+COMMAND: vnc
+  ${0##*/} vnc [[<host>]:<display>]
+    > Launch the VNC viewer ('gnomeviewer' unless \${VNCVIEWER} is defined)
+
+COMMAND: stop, reset, kill, suspend, resume
+  ${0##*/} {stop|reset|kill|suspend|resume} <primary-hd-image>
+    > Gracefully shutdown, reset or focefully kill the virtual machine,
+      or suspend/resume the emulation (via the QEMU monitor file/socket)
+
+COMMAND: monitor
+  ${0##*/} monitor <primary-hd-image> <command> ...
+    > Send given command via the QEMU monitor file/socket
+
+COMMAND: modprobe, rmmod
+  ${0##*/} {modprobe|rmmod}
+    > Load/unload the KVM kernel modules abd unload/load conflicting modules,
+      e.g. VirtualBox's (REQUIRES SUDO PRIVILEGES)
+
+EOF
+}
+[ $# -lt 1 ] && _help && exit 1
+
+
+## Arguments
+MY_COMMAND=
+MY_COMMAND_ARG=
+MY_HD1=
+MY_HD2=
+MY_CD1=
+MY_CD2=
+MY_NET=
+MY_BOOT=
+MY_UEFI=
+MY_DEV_BLK=
+MY_DEV_NET=
+MY_RAM=
+MY_RTC=
+MY_VNC=
+MY_QEMU=
+MY_MONITOR=
+QEMU_RAM=
+QEMU_RTC=
+QEMU_VNC=
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    '+hd'|'+hd1')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_HD1="${1}"
+      ;;
+
+    '+hd2')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_HD2="${1}"
+      ;;
+
+    '+cd'|'+cd1')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_CD1="${1}"
+      ;;
+
+    '+cd2')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_CD2="${1}"
+      ;;
+
+    '+net')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_NET="${1}"
+      ;;
+
+    '+boot')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_BOOT="${1}"
+      ;;
+
+    '+uefi')
+      MY_UEFI='yes'
+      ;;
+
+    '+blkdev')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_DEV_BLK="${1}"
+      ;;
+
+    '+netdev')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_DEV_NET="${1}"
+      ;;
+
+    '+qemu')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_QEMU="${1}"
+      ;;
+
+    '+monitor')
+      MY_MONITOR='yes'
+      ;;
+
+    '+help')
+      _help 2>&1 | less
+      exit 1
+      ;;
+
+    '+'*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+
+    '-m')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_RAM="${1}"
+      ;;
+
+    '-rtc')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_RTC="${1}"
+      ;;
+
+    '-vnc')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_VNC="${1}"
+      ;;
+
+    '-help')
+      man qemu-system
+      exit 1
+      ;;
+
+    '-'*)
+      QEMU_OPTS="${QEMU_OPTS}${QEMU_OPTS:+|}${1}"
+      if [ -n "${2}" -a "${2:0:1}" != '-' -a "${2:0:1}" != '+' ]; then
+        QEMU_OPTS="${QEMU_OPTS} ${2}"
+        shift
+      fi
+      ;;
+
+    *)
+      if [ -z "${MY_COMMAND}" ]; then
+        MY_COMMAND="${1}"
+      else
+        case "${MY_COMMAND}" in
+          'info') MY_NET="${1}";;
+          'vnc') MY_VNC="${1}";;
+          'stop'|'shutdown'|'reset'|'kill'|'destroy'|'suspend'|'pause'|'resume'|'continue'|'cont') MY_HD1="${1}";;
+          'monitor') MY_HD1="${1}"; shift; break;;
+        esac
+      fi
+      ;;
+
+  esac
+  shift
+done
+
+
+## Validation
+
+# Primary
+[ -n "${MY_HD1}" -a ! -r "${MY_HD1}" ] && echo "ERROR: Invalid/unreadable primary HD image path (${MY_HD1})" >&2 && exit 1
+[ -n "${MY_HD2}" -a ! -r "${MY_HD2}" ] && echo "ERROR: Invalid/unreadable secondary HD image path (${MY_HD2})" >&2 && exit 1
+[ -n "${MY_CD1}" -a ! -r "${MY_CD1}" ] && echo "ERROR: Invalid/unreadable primary CD/DVD ISO image path (${MY_CD1})" >&2 && exit 1
+[ -n "${MY_CD2}" -a ! -r "${MY_CD2}" ] && echo "ERROR: Invalid/unreadable secondary CD/DVD ISO image path (${MY_CD2})" >&2 && exit 1
+
+# Extended
+
+# ... VM path/name
+MY_PATH_ROOT="$(dirname "${MY_HD1}")"
+MY_FILE_PREFIX="$(basename "${MY_HD1%.*}")"
+MY_PATH_MONITOR="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.monitor.sock"
+MY_PATH_EFIVARS="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.efivars.raw"
+
+# ... boot mode
+MY_BOOT_HD1=
+MY_BOOT_CD1=
+MY_BOOT_NET=
+QEMU_BOOT=
+case "${MY_BOOT}" in
+  '') ;;
+  'hd'|'hd1') MY_BOOT_HD1='yes'; QEMU_BOOT='-boot order=c';;
+  'cd'|'cd1') MY_BOOT_CD1='yes'; QEMU_BOOT='-boot order=d';;
+  'net'|'pxe') MY_BOOT_NET='yes'; QEMU_BOOT="-boot order=n -option-rom '${DFLT_PATH_PXE}'";;
+  *) echo "ERROR: Invalid boot device (${MY_BOOT})" >&2 && exit 1;;
+esac
+
+# ... network
+MY_FQHN=
+MY_IPV4=
+MY_MAC=
+MY_IFACES=
+MY_UUID="51454D55-4845-4C50-4552-$(echo "${MY_HD1}" | md5sum | sed 's/^\(............\).*$/\1/')"  # QEMU-HE-LP-ER-...
+if [ -n "${MY_NET}" ]; then
+  # IP address and FQHN
+  if [ -n "$(echo "${MY_NET}" | egrep '^[0-9]{2,3}(\.[0-9]{1,3}){3}$')" ]; then
+    MY_IPV4="${MY_NET}"
+  else
+    MY_HOST="$(getent ahosts ${MY_NET} | egrep '^[0-9]{2,3}(\.[0-9]{1,3}){3}\s{1,}STREAM'| head -n 1)"
+    [ -z "${MY_HOST}" ] && echo "ERROR: No matching host/IP entry for the given hostname (${MY_NET})" >&2 && exit 1
+    MY_IPV4="$(echo "${MY_HOST}" | awk '{print $1}')"
+    [ -z "$(echo "${MY_IPV4}" | egrep '^[0-9]{2,3}(\.[0-9]{1,3}){3}$')" ] && echo "ERROR: Invalid IPv4 address (${MY_IPV4})" >&2 && exit 1
+  fi
+  MY_FQHN="$(getent ahosts ${MY_NET} | egrep 'STREAM\s{1,}.{1,}$'| head -n 1 | awk '{print $3}')"
+  [ -z "$(echo "${MY_FQHN}" | egrep '^([-_a-z0-9]{1,}\.){2,}[a-z]{2,4}$')" ] && echo "WARNING: Invalid fully-qualified host name (${MY_FQHN})" >&2
+  MY_IPV4_A=${MY_IPV4%%.*}; MY_IPV4=${MY_IPV4#*.}
+  MY_IPV4_B=${MY_IPV4%%.*}; MY_IPV4=${MY_IPV4#*.}
+  MY_IPV4_C=${MY_IPV4%%.*}; MY_IPV4=${MY_IPV4#*.}
+  MY_IPV4_D=${MY_IPV4%%.*}; MY_IPV4=${MY_IPV4_A}.${MY_IPV4_B}.${MY_IPV4_C}.${MY_IPV4_D}
+
+  # MAC address
+  MY_MAC="$(printf '02:00:%.2X:%.2X:%.2X:%.2X' ${MY_IPV4_A} ${MY_IPV4_B} ${MY_IPV4_C} ${MY_IPV4_D})"
+  [ -z "$(echo "${MY_MAC}" | egrep '^[A-F0-9]{2}(:[A-F0-9]{2}){5}$')" ] && echo "ERROR: Invalid MAC address (${MY_MAC})" >&2 && exit 1
+
+  # Network interface
+  if [ -r ~/.qemu/network.cfg ]; then
+    for regexp_ifaces in $(sed 's/#.*//g;s/  *$//' ~/.qemu/network.cfg | grep -v '^$'); do
+      regexp=${regexp_ifaces%%:*}; ifaces=${regexp_ifaces##*:}
+      [ -n "$(echo ${MY_IPV4} | grep "^${regexp//./\\.}")" ] && MY_IFACES=${ifaces} && break
+    done
+  else
+    echo "WARNING: Missing/unreadable network configuration file (~/.qemu/network.cfg)" >&2
+  fi
+
+  # UUID
+  MY_UUID="${MY_UUID:0:24}${MY_MAC//:/}"
+fi
+
+
+## Command
+case "${MY_COMMAND}" in
+
+  'info')
+    [ -z "${MY_NET}" ] && echo 'ERROR: Missing argument (<hostname>)' >&2 && exit 1
+    cat << EOF
+HOST INFORMATION:
+ - host name: ..... ${MY_FQHN}
+ - IPv4 address: .. ${MY_IPV4}
+ - MAC address: ... ${MY_MAC}
+ - interfaces: .... ${MY_IFACES}
+ - UUID: .......... ${MY_UUID}
+EOF
+    exit 0
+    ;;
+
+  'start'|'run'|'create')
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <hd-image>)' >&2 && exit 1
+
+    # QEMU command
+    QEMU_CMD="${MY_QEMU:-${DFLT_QEMU_CMD}}"
+
+    # ... UUID
+    QEMU_CMD="${QEMU_CMD}|-uuid ${MY_UUID}"
+
+    # ... monitor
+    if [ -n "${MY_MONITOR}" ]; then
+      QEMU_CMD="${QEMU_CMD}|-monitor stdio"
+    else
+      QEMU_CMD="${QEMU_CMD}|-monitor unix:'${MY_PATH_MONITOR}',server,nowait"
+    fi
+
+    # ... boot
+    if [ -z "${MY_UEFI}" -a -n "${QEMU_BOOT}" ]; then
+      QEMU_CMD="${QEMU_CMD}|${QEMU_BOOT}"
+    fi
+
+    # ... UEFI
+    if [ -n "${MY_UEFI}" ]; then
+      QEMU_CMD="${QEMU_CMD}|-drive file='${DFLT_PATH_EFI}',if=pflash,format=raw,readonly"
+      QEMU_CMD="${QEMU_CMD}|-drive file='${MY_PATH_EFIVARS}',if=pflash,format=raw"
+    fi
+
+    # ... primary HD
+    MY_HD1_FORMAT="${MY_HD1##*.}"; [ -z "${MY_HD1_FORMAT}" -o "${MY_HD1_FORMAT}" == "${MY_HD1}" ] && MY_HD1_FORMAT='raw';
+    QEMU_CMD="${QEMU_CMD}|-drive file='${MY_HD1}',id=hd1,if=none,format=${MY_HD1_FORMAT} -device ${MY_DEV_BLK:-virtio-blk-pci},drive=hd1,serial=$(echo "${MY_HD1}" | md5sum | cut -d' ' -f1)${MY_BOOT_HD1:+,bootindex=0}"
+
+    # ... secondary HD
+    if [ -n "${MY_HD2}" ]; then
+      MY_HD2_FORMAT="${MY_HD2##*.}"; [ -z "${MY_HD2_FORMAT}" -o "${MY_HD2_FORMAT}" == "${MY_HD2}" ] && MY_HD2_FORMAT='raw';
+      QEMU_CMD="${QEMU_CMD}|-drive file='${MY_HD2}',id=hd2,if=none,format=${MY_HD2_FORMAT} -device ${MY_DEV_BLK:-virtio-blk-pci},drive=hd2,serial=$(echo "${MY_HD2}" | md5sum | cut -d' ' -f1)"
+    fi
+
+    # ... primary CD
+    if [ -n "${MY_CD1}" ]; then
+      QEMU_CMD="${QEMU_CMD}|-drive file='${MY_CD1}',id=cd1,if=none,format=raw,readonly -device ide-cd,drive=cd1,serial=$(echo "${MY_CD1}" | md5sum | cut -d' ' -f1)${MY_BOOT_CD1:+,bootindex=0}"
+    fi
+
+    # ... secondary CD
+    if [ -n "${MY_CD2}" ]; then
+      QEMU_CMD="${QEMU_CMD}|-drive file='${MY_CD2}',id=cd2,if=none,format=raw,readonly -device ide-cd,drive=cd2,serial=$(echo "${MY_CD2}" | md5sum | cut -d' ' -f1)"
+    fi
+
+    # ... network
+    if [ -n "${MY_NET}" ]; then
+      [ -z "${MY_IFACES}" ] && echo "ERROR: No network/interfaces match the given hostname/IP address (${MY_IPV4})" >&2 && exit 1
+      MY_IFACE=
+      for iface in $(echo ${MY_IFACES} | tr ',' '\n'); do
+        [ -z "$(pgrep -f "ifname=${iface}")" ] && MY_IFACE=${iface} && break
+      done
+      [ -z "${MY_IFACE}" ] && echo "ERROR: No interface is available among the provisioned one (${MY_IFACES})" >&2 && exit 1
+      QEMU_CMD="${QEMU_CMD}|-netdev tap,ifname=${MY_IFACE},id=${MY_IFACE},script=no,downscript=no -device ${MY_DEV_NET:-virtio-net-pci},netdev=${MY_IFACE},mac=${MY_MAC}"
+      if [ -n "${MY_BOOT_NET}" ]; then
+        # WARNING: When booting UEFI, make sure to use OVMF internal network stack rather than iPXE's (buggy)
+        [ -n "${MY_UEFI}" ] && QEMU_CMD="${QEMU_CMD},romfile="
+        QEMU_CMD="${QEMU_CMD},bootindex=0"
+      fi
+    fi
+
+    # ... memory
+    QEMU_CMD="${QEMU_CMD}|-m ${MY_RAM:-${DFLT_QEMU_RAM}}"
+
+    # ... RTC
+    QEMU_CMD="${QEMU_CMD}|-rtc ${MY_RTC:-${DFLT_QEMU_RTC}}"
+
+    # ... VNC
+    QEMU_CMD="${QEMU_CMD}|-vnc ${MY_VNC:-${DFLT_QEMU_VNC}}"
+
+    # ... other options
+    QEMU_CMD="${QEMU_CMD}|${QEMU_OPTS}"
+
+    # Check
+    [ -z "$(lsmod | fgrep kvm)" ] && echo "WARNING: KVM kernel modules are not loaded" >&2
+    echo "${QEMU_CMD}" | sed 's/|/ \\\n /g' >&2
+    echo 'PRESS <ENTER> TO CONTINUE, <CTRL+C> To ABORT...' >&2
+    read
+
+    # GO!
+    if [ -n "${MY_UEFI}" -a ! -e "${MY_PATH_EFIVARS}" ]; then
+      echo 'INFO: Initializing EFI variables storage' >&2
+      touch "${MY_PATH_EFIVARS}"
+      chmod 600 "${MY_PATH_EFIVARS}"
+      cp -v "${DFLT_PATH_EFIVARS}" "${MY_PATH_EFIVARS}"
+    fi
+    if [ -z "${MY_MONITOR}" ]; then
+      trap "rm -f '${MY_PATH_MONITOR}'" EXIT
+      touch "${MY_PATH_MONITOR}"
+      chmod 600 "${MY_PATH_MONITOR}"
+    fi
+    echo 'INFO: Running the virtual machine...' >&2
+    echo " <->  ${0##*/} vnc ${MY_VNC:-${DFLT_QEMU_VNC}}" >&2
+    eval "${QEMU_CMD//|/ }"
+    ;;
+
+  'vnc')
+    vnc="${MY_VNC:-${DFLT_QEMU_VNC}}"
+    if [[ ! "${vnc}" =~ : ]]; then
+      vnc_host="${vnc}"
+      vnc_port=
+    else
+      vnc_host="${vnc%:*}"
+      vnc_port="${vnc#*:}"
+    fi
+    ${VNCVIEWER:-gvncviewer} ${vnc_host:-localhost}:${vnc_port:-0}
+    exit $?
+    ;;
+
+  'stop'|'shutdown'|'reset'|'kill'|'destroy'|'suspend'|'pause'|'resume'|'continue'|'cont')
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (<primary-hd-image>)' >&2 && exit 1
+    [ ! -e "${MY_PATH_MONITOR}" ] && echo "ERROR: Missing QEMU monitor socket (${MY_PATH_MONITOR})" >&2 && exit 1
+    case "${MY_COMMAND}" in
+      'stop'|'shutdown') QEMU_MONITOR_CMD='system_powerdown';;
+      'reset') QEMU_MONITOR_CMD='system_reset';;
+      'kill'|'destroy') QEMU_MONITOR_CMD='quit';;
+      'suspend'|'pause') QEMU_MONITOR_CMD='stop';;
+      'resume'|'continue'|'cont') QEMU_MONITOR_CMD='cont';;
+    esac
+    echo "echo ${QEMU_MONITOR_CMD} | socat - UNIX-CONNECT:'${MY_PATH_MONITOR}'"
+    echo ${QEMU_MONITOR_CMD} | socat - UNIX-CONNECT:"${MY_PATH_MONITOR}"
+    exit $?
+    ;;
+
+  'monitor')
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (<primary-hd-image>)' >&2 && exit 1
+    [ ! -e "${MY_PATH_MONITOR}" ] && echo "ERROR: Missing QEMU monitor socket (${MY_PATH_MONITOR})" >&2 && exit 1
+    echo "echo $@ | socat - UNIX-CONNECT:'${MY_PATH_MONITOR}'"
+    echo "$@" | socat - UNIX-CONNECT:"${MY_PATH_MONITOR}"
+    exit $?
+    ;;
+
+  'modprobe')
+    if [ -e /etc/init.d/vboxdrv ]; then
+      sudo /etc/init.d/vboxdrv stop || exit $?
+    fi
+    if [ -e /etc/init.d/qemu-kvm ]; then
+      sudo /etc/init.d/qemu-kvm start || exit $?
+    elif [ -e /etc/init.d/qemu-system-x86 ]; then
+      sudo /etc/init.d/qemu-system-x86 start || exit $?
+    fi
+    ;;
+
+  'rmmod')
+    if [ -e /etc/init.d/qemu-kvm ]; then
+      sudo /etc/init.d/qemu-kvm stop || exit $?
+    elif [ -e /etc/init.d/qemu-system-x86 ]; then
+      sudo /etc/init.d/qemu-system-x86 stop || exit $?
+    fi
+    exit $?
+    ;;
+
+  *)
+    echo "ERROR: Invalid command (${MY_COMMAND})" >&2 && exit 1
+    ;;
+
+esac
+
