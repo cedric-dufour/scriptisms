@@ -58,18 +58,18 @@ done
 
 # Old config
 declare -A KCONFIG_OLD_VALUE
-IFS=$'\n'; for kconfig in $(fgrep CONFIG_ "${KCONFIG_OLD}" | sed 's/^\s*#\s*\(CONFIG_[_A-Z0-9]*\)\s.*$/\1=#NOT_SET#/'); do
+IFS=$'\n'; for kconfig in $(fgrep CONFIG_ "${KCONFIG_OLD}" | sed 's/^\s*#\s*\(CONFIG_[_a-zA-Z0-9]*\)\s.*$/\1=#NOT_SET#/'); do
   KCONFIG_OLD_VALUE["${kconfig%=*}"]="${kconfig#*=}"
 done
 
 # New config
 declare -A KCONFIG_NEW_VALUE
-IFS=$'\n'; for kconfig in $(fgrep CONFIG_ "${KCONFIG_NEW}" | sed 's/^\s*#\s*\(CONFIG_[_A-Z0-9]*\)\s.*$/\1=#NOT_SET#/'); do
+IFS=$'\n'; for kconfig in $(fgrep CONFIG_ "${KCONFIG_NEW}" | sed 's/^\s*#\s*\(CONFIG_[_a-zA-Z0-9]*\)\s.*$/\1=#NOT_SET#/'); do
   KCONFIG_NEW_VALUE["${kconfig%=*}"]="${kconfig#*=}"
 done
 
 # Diff
-for kconfig in $(fgrep CONFIG_ "${KCONFIG_NEW}" | sed 's/\(^\|[^_A-Z0-9]*\)\(CONFIG_\)/\2/;s/[ =].*$//'); do
+for kconfig in $(fgrep CONFIG_ "${KCONFIG_NEW}" | sed 's/\(^\|[^_a-zA-Z0-9]*\)\(CONFIG_\)/\2/;s/[ =].*$//'); do
   value_old="${KCONFIG_OLD_VALUE[${kconfig}]}"
   value_new="${KCONFIG_NEW_VALUE[${kconfig}]}"
   if [ -z "${value_old}" -o "${value_new}" != "${value_old}" ]; then
@@ -82,7 +82,7 @@ cat << EOF
 # ORPHANED
 #
 EOF
-for kconfig in $(fgrep CONFIG_ "${KCONFIG_OLD}" | sed 's/\(^\|[^_A-Z0-9]*\)\(CONFIG_\)/\2/;s/[ =].*$//'); do
+for kconfig in $(fgrep CONFIG_ "${KCONFIG_OLD}" | sed 's/\(^\|[^_a-zA-Z0-9]*\)\(CONFIG_\)/\2/;s/[ =].*$//'); do
   [ -z "${KCONFIG_NEW_VALUE[${kconfig}]}" ] && echo "# ${kconfig} is not set"
 done
 
