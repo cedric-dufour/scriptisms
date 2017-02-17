@@ -1,0 +1,164 @@
+#!/bin/bash
+
+
+## Usage
+function _help {
+cat >&2 << EOF
+USAGE: ${0##*/} [options]
+
+SYNOPSIS:
+  Mount Linux (OS) partitions into the selected target directory.
+
+OPTIONS:
+
+  -t, --target <directory>
+    Target directory
+    Default: /target
+
+  -r, --root <dev>
+    Root (/) partition/device (path)
+
+  -e, --etc <dev>
+    /etc partition/device (path), if not included in the root partition
+
+  --no-pseudo
+    Do not (bind) mount pseudo filesystems (/sys, /proc, /dev) in target directory
+
+  -u, --unmount
+    Unmout all partitions from target directory.
+EOF
+}
+
+
+## Arguments
+MY_COMMAND=
+MY_DIR_TARGET='/target'
+MY_DEV_ROOT=
+MY_DEV_ETC=
+MY_NO_PSEUDO=
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    '-t'|'--target')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      MY_DIR_TARGET="${2}"
+      shift
+      ;;
+
+    '-r'|'--root')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      MY_DEV_ROOT="${2}"
+      MY_COMMAND='mount'
+      shift
+      ;;
+
+    '-e'|'--etc')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      MY_DEV_ETC="${2}"
+      shift
+      ;;
+
+    '-u'|'--unmount')
+      MY_COMMAND='unmount'
+      ;;
+
+    '--no-pseudo')
+      MY_NO_PSEUDO='yes'
+      ;;
+
+    '-h'|'--help')
+      _help
+      exit 1
+      ;;
+
+    '-'*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+
+    *)
+      echo "ERROR: Invalid argument (${1})" >&2 && exit 1
+      ;;
+
+  esac
+  shift
+done
+
+# Sanitization
+MY_DIR_TARGET="${MY_DIR_TARGET%%/}"
+MY_DEV_ROOT="${MY_DEV_ROOT%%/}"
+MY_DEV_ETC="${MY_DEV_ETC%%/}"
+
+# Validation
+[ -z "${MY_COMMAND}" ] && echo 'ERROR: Missing --root or --unmount option' >&2 && exit 1
+[ -z "${MY_DIR_TARGET}" ] && echo "ERROR: Invalid target (${MY_DIR_TARGET})" >&2 && exit 1
+if [ "${MY_COMMAND}" == 'mount' ]; then
+  [ ! -e "${MY_DEV_ROOT}" ] && echo "ERROR: Invalid root (/) partition/device (${MY_DEV_ROOT})" >&2 && exit 1
+  [ -n "${MY_DEV_ETC}" -a ! -e "${MY_DEV_ETC}" ] && echo "ERROR: Invalid /etc partition/device (${MY_DEV_ETC})" >&2 && exit 1
+fi
+
+
+## Function
+
+# Unmount
+function _unmountall {
+  local mountpoint
+  IFS=$'\n'; for mountpoint in $(mount | grep " on ${MY_DIR_TARGET}[/ ]" | sed "s|^.* on \(${MY_DIR_TARGET}.*\) type .*$|\1|" | sort -r); do
+    echo "Unmounting: ${mountpoint}"
+    umount "${mountpoint}"
+  done
+  rmdir "${MY_DIR_TARGET}"
+}
+
+# Mount
+function _mount {
+  local device="${1}"
+  local mountpoint="${2}"
+  local options="${3}"
+  echo "Mounting: ${device} -> ${MY_DIR_TARGET}${mountpoint}"
+  [ ! -e "${MY_DIR_TARGET}${mountpoint}" ] && echo "ERROR: No ...${mountpoint} directory in mounted partitions/target" >&2 && return 1
+  mount ${options} "${device}" "${MY_DIR_TARGET}${mountpoint}" || return 1
+  return 0
+}
+
+function _mountall {
+  mkdir -p "${MY_DIR_TARGET}" || return 1
+  _mount "${MY_DEV_ROOT}" '/' || return 1
+  [ ! -e "${MY_DIR_TARGET}/etc" ] && echo 'ERROR: No .../etc directory in root partition' >&2 && return 1
+  if [ -n "${MY_DEV_ETC}" ]; then
+    _mount "${MY_DEV_ETC}" '/etc' || return 1
+  fi
+  [ ! -e "${MY_DIR_TARGET}/etc/fstab" ] && echo 'ERROR: No .../etc/fstab file in root/etc partition' >&2 && return 1
+  IFS=$'\n'; for device_mountpoint in $(grep -E '\s/(boot|usr|var|tmp|opt)(/|\s)' "${MY_DIR_TARGET}/etc/fstab" | grep -v '^\s*#' | sed 's|^\(\S*\)\s\s*\(\S*\)\s.*$|\1:\2|' | sort -t':' -k2,2); do
+    device="${device_mountpoint%:*}"
+    mountpoint="${device_mountpoint#*:}"
+    _mount "${device}" "${mountpoint}" || return 1
+  done
+  if [ -z "${MY_NO_PSEUDO}" ]; then
+    for mountpoint in /dev /proc /sys; do
+      _mount "${mountpoint}" "${mountpoint}" --bind || return 1
+    done
+  fi
+  return 0
+}
+
+
+## Main
+case "${MY_COMMAND}" in
+
+  'mount')
+    [ -e "${MY_DIR_TARGET}" ] && echo "ERROR: Target already exists (${MY_DIR_TARGET}); please delete it!" >&2 && exit 1
+    _mountall
+    [ $? -ne 0 ] && _unmountall && exit 1
+    ;;
+
+  'unmount')
+    _unmountall
+    ;;
+
+  *)
+    echo "ERROR: Invalid command (${MY_COMMAND})" >&2 && exit 1
+    ;;
+
+
+esac
+
