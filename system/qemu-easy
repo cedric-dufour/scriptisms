@@ -29,8 +29,8 @@ COMMAND: info
     > Display the virtual machine information (IP, MAC, UUID, etc.)
 
 COMMAND: start
-  ${0##*/} create [+<options>] [-<qemu-options>]
-    > Create (start) the given virtual machine
+  ${0##*/} start [+<options>] [-<qemu-options>]
+    > Start (run) the given virtual machine
 
   OPTIONS:
     +hd <hd-image>
@@ -69,10 +69,6 @@ COMMAND: start
       virtual machine specific file/socket
 
   QEMU OPTIONS (OVERRIDE):
-    -boot {order=...|once=...}
-      Boot devices/order
-      Default: depends on '+boot ...'
-
     -m <kilobytes>
       Assigned memory (RAM)
       Default: ${DFLT_QEMU_RAM}
@@ -100,7 +96,7 @@ COMMAND: monitor
 
 COMMAND: modprobe, rmmod
   ${0##*/} {modprobe|rmmod}
-    > Load/unload the KVM kernel modules abd unload/load conflicting modules,
+    > Load/unload the KVM kernel modules and unload/load conflicting modules,
       e.g. VirtualBox's (REQUIRES SUDO PRIVILEGES)
 
 EOF
@@ -193,7 +189,7 @@ while [ -n "${1}" ]; do
       MY_MONITOR='yes'
       ;;
 
-    '+help')
+    '+help'|'--help')
       _help 2>&1 | less
       exit 1
       ;;
