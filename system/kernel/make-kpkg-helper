@@ -25,6 +25,12 @@ OPTIONS:
   -A, --apt
     Install/update the 'linux-source-<version>' package before proceeding
 
+  -a, --author <firstname-lastname>
+    Author full name (default: $(getent passwd $(whoami) | cut -d: -f5))
+
+  -e, --email <email-address>
+    Author e-mail address (default: $(whoami)@$(hostname -f))
+
   -j, --concurrency <integer>
     Concurrency level (default: CPU cores quantity)
 EOF
@@ -37,6 +43,8 @@ MY_CONFIG=
 MY_PATCHES=
 MY_OVERLAY=
 MY_APT=
+MY_NAME="$(getent passwd $(whoami) | cut -d: -f5)"
+MY_EMAIL="$(whoami)@$(hostname -f)"
 MY_CONCURRENCY=$(fgrep 'core id' /proc/cpuinfo | sort -u | wc -l)
 while [ -n "${1}" ]; do
   case "${1}" in
@@ -59,6 +67,14 @@ while [ -n "${1}" ]; do
 
     -A|--apt)
       MY_APT='yes'
+      ;;
+
+    -a|--author)
+      shift; MY_NAME="${1}"
+      ;;
+
+    -e|--email)
+      shift; MY_EMAIL="${1}"
       ;;
 
     -j|--concurrency)
@@ -103,6 +119,8 @@ done
 # Parameters
 MY_SOURCE_PKG="linux-source-${MY_VERSION}"
 MY_SOURCE_TAR="/usr/src/linux-source-${MY_VERSION}.tar.xz"
+MY_SOURCE_OVL="/usr/share/kernel-package"
+MY_SOURCE_LOG="/usr/share/doc/linux-source-${MY_VERSION}/changelog.Debian.gz"
 MY_SOURCE_DIR="./linux-source-${MY_VERSION}"
 
 # Retrieve source package
@@ -133,9 +151,45 @@ tar -xJf "${MY_SOURCE_TAR}"
 # Copy kernel configuration
 echo
 echo "INFO: Copying kernel configuration file (${MY_CONFIG})"
-cp -v "${MY_CONFIG}" "${MY_SOURCE_DIR}/.config"
+cp -Lv "${MY_CONFIG}" "${MY_SOURCE_DIR}/.config"
+
+# Copy overlay directory
+echo
+if [ -n "${MY_OVERLAY}" ]; then
+  echo "INFO: Copying packaging overlay directory (${MY_OVERLAY})"
+  cp -Lrpv "${MY_OVERLAY}" "${MY_SOURCE_DIR}/.overlay"
+  if [ ! -e "${MY_SOURCE_DIR}/.overlay/changelog" ]; then
+    cat << EOF > "${MY_SOURCE_DIR}/.overlay/changelog"
+=ST-source-=V (=D) UNRELEASED; urgency=low
+
+  * Custom kernel
+    config: ${MY_CONFIG}
+    patches: ${MY_PATCHES:-none}
+    overlay: ${MY_OVERLAY}
+
+ -- ${MY_NAME} <${MY_EMAIL}>  $(date -R)
+
+EOF
+    zcat "${MY_SOURCE_LOG}" >> "${MY_SOURCE_DIR}/.overlay/changelog"
+  fi
+else
+  echo "INFO: Using default packaging overlay directory"
+  mkdir "${MY_SOURCE_OVL}" "${MY_SOURCE_DIR}/.overlay"
+  cat << EOF > "${MY_SOURCE_DIR}/.overlay/changelog"
+=ST-source-=V (=D) UNRELEASED; urgency=low
+
+  * Custom kernel
+    config: ${MY_CONFIG}
+    patches: ${MY_PATCHES:-none}
+    overlay: none
+
+ -- ${MY_NAME} <${MY_EMAIL}>  $(date -R)
+EOF
+fi
 
 # Switch to kernel directory
+echo
+echo "INFO: Switching to build directory (${MY_SOURCE_DIR})"
 MY_PWD="$(pwd)"
 pushd "${MY_SOURCE_DIR}" </dev/null
 [ $? -ne 0 ] && echo "ERROR: Failed to switch to kernel source directory (${MY_SOURCE_DIR})" >&2 && exit 1
@@ -183,8 +237,7 @@ make-kpkg clean
 # Build and package kernel
 echo
 echo 'INFO: Building and packaging kernel'
-[ -n "${MY_OVERLAY}" -a "${MY_OVERLAY:0:1}" != '/' ] && MY_OVERLAY="${MY_PWD}/${MY_OVERLAY}"
-MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} ${MY_OVERLAY:+--overlay-dir="${MY_OVERLAY}"} kernel_image"
+MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} --overlay-dir=.overlay kernel_image"
 echo "INFO: > ${MY_CMD}"
 echo 'PRESS <RETURN> TO PROCESS, <CTRL+C> TO ABORT...'; read
 eval "${MY_CMD}"
