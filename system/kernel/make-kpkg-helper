@@ -237,7 +237,7 @@ make-kpkg clean
 # Build and package kernel
 echo
 echo 'INFO: Building and packaging kernel'
-MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} --overlay-dir=.overlay kernel_image"
+MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} --overlay-dir="$(pwd)/.overlay" kernel_image"
 echo "INFO: > ${MY_CMD}"
 echo 'PRESS <RETURN> TO PROCESS, <CTRL+C> TO ABORT...'; read
 eval "${MY_CMD}"
