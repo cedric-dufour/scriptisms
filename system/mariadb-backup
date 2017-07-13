@@ -1,0 +1,158 @@
+#!/bin/bash
+
+# Usage
+[ "${1##*-}" == "help" -o $# -lt 1 ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <mariadb-backup.conf|mariadb-backup.d>
+
+SYNOPSIS:
+  Backup a MariaDB database according to the connection parameters specified
+  in the configuration file(s).
+
+PERMISSIONS:
+  The backup operator (account) MUST be granted the proper permissions:
+    mysql> GRANT LOCK TABLES, SELECT, SHOW VIEW, SUPER ON *.*
+           TO 'sysbackup'@'<hostname>' IDENTIFIED BY '<password>' [REQUIRE SSL];
+    mysql> FLUSH PRIVILEGES;
+  NOTE: The root user/account already has the proper permissions.
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - MARIADB_BACKUP_DST: the directory to store the backup file(s) into
+
+  The configuration file MAY define the following settings:
+   - MARIADB_BACKUP_CNF: the path to the MariaDB 'defaults-extra-file'
+   - MARIADB_BACKUP_CMD: the executing command/environment (dflt: bash -c)
+
+  The MariaDB 'defaults-extra-file' file MAY define parameters like:
+    [client]
+    host=...
+    user=...
+    password=...
+    default-character-set=utf8
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -maxdepth 1 -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+MARIADB_BACKUP_CMD="bash -c"
+MARIADB_BACKUP_CNF=
+MARIADB_BACKUP_DST=
+source "${1}"
+MARIADB_BACKUP_DST=${MARIADB_BACKUP_DST%%/}
+[ -z "${MARIADB_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (MARIADB_BACKUP_DST)" && exit 1
+echo "INFO: to '${MARIADB_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Check MariaDB configuration
+MARIADB_BACKUP_DEF=
+if [ -n "${MARIADB_BACKUP_CNF}" ]; then
+  MARIADB_BACKUP_DEF="--defaults-extra-file='${MARIADB_BACKUP_CNF}'"
+  MARIADB_BACKUP_DO="[ ! -r '${MARIADB_BACKUP_CNF}' ]"
+  ${MARIADB_BACKUP_CMD} "${MARIADB_BACKUP_DO}" && _ERROR "Missing/invalid MariaDB configuration (${MARIADB_BACKUP_CNF})" && exit 1
+fi
+
+# Check backup destination
+[ ! -e "${MARIADB_BACKUP_DST}" ] && mkdir -p "${MARIADB_BACKUP_DST}"
+[ ! -d "${MARIADB_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${MARIADB_BACKUP_DST})" && exit 1
+[ ! -w "${MARIADB_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${MARIADB_BACKUP_DST})" && exit 1
+
+# Log
+MARIADB_BACKUP_LOG="${MARIADB_BACKUP_DST%%/}/mariadb-backup.log"
+echo "INFO: with full log in '${MARIADB_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${MARIADB_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${MARIADB_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${MARIADB_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${MARIADB_BACKUP_LOG}"
+MESG:
+EOF
+
+# Retrieve database list
+MARIADB_BACKUP_DO="mysql ${MARIADB_BACKUP_DEF} -B -N mysql -e 'show databases;'"
+MARIADB_BACKUP_DBS="$(${MARIADB_BACKUP_CMD} "${MARIADB_BACKUP_DO}" 2> /tmp/$$.stderr)"
+e=$?
+cat /tmp/$$.stderr | tee -a "${MARIADB_BACKUP_LOG}"; rm /tmp/$$.stderr
+[ ${e} -ne 0 ] && _ERROR "Failed to retrieve database list" | tee -a "${MARIADB_BACKUP_LOG}" && exit 1
+
+# Check lock
+MARIADB_BACKUP_LOCK="${MARIADB_BACKUP_DST%%/}/mariadb-backup.lock"
+[ -e "${MARIADB_BACKUP_LOCK}" ] && _ERROR "Process already locked (${MARIADB_BACKUP_LOCK})" | tee -a "${MARIADB_BACKUP_LOG}" && exit 1
+
+# Perform backup
+MARIADB_BACKUP_ERROR=0
+touch "${MARIADB_BACKUP_LOCK}"
+# ... data
+for db in ${MARIADB_BACKUP_DBS}; do
+  MARIADB_BACKUP_DO="mysqldump ${MARIADB_BACKUP_DEF} --opt --single-transaction --routines '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
+  ${MARIADB_BACKUP_CMD} "${MARIADB_BACKUP_DO}" 2> /tmp/$$.stderr > "${MARIADB_BACKUP_DST}"/${db}.mysqldump.bz2
+  e=$?
+  cat /tmp/$$.stderr | tee -a "${MARIADB_BACKUP_LOG}"; rm /tmp/$$.stderr
+  [ ${e} -ne 0 ] && MARIADB_BACKUP_ERROR=1
+  echo "$(ls -lh "${MARIADB_BACKUP_DST}"/${db}.mysqldump.bz2)" | tee -a "${MARIADB_BACKUP_LOG}"
+done
+# ... grants
+MARIADB_BACKUP_DO="mysql ${MARIADB_BACKUP_DEF} -B -N mysql -e \"SELECT DISTINCT CONCAT( 'SHOW GRANTS FOR \'', user, '\'@\'', host, '\';' ) FROM mysql.user;\" | mysql ${MARIADB_BACKUP_DEF} -B -N mysql | sed 's|\$|;|' | bzip2 -9; exit \${PIPESTATUS[0]}"
+${MARIADB_BACKUP_CMD} "${MARIADB_BACKUP_DO}" 2> /tmp/$$.stderr > "${MARIADB_BACKUP_DST}"/grants.mysql.bz2
+e=$?
+cat /tmp/$$.stderr | tee -a "${MARIADB_BACKUP_LOG}"; rm /tmp/$$.stderr
+[ ${e} -ne 0 ] && MARIADB_BACKUP_ERROR=1
+echo "$(ls -lh "${MARIADB_BACKUP_DST}"/grants.mysql.bz2)" | tee -a "${MARIADB_BACKUP_LOG}"
+rm "${MARIADB_BACKUP_LOCK}"
+
+# End
+if [ ${MARIADB_BACKUP_ERROR} -eq 0 ]; then
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${MARIADB_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${MARIADB_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${MARIADB_BACKUP_LOG}"
+exit 0
+
