@@ -1,0 +1,124 @@
+#!/bin/bash
+
+## #Usage
+[ $# -lt 1 -o "${1##*-}" == "help" ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <gcfg-backup.conf|gcfg-backup.d>
+
+SYNOPSIS:
+  Retrieve the content of the GCFG content directory on the hosts specified
+  in the configuration file(s).
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - GCFG_BACKUP_CNF: the path to the file containing the hosts list
+   - GCFG_BACKUP_DST: the directory to store the backup file(s) into
+
+  The configuration file MAY define the following settings:
+   - GCFG_BACKUP_OPT: additional RSync options
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+GCFG_BACKUP_CNF=
+GCFG_BACKUP_DST=
+GCFG_BACKUP_OPT=
+source "${1}"
+GCFG_BACKUP_DST=${GCFG_BACKUP_DST%%/}
+[ -z "${GCFG_BACKUP_CNF}" ] && _ERROR "Missing GCFG configuration parameter (GCFG_BACKUP_CNF)" && exit 1
+[ -z "${GCFG_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (GCFG_BACKUP_DST)" && exit 1
+echo "INFO: to '${GCFG_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Check GCFG configuration
+[ ! -r "${GCFG_BACKUP_CNF}" ] && _ERROR "Missing/invalid GCFG configuration (${GCFG_BACKUP_CNF})" && exit 1
+
+# Check backup destination
+[ ! -e "${GCFG_BACKUP_DST}" ] && mkdir -p "${GCFG_BACKUP_DST}"
+[ ! -d "${GCFG_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${GCFG_BACKUP_DST})" && exit 1
+[ ! -w "${GCFG_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${GCFG_BACKUP_DST})" && exit 1
+
+# Log
+GCFG_BACKUP_LOG="${GCFG_BACKUP_DST%%/}/gcfg-backup.log"
+echo "INFO: with full log in '${GCFG_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${GCFG_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${GCFG_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${GCFG_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${GCFG_BACKUP_LOG}"
+MESG:
+EOF
+
+# Check lock
+GCFG_BACKUP_LOCK="${GCFG_BACKUP_DST%%/}/gcfg-backup.lock"
+[ -e "${GCFG_BACKUP_LOCK}" ] && _ERROR "Process already locked (${GCFG_BACKUP_LOCK})" | tee -a "${GCFG_BACKUP_LOG}" && exit 1
+
+# Perform backup
+GCFG_BACKUP_ERROR=0
+touch "${GCFG_BACKUP_LOCK}"
+for host in $(sed 's/\s*#.*//' "${GCFG_BACKUP_CNF}"); do
+  [ -z "${host}" ] && continue
+  dst="${GCFG_BACKUP_DST}/${host}"
+  [ ! -e "${dst}" ] && mkdir "${dst}"
+  [ ! -d "${dst}" ] && _ERROR "Invalid/missing backup directory (${dst})" && GCFG_BACKUP_ERROR=1 && continue
+  [ ! -w "${dst}" ] && _ERROR "Cannot write to backup directory (${dst})" && GCFG_BACKUP_ERROR=1 && continue
+  eval "rsync -aq --update --delete ${GCFG_BACKUP_OPT} root@${host}:/etc/gcfg/ \"${dst}/\""
+  [ $? -ne 0 ] && GCFG_BACKUP_ERROR=1 && continue
+  echo "$(ls -aldh "${GCFG_BACKUP_DST}/${host}/")" | tee -a "${GCFG_BACKUP_LOG}"
+done
+rm "${GCFG_BACKUP_LOCK}"
+
+# End
+if [ ${GCFG_BACKUP_ERROR} -eq 0 ]; then
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${GCFG_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${GCFG_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${GCFG_BACKUP_LOG}"
+exit 0
+
