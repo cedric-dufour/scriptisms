@@ -1,0 +1,117 @@
+#!/bin/bash
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == "help" ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <fortigate-backup.conf|fortigate-backup.d>
+
+SYNOPSIS:
+  Backup the system configuration from the Fortinet FortiGate appliances
+  specified in the configuration file(s).
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - FORTIGATE_BACKUP_CNF: the path to the file containing the hosts list
+   - FORTIGATE_BACKUP_DST: the directory to store the backup file(s) into
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+FORTIGATE_BACKUP_CNF=
+FORTIGATE_BACKUP_DST=
+source "${1}"
+FORTIGATE_BACKUP_DST=${FORTIGATE_BACKUP_DST%%/}
+[ -z "${FORTIGATE_BACKUP_CNF}" ] && _ERROR "Missing hosts file parameter (FORTIGATE_BACKUP_CNF)" && exit 1
+[ -z "${FORTIGATE_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (FORTIGATE_BACKUP_DST)" && exit 1
+echo "INFO: to '${FORTIGATE_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Check FORTIGATE configuration
+[ ! -r "${FORTIGATE_BACKUP_CNF}" ] && _ERROR "Missing/invalid hosts file configuration (${FORTIGATE_BACKUP_CNF})" && exit 1
+
+# Check backup destination
+[ ! -e "${FORTIGATE_BACKUP_DST}" ] && mkdir -p "${FORTIGATE_BACKUP_DST}"
+[ ! -d "${FORTIGATE_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${FORTIGATE_BACKUP_DST})" && exit 1
+[ ! -w "${FORTIGATE_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${FORTIGATE_BACKUP_DST})" && exit 1
+
+# Log
+FORTIGATE_BACKUP_LOG="${FORTIGATE_BACKUP_DST%%/}/fortigate-backup.log"
+echo "INFO: with full log in '${FORTIGATE_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${FORTIGATE_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${FORTIGATE_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${FORTIGATE_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${FORTIGATE_BACKUP_LOG}"
+MESG:
+EOF
+
+# Check lock
+FORTIGATE_BACKUP_LOCK="${FORTIGATE_BACKUP_DST%%/}/fortigate-backup.lock"
+[ -e "${FORTIGATE_BACKUP_LOCK}" ] && _ERROR "Process already locked (${FORTIGATE_BACKUP_LOCK})" | tee -a "${FORTIGATE_BACKUP_LOG}" && exit 1
+
+# Perform backup
+FORTIGATE_BACKUP_ERROR=0
+touch "${FORTIGATE_BACKUP_LOCK}"
+for host in $(sed 's/\s*#.*//' "${FORTIGATE_BACKUP_CNF}"); do
+  [ -z "${host}" ] && continue
+  dst="${FORTIGATE_BACKUP_DST}/${host}"
+  scp ${host}:/sys_config "${dst}.sys_config.cfg" >/dev/null 2>&1
+  [ $? -ne 0 ] && FORTIGATE_BACKUP_ERROR=1 && continue
+  echo "$(ls -aldh "${FORTIGATE_BACKUP_DST}/${host}".*.cfg)" | tee -a "${FORTIGATE_BACKUP_LOG}"
+done
+rm "${FORTIGATE_BACKUP_LOCK}"
+
+# End
+if [ ${FORTIGATE_BACKUP_ERROR} -eq 0 ]; then
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${FORTIGATE_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${FORTIGATE_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${FORTIGATE_BACKUP_LOG}"
+exit 0
+
