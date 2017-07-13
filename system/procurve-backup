@@ -1,0 +1,121 @@
+#!/bin/bash
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == "help" ] && cat << EOF >&2 && exit 1
+USAGE: ${0##*/} <procurve-backup.conf|procurve-backup.d>
+
+SYNOPSIS:
+  Backup the startup and running configuration from the HP Procurve switches
+  specified in the configuration file(s).
+
+CONFIGURATION:
+  The configuration file MUST define the following settings:
+   - PROCURVE_BACKUP_CNF: the path to the file containing the hosts list
+   - PROCURVE_BACKUP_DST: the directory to store the backup file(s) into
+EOF
+
+# Utilities
+function _ERROR {
+  echo "ERROR: $1" >&2
+  echo "ERROR: $1 [STATUS:ERROR]"
+}
+
+function _WARNING {
+  echo "WARNING: $1" >&2
+  echo "WARNING: $1 [STATUS:WARNING]"
+}
+
+# Arguments
+[ ! -r "${1}" ] && _ERROR "Invalid/missing backup configuration file (${1})" && exit 1
+if [ $# -gt 1 ]; then
+  while [ -n "${1}" ]; do
+    ${0} ${1}
+    shift
+  done
+  exit 0
+fi
+if [ -d "${1}" ]; then
+  echo "================================================================================"
+  echo "INFO: Spanning directory for backup tasks '${1}'"
+  IFS=$'\n'; for f in $(find "${1}" -type f -name "*.conf" | sort); do
+    ${0} ${f}
+  done
+  exit 0
+fi
+
+# Start banner
+echo "--------------------------------------------------------------------------------"
+echo "INFO: Performing backup for '${1}'"
+
+# Parameters
+PROCURVE_BACKUP_CNF=
+PROCURVE_BACKUP_DST=
+source "${1}"
+PROCURVE_BACKUP_DST=${PROCURVE_BACKUP_DST%%/}
+[ -z "${PROCURVE_BACKUP_CNF}" ] && _ERROR "Missing hosts file parameter (PROCURVE_BACKUP_CNF)" && exit 1
+[ -z "${PROCURVE_BACKUP_DST}" ] && _ERROR "Missing backup destination parameter (PROCURVE_BACKUP_DST)" && exit 1
+echo "INFO: to '${PROCURVE_BACKUP_DST}'"
+
+# Get current process tree (for the backup log)
+pid=$$
+until [ ${pid} -eq 1 ]; do
+  pid=$(ps --no-headers -o ppid -p ${pid})
+  [ ${pid} -ne 1 ] && ppids="${ppids} ${pid}"
+done
+
+# Check PROCURVE configuration
+[ ! -r "${PROCURVE_BACKUP_CNF}" ] && _ERROR "Missing/invalid hosts file configuration (${PROCURVE_BACKUP_CNF})" && exit 1
+
+# Check backup destination
+[ ! -e "${PROCURVE_BACKUP_DST}" ] && mkdir -p "${PROCURVE_BACKUP_DST}"
+[ ! -d "${PROCURVE_BACKUP_DST}" ] && _ERROR "Invalid/missing backup directory (${PROCURVE_BACKUP_DST})" && exit 1
+[ ! -w "${PROCURVE_BACKUP_DST}" ] && _ERROR "Cannot write to backup directory (${PROCURVE_BACKUP_DST})" && exit 1
+
+# Log
+PROCURVE_BACKUP_LOG="${PROCURVE_BACKUP_DST%%/}/procurve-backup.log"
+echo "INFO: with full log in '${PROCURVE_BACKUP_LOG}'"
+echo '................................................................................'
+rm -f "${PROCURVE_BACKUP_LOG}"
+umask 027
+cat << EOF | tee -a "${PROCURVE_BACKUP_LOG}"
+HOST: $(uname -a)
+COMMAND: $0 $*
+BEGIN: $(date)
+EOF
+cat << EOF >> "${PROCURVE_BACKUP_LOG}"
+PROC:
+$(ps wf -o user,pid,start,time,command ${ppids})
+EOF
+cat << EOF | tee -a "${PROCURVE_BACKUP_LOG}"
+MESG:
+EOF
+
+# Check lock
+PROCURVE_BACKUP_LOCK="${PROCURVE_BACKUP_DST%%/}/procurve-backup.lock"
+[ -e "${PROCURVE_BACKUP_LOCK}" ] && _ERROR "Process already locked (${PROCURVE_BACKUP_LOCK})" | tee -a "${PROCURVE_BACKUP_LOG}" && exit 1
+
+# Perform backup
+PROCURVE_BACKUP_ERROR=0
+touch "${PROCURVE_BACKUP_LOCK}"
+for host in $(sed 's/\s*#.*//' "${PROCURVE_BACKUP_CNF}"); do
+  [ -z "${host}" ] && continue
+  dst="${PROCURVE_BACKUP_DST}/${host}"
+  scp ${host}:/cfg/startup-config "${dst}.startup.cfg" >/dev/null 2>&1
+  [ $? -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
+  scp ${host}:/cfg/running-config "${dst}.running.cfg" >/dev/null 2>&1
+  [ $? -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
+  scp ${host}:/log/event-log "${dst}.event.log" >/dev/null 2>&1
+  [ $? -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
+  echo "$(ls -aldh "${PROCURVE_BACKUP_DST}/${host}".*.{cfg,log})" | tee -a "${PROCURVE_BACKUP_LOG}"
+done
+rm "${PROCURVE_BACKUP_LOCK}"
+
+# End
+if [ ${PROCURVE_BACKUP_ERROR} -eq 0 ]; then
+  echo "STATUS: OK [STATUS:OK]"  | tee -a "${PROCURVE_BACKUP_LOG}"
+else
+  echo "STATUS: ERROR [STATUS:ERROR]"  | tee -a "${PROCURVE_BACKUP_LOG}"
+fi
+echo "END: $(date)"  | tee -a "${PROCURVE_BACKUP_LOG}"
+exit 0
+
