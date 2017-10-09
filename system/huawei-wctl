@@ -11,19 +11,22 @@ SYNOPSIS:
   Control Huawei web-based (HiLink) USB dongle.
 
 ACTIONS:
-  ps pin-status  Display PIN code (entry) status
-  pu pin-unlock  Unlock the dongle/SIM (PIN code entry)
-  s  status      Display the connection status
-  c  connect     Establish the dial-up connection
-  d  disconnect  Disconnect the dial-up connection
-  m  sms-send    Send given text message (SMS) to given number
-  i  devinfo     Display device information
+  ps pin-status   Display PIN code (entry) status
+  pu pin-unlock   Unlock the dongle/SIM (PIN code entry)
+  s  status       Display the connection status
+  c  connect      Establish the dial-up connection
+  d  disconnect   Disconnect the dial-up connection
+  m  sms-send     Send given text message (SMS) to given number
+  i  devinfo      Display device information
+  ms mode-switch  USB mode switch (storage -> modem); SUDO REQUIRED!
 
 OPTIONS:
   -p --pin-code  PIN code
   -P --pin-file  PIN code file
   -n --number    Phone number
   -t --text      Text message
+  -V --vendor    USB vendor ID (for mode switch; default: 12d1)
+  -P --product   USB product ID (for mode switch; default: 1f01)
 EOF
 
 # Arguments
@@ -32,6 +35,8 @@ HUAWEI_PIN_FILE=
 HUAWEI_NUMBER=
 HUAWEI_TEXT=
 HUAWEI_ACTION=
+HUAWEI_VENDOR='12d1'
+HUAWEI_PRODUCT='1f01'
 while [ -n "${1}" ]; do
   ARGV="${1}"; shift
   case "${ARGV}" in
@@ -47,6 +52,12 @@ while [ -n "${1}" ]; do
     -t|--text)
       [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
       HUAWEI_TEXT="${1}"; shift;;
+    -V|--vendor)
+      [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
+      HUAWEI_VENDOR="${1}"; shift;;
+    -P|--product)
+      [ -z "${1}" ] && echo "ERROR: Missing parameter (${ARGV})" >&2 && exit 1
+      HUAWEI_PRODUCT="${1}"; shift;;
     -*)
       echo "ERROR: Unknown option (${1})" >&2 && exit 1;;
     *)
@@ -109,6 +120,13 @@ case "${HUAWEI_ACTION}" in
     ;;
   i|devinfo)
     huawei_command 'device/information'
+    ;;
+  ms|mode-switch)
+    [ -z "$(PATH=/usr/sbin:/sbin:${PATH} which usb_modeswitch)" ] && echo 'ERROR: USB mode switch utility not found (usb_modeswitch)' >&2 && exit 1
+    [ -z "${HUAWEI_VENDOR}" ] && echo 'ERROR: Missing/empty USB vendor ID' >&2 && exit 1
+    [ -z "${HUAWEI_PRODUCT}" ] && echo 'ERROR: Missing/empty USB product ID' >&2 && exit 1
+    sudo usb_modeswitch --default-vendor "${HUAWEI_VENDOR}" --default-product "${HUAWEI_PRODUCT}" -J
+    lsusb -d "${HUAWEI_VENDOR}:"
     ;;
   *)
     echo "ERROR: Unknown action (${HUAWEI_ACTION})" >&2 && exit 1;;
