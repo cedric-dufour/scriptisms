@@ -64,6 +64,10 @@ COMMAND: start
       Actual QEMU command to execute
       Default: ${DFLT_QEMU_CMD}
 
+    +console
+      Set the VM (serial) console on the foreground (standard input/output)
+      instead of virtual machine specific file/socket
+
     +monitor
       Set the QEMU monitor on the foreground (standard input/output) instead of
       virtual machine specific file/socket
@@ -89,6 +93,10 @@ COMMAND: stop, reset, kill, suspend, resume
   ${0##*/} {stop|reset|kill|suspend|resume} <primary-hd-image>
     > Gracefully shutdown, reset or focefully kill the virtual machine,
       or suspend/resume the emulation (via the QEMU monitor file/socket)
+
+COMMAND: console
+  ${0##*/} console <primary-hd-image>
+    > Connect to the given (serial) console
 
 COMMAND: monitor
   ${0##*/} monitor <primary-hd-image> <command> ...
@@ -120,7 +128,7 @@ MY_RAM=
 MY_RTC=
 MY_VNC=
 MY_QEMU=
-MY_MONITOR=
+MY_STDIO=
 QEMU_RAM=
 QEMU_RTC=
 QEMU_VNC=
@@ -185,8 +193,12 @@ while [ -n "${1}" ]; do
       MY_QEMU="${1}"
       ;;
 
+    '+console')
+      MY_STDIO='console'
+      ;;
+
     '+monitor')
-      MY_MONITOR='yes'
+      MY_STDIO='monitor'
       ;;
 
     '+help'|'--help')
@@ -237,7 +249,7 @@ while [ -n "${1}" ]; do
           'info') MY_NET="${1}";;
           'vnc') MY_VNC="${1}";;
           'stop'|'shutdown'|'reset'|'kill'|'destroy'|'suspend'|'pause'|'resume'|'continue'|'cont') MY_HD1="${1}";;
-          'monitor') MY_HD1="${1}"; shift; break;;
+          'console'|'monitor') MY_HD1="${1}"; shift; break;;
         esac
       fi
       ;;
@@ -260,6 +272,7 @@ done
 # ... VM path/name
 MY_PATH_ROOT="$(dirname "${MY_HD1}")"
 MY_FILE_PREFIX="$(basename "${MY_HD1%.*}")"
+MY_PATH_CONSOLE="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.console.sock"
 MY_PATH_MONITOR="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.monitor.sock"
 MY_PATH_EFIVARS="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.efivars.raw"
 
@@ -343,8 +356,15 @@ EOF
     # ... UUID
     QEMU_CMD="${QEMU_CMD}|-uuid ${MY_UUID}"
 
+    # ... console
+    if [ "${MY_STDIO}" == 'console' ]; then
+      QEMU_CMD="${QEMU_CMD}|-serial stdio"
+    else
+      QEMU_CMD="${QEMU_CMD}|-serial unix:'${MY_PATH_CONSOLE}',server,nowait"
+    fi
+
     # ... monitor
-    if [ -n "${MY_MONITOR}" ]; then
+    if [ "${MY_STDIO}" == 'monitor' ]; then
       QEMU_CMD="${QEMU_CMD}|-monitor stdio"
     else
       QEMU_CMD="${QEMU_CMD}|-monitor unix:'${MY_PATH_MONITOR}',server,nowait"
@@ -415,18 +435,30 @@ EOF
     echo 'PRESS <ENTER> TO CONTINUE, <CTRL+C> To ABORT...' >&2
     read
 
-    # GO!
+    # Resources
+
+    # ... UEFI
     if [ -n "${MY_UEFI}" -a ! -e "${MY_PATH_EFIVARS}" ]; then
       echo 'INFO: Initializing EFI variables storage' >&2
       touch "${MY_PATH_EFIVARS}"
       chmod 600 "${MY_PATH_EFIVARS}"
       cp -v "${DFLT_PATH_EFIVARS}" "${MY_PATH_EFIVARS}"
     fi
-    if [ -z "${MY_MONITOR}" ]; then
-      trap "rm -f '${MY_PATH_MONITOR}'" EXIT
+
+    # ... console/monitor sockets
+    if [ "${MY_STDIO}" != 'console' ]; then
+      rm -f "${MY_PATH_CONSOLE}"
+      touch "${MY_PATH_CONSOLE}"
+      chmod 600 "${MY_PATH_CONSOLE}"
+    fi
+    if [ "${MY_STDIO}" != 'monitor' ]; then
+      rm -f "${MY_PATH_MONITOR}"
       touch "${MY_PATH_MONITOR}"
       chmod 600 "${MY_PATH_MONITOR}"
     fi
+    trap "rm -f '${MY_PATH_CONSOLE}' '${MY_PATH_MONITOR}'" EXIT
+
+    # GO!
     echo 'INFO: Running the virtual machine...' >&2
     echo " <->  ${0##*/} vnc ${MY_VNC:-${DFLT_QEMU_VNC}}" >&2
     eval "${QEMU_CMD//|/ }"
@@ -457,6 +489,14 @@ EOF
     esac
     echo "echo ${QEMU_MONITOR_CMD} | socat - UNIX-CONNECT:'${MY_PATH_MONITOR}'"
     echo ${QEMU_MONITOR_CMD} | socat - UNIX-CONNECT:"${MY_PATH_MONITOR}"
+    exit $?
+    ;;
+
+  'console')
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (<primary-hd-image>)' >&2 && exit 1
+    [ ! -e "${MY_PATH_CONSOLE}" ] && echo "ERROR: Missing VM (serial) console socket (${MY_PATH_CONSOLE})" >&2 && exit 1
+    echo "minicom -D unix\\#'${MY_PATH_CONSOLE}'"
+    minicom -D unix\#"${MY_PATH_CONSOLE}"
     exit $?
     ;;
 
