@@ -128,7 +128,7 @@ MYSQL_BACKUP_ERROR=0
 touch "${MYSQL_BACKUP_LOCK}"
 # ... data
 for db in ${MYSQL_BACKUP_DBS}; do
-  MYSQL_BACKUP_DO="mysqldump --defaults-extra-file='${MYSQL_BACKUP_CNF}' --opt --single-transaction --routines '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
+  MYSQL_BACKUP_DO="mysqldump --defaults-extra-file='${MYSQL_BACKUP_CNF}' --opt --skip-extended-insert --single-transaction --routines '${db}' | bzip2 -9; exit \${PIPESTATUS[0]}"
   ${MYSQL_BACKUP_CMD} "${MYSQL_BACKUP_DO}" 2> /tmp/$$.stderr > "${MYSQL_BACKUP_DST}"/${db}.mysqldump.bz2
   e=$?
   cat /tmp/$$.stderr | tee -a "${MYSQL_BACKUP_LOG}"; rm /tmp/$$.stderr
