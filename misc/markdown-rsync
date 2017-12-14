@@ -1,0 +1,218 @@
+#!/bin/bash
+
+# Command-line
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<option> ...] <source-dir> [<destination-dir>]
+
+SYNOPSIS:
+  Synchronize the given source directory to the given destination directory,
+  replacing all Markdown (*.md) files with their HTML (*.html) equivalent.
+
+  This script is "thread-safe", meaning that it can be executed concurrently
+  with the same arguments in order to benefit from multiple CPUs/cores (for
+  very large directory structures).
+
+OPTIONS:
+  -c, --copy
+      Copy the *.md files to the destination directory
+      (along the generated *.html files)
+
+  -i, --inplace
+      Synchronize files in the same "source" directory
+
+  -r, --recursive
+      Recurse into subdirectories
+
+  -t, --template <html-file>
+      Use the given file as HTML template, where the %{markdown} tag
+      shall be substituted with the actual markdown-to-HTML content
+
+  -m, --chmod <chmod-stanza>
+      Destination files permissions
+
+  -M, --chmod-dir <chmod-stanza>
+      Destination directories permissions
+
+  -o, --chown <chown-stanza>
+      Destination files owner
+
+  -O, --chown-dir <chown-stanza>
+      Destination directories owner
+
+  --force
+      (Re-)generate the *.html file even if it already exists
+      (do NOT use this option with multiple "threads")
+
+AUTHOR:
+  Cedric Dufour - http://cedric.dufour.name
+EOF
+
+# Arguments
+COPY=
+INPLACE=
+NOSUB='yes'
+TEMPLATE=
+CHMOD=
+CHMOD_DIR=
+CHOWN=
+CHOWN_DIR=
+FORCE=
+SRC_DIR=
+DST_DIR=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-c'|'--copy')  
+      COPY='yes'
+      ;;
+    '-i'|'--inplace')  
+      INPLACE='yes'
+      ;;
+    '-r'|'--recursive')  
+      NOSUB=
+      ;;
+    '-t'|'--template')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1   
+      shift; TEMPLATE="${1}"
+      ;;
+    '-m'|'--chmod')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1   
+      shift; CHMOD="${1}"
+      ;;
+    '-M'|'--chmod-dir')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1   
+      shift; CHMOD_DIR="${1}"
+      ;;
+    '-o'|'--chown')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1   
+      shift; CHOWN="${1}"
+      ;;
+    '-O'|'--chown-dir')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1   
+      shift; CHOWN_DIR="${1}"
+      ;;
+    '--force')  
+      FORCE='yes'
+      ;;
+    *)
+      if [ -z "${SRC_DIR}" ]; then SRC_DIR="${1}"
+      elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
+      else echo "ERROR: Invalid (extra) argument (${1})" >&2 && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+
+# Check dependencies (and format support)
+[ -z "$(which markdown)" ] && echo "ERROR[$$]: 'markdown' cannot be found" >&2 && exit 1
+
+# Check directories and files
+SRC_DIR=${SRC_DIR%%/}
+DST_DIR=${DST_DIR%%/}
+[ -n "${INPLACE}" -a -z "${DST_DIR}" ] && DST_DIR="${SRC_DIR}"
+[ -n "${TEMPLATE}" -a ! -r "${TEMPLATE}" ] && echo "ERROR[$$]: Invalid/unreadable template file (${TEMPLATE})" >&2 && exit 1
+[ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid/missing source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unreadable source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid/missing destination directory (${DST_DIR})" >&2 && exit 1
+[ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unwritable destination directory (${DST_DIR})" >&2 && exit 1
+
+# Lock function
+DST_LOCK="${DST_DIR}/.${0##*/}.lock"
+function atomic_begin {
+  n=100; while true; do # loop for ~5 seconds (100 x 0.05 seconds in average)
+    n=$(( ${n}-1 ))
+    [ ${n} -le 0 ] && echo "ERROR[$$]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
+    [ $(( ${n} % 10 )) -eq 0 ] && echo "WARNING[$$]: Waiting for lock (${DST_LOCK})" >&2
+    if ( set -o noclobber; echo -n > "${DST_LOCK}" ) 2>/dev/null; then
+      break
+    fi
+    sleep 0.0$(( ${RANDOM} % 10 ))
+  done
+}
+function atomic_end {
+  rm -f "${DST_LOCK}"
+}
+
+# Trap signals
+trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}" "${p_dst_copy}"; exit 2' INT TERM
+
+# Loop through files
+echo "INFO[$$]: Looking for files to synchronize..."
+IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' ${NOSUB:+-maxdepth 1} \( -type f -o -type l \) -not -path '*/.git/*' ${INPLACE:+-name '*.md'}" | sort); do
+  # Compute source parameters
+  d_src="$(dirname ${p_src})"
+  [ -e "${d_src}/.nomarkdown" ] && continue
+  e_src="${p_src##*.}"
+
+  # Compute destination parameters
+  p_dst="${p_src}"
+  p_dst="${DST_DIR}/${p_dst#${SRC_DIR}/}"
+  d_dst="$(dirname ${p_dst})"
+  if [ "${p_dst##*.}" == 'md' ]; then
+    [ -n "${COPY}" ] && p_dst_copy="${p_dst}" || p_dst_copy=
+    p_dst="${p_dst%.*}.html"
+  fi
+
+  # Check destination file
+  atomic_begin
+  if [ -z "${FORCE}" ]; then
+    if [ -z "${INPLACE}" ]; then
+      [ -e "${p_dst}" ] && atomic_end && continue
+    else
+      [ ! "${p_src}" -nt "${p_dst}" ] && atomic_end && continue
+    fi
+  fi
+  if [ ! -d "${d_dst}" ]; then
+    mkdir -p "${d_dst}"
+    [ -n "${CHMOD_DIR}" ] && chmod ${CHMOD_DIR} "${d_dst}"
+    [ -n "${CHOWN_DIR}" ] && chown ${CHOWN_DIR} "${d_dst}"
+  fi
+  [ ! -d "${d_dst}" ] && echo "WARNING[$$]: Failed to create destination directory (${d_dst}); skipping..." >&2 && atomic_end && continue
+  [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}): skipping..." >&2 && atomic_end && continue
+  touch "${p_dst}"
+  atomic_end
+
+  # Permissions
+  [ -n "${CHMOD}" ] && chmod ${CHMOD} "${p_dst}"
+  [ -n "${CHOWN}" ] && chown ${CHOWN} "${p_dst}"
+  if [ -n "${p_dst_copy}" ]; then
+    touch "${p_dst_copy}"
+    [ -n "${CHMOD}" ] && chmod ${CHMOD} "${p_dst_copy}"
+    [ -n "${CHOWN}" ] && chown ${CHOWN} "${p_dst_copy}"
+  fi
+
+  # Synchronize
+  echo "INFO[$$]: ${p_src} -> ${p_dst}"
+  # ... markdown
+  if [ "${p_src##*.}" == 'md' ]; then
+    if [ -z "${TEMPLATE}" ]; then
+      cat > "${p_dst}" << EOF
+<!DOCTYPE html>
+<HTML>
+<BODY>
+EOF
+      markdown "${p_src}" \
+      | sed 's,href="\([^:"]*/[^"]*\|[^/"]*\).md",href="\1.html",gi' \
+      >> "${p_dst}"
+      cat >> "${p_dst}" << EOF
+</BODY>
+</HTML>
+EOF
+    else
+      markdown "${p_src}" \
+      | sed -e '/%{markdown}/ {r /dev/stdin
+; d}' "${TEMPLATE}" \
+      | sed 's,href="\([^:"]*/[^"]*\|[^/"]*\).md",href="\1.html",gi' \
+      > "${p_dst}"
+    fi
+    [ -n "${p_dst_copy}" ] && cat "${p_src}" > "${p_dst_copy}"
+  else
+    cat "${p_src}" > "${p_dst}"
+  fi
+
+done
+
+# Done
+echo "INFO[$$]: Done"
+exit 0
+
