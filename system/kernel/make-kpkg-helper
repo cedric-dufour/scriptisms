@@ -25,6 +25,9 @@ OPTIONS:
   -A, --apt
     Install/update the 'linux-source-<version>' package before proceeding
 
+  -b, --build <path-dir>
+    Path to the build directory (default: .)
+
   -a, --author <firstname-lastname>
     Author full name (default: $(getent passwd $(whoami) | cut -d: -f5))
 
@@ -43,6 +46,7 @@ MY_CONFIG=
 MY_PATCHES=
 MY_OVERLAY=
 MY_APT=
+MY_BUILD='.'
 MY_NAME="$(getent passwd $(whoami) | cut -d: -f5)"
 MY_EMAIL="$(whoami)@$(hostname -f)"
 MY_CONCURRENCY=$(fgrep 'core id' /proc/cpuinfo | sort -u | wc -l)
@@ -67,6 +71,10 @@ while [ -n "${1}" ]; do
 
     -A|--apt)
       MY_APT='yes'
+      ;;
+
+    -b|--build)
+      shift; MY_BUILD="${1%%/}"
       ;;
 
     -a|--author)
@@ -121,7 +129,7 @@ MY_SOURCE_PKG="linux-source-${MY_VERSION}"
 MY_SOURCE_TAR="/usr/src/linux-source-${MY_VERSION}.tar.xz"
 MY_SOURCE_OVL="/usr/share/kernel-package"
 MY_SOURCE_LOG="/usr/share/doc/linux-source-${MY_VERSION}/changelog.Debian.gz"
-MY_SOURCE_DIR="./linux-source-${MY_VERSION}"
+MY_SOURCE_DIR="${MY_BUILD}/linux-source-${MY_VERSION}"
 
 # Retrieve source package
 echo
@@ -145,7 +153,7 @@ fi
 # Uncompress source tarball
 echo
 echo "INFO: Uncompressing kernel source tarball (${MY_SOURCE_TAR})"
-tar -xJf "${MY_SOURCE_TAR}"
+tar -xa -C "${MY_BUILD}" -f "${MY_SOURCE_TAR}"
 [ ! -d "${MY_SOURCE_DIR}" ] && echo "ERROR: Missing kernel source directory (${MY_SOURCE_DIR})" >&2 && exit 1
 
 # Copy kernel configuration
@@ -247,6 +255,6 @@ echo
 echo 'INFO: Done'
 trap - EXIT
 popd
-ls -al linux-image-*.deb
+ls -al "${MY_BUILD}"/linux-image-*.deb
 exit 0
 
