@@ -28,12 +28,32 @@ MY_SEGMENT="$1"; shift
 ## Functions
 function __canonical {
   my_ip_raw="${1}"
-  my_ip_canonical=
-  for i in $(seq 1 $(( ${2} / 16 )) ); do
-    my_ip_canonical="${my_ip_canonical}$(printf '%.4x' 0x0${my_ip_raw%%:*})"
+  my_ip_group=$(( ${2} / 16 ))
+  my_ip_prefix=
+  while true; do
+    [ ${my_ip_group} -le 0 ] && break
+    [ "${my_ip_raw:0:1}" == ':' ] && break
+    my_ip_prefix="${my_ip_prefix}$(printf '%.4x' 0x0${my_ip_raw%%:*})"
+    my_ip_group=$(( ${my_ip_group} -1 ))
+    [[ "${my_ip_raw}" == *':'* ]] || break
     my_ip_raw="${my_ip_raw#*:}"
   done
-  echo "${my_ip_canonical}"
+  my_ip_suffix=
+  while true; do
+    [ ${my_ip_group} -le 0 ] && break
+    [ -z "${my_ip_raw}" ] && break
+    my_ip_suffix="${my_ip_suffix}$(printf '%.4x' 0x0${my_ip_raw%%:*})"
+    my_ip_group=$(( ${my_ip_group} -1 ))
+    [[ "${my_ip_raw}" == *':'* ]] || break
+    my_ip_raw="${my_ip_raw#*:}"
+  done
+  my_ip_0s=
+  while true; do
+    [ ${my_ip_group} -le 0 ] && break
+    my_ip_0s="${my_ip_0s}$(printf '%.4x' 0x0)"
+    my_ip_group=$(( ${my_ip_group} -1 ))
+  done
+  echo "${my_ip_prefix}${my_ip_0s}${my_ip_suffix}"
 }
 
 function __nibbles {
@@ -80,7 +100,7 @@ cat << EOF
 \$ORIGIN ${MY_SEGMENT_NIBBLES}.ip6.arpa.
 EOF
 for file_forward in "$@"; do
-  for my_record in $(grep -v '^\s*;' "${file_forward}" | egrep "AAAA\s\s*${MY_SEGMENT_PREFIX}:" | sed 's/^\([-.a-zA-Z0-9]*\).*AAAA\s\s*/\1|/;s/\(|[:0-9a-f]*\).*$/\1/'); do
+  for my_record in $(grep -v '^\s*;' "${file_forward}" | egrep "AAAA\s\s*${MY_SEGMENT_PREFIX%%:}:" | sed 's/^\([-.a-zA-Z0-9]*\).*AAAA\s\s*/\1|/;s/\(|[:0-9a-f]*\).*$/\1/'); do
     my_hostname="${my_record%|*}"
     my_aaaa="${my_record#*|}"
     my_aaaa_canonical="$(__canonical "${my_aaaa}" 128)"
