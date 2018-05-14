@@ -1,0 +1,44 @@
+#!/bin/bash
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <device-path>
+
+SYNOPSIS:
+  Enable wakeup-from-suspend for the selected device (SysFS path) and all its
+  parents chain.
+
+USAGE:
+  Invoke manually or within a device-matching UDev rule; e.g.:
+    SUBSYSTEM=="usb", ACTION=="add", ATTRS{idVendor}=="<id>", ATTRS{idProduct}=="<id>" RUN+="/path/to/enable-wakeup $env{DEVPATH}"
+EOF
+
+# Arguments
+DEVICE_SYSFS="${1%%/}"
+[ "${DEVICE_SYSFS:0:5}" != '/sys/' ] && DEVICE_SYSFS="/sys/${DEVICE_SYSFS##/}"
+
+
+## UDev <-> user friendliness
+[ -n "${ACTION}" -a "${ACTION}" != 'add' -a "${ACTION}" != 'change' ] && exit 0
+
+
+## Check and identify device
+[ ! -e "${DEVICE_SYSFS}/power/wakeup" ] && echo "ERROR: Device does not support wakeup @ ${DEVICE_SYSFS}" >&2 && exit 1
+DEVICE_VENDOR_ID="$(cat "${DEVICE_SYSFS}/idVendor")"
+DEVICE_VENDOR_NAME="$(cat "${DEVICE_SYSFS}/manufacturer")"
+DEVICE_PRODUCT_ID="$(cat "${DEVICE_SYSFS}/idProduct")"
+DEVICE_PRODUCT_NAME="$(cat "${DEVICE_SYSFS}/product")"
+echo "INFO: Enabling wakeup for device ${DEVICE_VENDOR_NAME} ${DEVICE_PRODUCT_NAME} (${DEVICE_VENDOR_ID}:${DEVICE_PRODUCT_ID})"
+
+
+## Enable wakeup along device(s) path
+PATH_SYSFS="${DEVICE_SYSFS}"
+while true; do
+  if [ -e "${PATH_SYSFS}/power/wakeup" ]; then
+    #echo "DEBUG: Enabling wakeup @ ${PATH_SYSFS}"
+    echo 'enabled' > "${PATH_SYSFS}/power/wakeup"
+  fi
+  PATH_SYSFS="${PATH_SYSFS%/*}"
+  [ "${PATH_SYSFS}" == '/sys' ] && break
+done
+

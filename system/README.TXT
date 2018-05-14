@@ -21,6 +21,11 @@ dns-make-ip6.arpa
 Generate the reverse lookup zone corresponging to the given IPv6 segment
 (which length MUST match 16-bit multiple) and given DNS forward resources.
 
+enable-wakeup
+-------------
+Enable wakeup-from-suspend for the selected device (SysFS path) and all its
+parents chain.
+
 huawei-wctl
 -----------
 Control Huawei E303s-2 (and compatible) 3G/UMTS USB dongle via its web API.
