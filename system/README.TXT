@@ -29,11 +29,6 @@ kernel [directory]
 ------------------
 Deal with the Linux kernel with less headaches.
 
-kvm-helper
-----------
-Launch a KVM virtual server (guest) with appropriate options for the
-requested mode.
-
 makejail-ssh
 ------------
 Create a chroot-ed resources for jailed SSH proxying:
@@ -48,6 +43,11 @@ pgsql-backup
 ------------
 Backup a PostgreSQL database according to the connection parameters specified
 in the configuration file(s).
+
+qemu-easy
+---------
+Launch a QEMU (KVM) virtual machine with appropriate options for the
+requested mode.
 
 rsync-backup
 ------------
