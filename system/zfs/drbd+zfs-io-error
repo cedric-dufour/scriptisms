@@ -1,0 +1,232 @@
+#!/bin/bash
+set -e
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0#@*/} {drbd-detach|zpool-offline} [<options>]
+
+SYNOPSIS:
+  Detach/offline the given DRBD/ZPOOL resource/device (locally and/or remotely).
+
+OPTIONS:
+  --drbd-minor <int>
+    DRBD minor ID (default:\${DRBD_MINOR})
+
+  --drbd-resource <name>
+    DRBD resource name (default:\${DRBD_RESOURCE})
+
+  --zpool-name <name>
+    ZPOOL name
+
+  --zpool-device <name>
+    ZPOOL device name
+
+  --no-localhost
+    Do NOT perform actions on local host
+
+  --remote <host>
+    Perform actions on given remote host (via SSH)
+
+PARAMETERS:
+  You MUST edit this file and configure your DRBD2ZPOOL and ZDEV2ZSPARE
+  associations.
+EOF
+
+
+## Parameters
+
+# DRBD2ZPOOL: DRBD resources <-> ZFS pool
+declare -A DRBD2ZPOOL
+for res in drbd{0..11}; do
+  DRBD2ZPOOL[${res}]='tank'
+done
+
+# ZDEV2ZSPARE: ZFS pool devices <-> spare(s)
+declare -A ZDEV2ZSPARE
+for res in drbd{0..10}; do
+  ZDEV2ZSPARE[${res}]='drbd11'
+done
+
+
+## Arguments
+ACTION=
+#DRBD_MINOR=    # passed by DRBD 'on-io-error' handler
+#DRBD_RESOURCE= # passed by DRBD 'on-io-error' handler
+ZPOOL_NAME=
+ZPOOL_DEVICE=
+HOST_NOLOCAL=
+HOST_REMOTE=
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    '--drbd-minor')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1} ...)" && exit 1
+      DRBD_MINOR="${2}"
+      shift
+    ;;
+
+    '--drbd-resource')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1} ...)" && exit 1
+      DRBD_RESOURCE="${2}"
+      shift
+    ;;
+
+    '--zpool-name')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1} ...)" && exit 1
+      ZPOOL_NAME="${2}"
+      shift
+    ;;
+
+    '--zpool-device')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1} ...)" && exit 1
+      ZPOOL_DEVICE="${2}"
+      shift
+    ;;
+
+    '--no-localhost')
+      HOST_NOLOCAL='yes'
+    ;;
+
+    '--remote')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1} ...)" && exit 1
+      HOST_REMOTE="${2}"
+      shift
+    ;;
+
+    '-'*)
+      echo "ERROR: Invalid option (${1})" && exit 1
+    ;;
+
+    *)
+      if [ -z "${ACTION}" ]; then
+        ACTION="${1}"
+      else
+        echo "ERROR: Unexpected argument (${1})" && exit 1
+      fi
+    ;;
+
+  esac
+  shift
+done
+
+
+## Environment
+
+# (Short)hostname
+SELF_HOST="$(hostname -s)"
+
+# Ourself
+pushd "$(dirname "${0}")" >/dev/null
+SELF_SCRIPT="$(pwd)/$(basename "${0}")"
+popd >/dev/null
+
+# Check
+[ -n "${HOST_NOLOCAL}" -a -z "${HOST_REMOTE}" ] && echo "ERROR[${SELF_HOST}]: Cannot perform actions on neither localhost nor remote host" && exit 1
+
+
+## !!! WARNING !!! WARNING !!! WARNING !!! WARNING !!! WARNING !!! WARNING !!!
+#
+#                     ??? DRBD bug <-???-> ZFS bug ???
+#  DRBD resources MUST be detached on both peers to prevent total failure
+#  of all network interfaces, and all other DRBD resources, and eventual
+#  full system deadlock.
+#                     ??? DRBD bug <-???-> ZFS bug ???
+#
+#  Also, DRBD 'on-io-error' handler MUST complete (exit) for the I/O error
+#  to be propagated to ZFS. Any ZFS transaction group (TXG) WILL stall until
+#  it does, with corresponding process (txg_sync) deadlock! As well as any
+#  other attempted ZFS command!
+#
+## !!! WARNING !!! WARNING !!! WARNING !!! WARNING !!! WARNING !!! WARNING !!!
+
+
+## Action
+case "${ACTION}" in
+
+  'drbd-detach')
+    ## Detach the DRBD resource
+
+    # Check
+    [ -z "${DRBD_MINOR}" ] && echo "ERROR[${SELF_HOST}]: Missing both DRBD minor ID resource option (--drbd-minor) and environment variable (DRBD_MINOR)" && exit 1
+    [ -z "${DRBD_RESOURCE}" ] && DRBD_RESOURCE="drbd${DRBD_MINOR}"
+
+    # Locally
+    if [ -z "${HOST_NOLOCAL}" ]; then
+      echo "INFO[${SELF_HOST}]: Detaching local DRBD resource (${DRBD_MINOR}:${DRBD_RESOURCE})"
+
+      # Detach the DRBD resource
+      # NOTE: DRBD should have taken care of it as part of 'on-io-error call-local-io-error' but
+      #       it can't hurt to do it (again), especially if we're called manually.
+      drbdadm detach ${DRBD_RESOURCE} --force \
+      || echo "WARNING[${SELF_HOST}]: Failed to detach DRBD resource (${DRBD_MINOR}:${DRBD_RESOURCE})"
+    fi
+
+    # Remotely
+    if [ -n "${HOST_REMOTE}" ]; then
+      echo "INFO[${SELF_HOST}]: Detaching remote DRBD resource (${DRBD_MINOR}:${DRBD_RESOURCE} -> ${HOST_REMOTE})"
+      ssh ${HOST_REMOTE} "'${SELF_SCRIPT}' drbd-detach --drbd-minor '${DRBD_MINOR}' --drbd-resource '${DRBD_RESOURCE}'"
+    fi
+
+
+    ## Offline the ZPOOL device; ASYNCHRONOUSLY!
+
+    # Check
+    zpool_name="${DRBD2ZPOOL[${DRBD_RESOURCE}]}"
+    [ -z "${zpool_name}" ] && echo "WARNING[${SELF_HOST}]: No matching ZPOOL defined for DRBD resource (${DRBD_MINOR}:${DRBD_RESOURCE})" && exit 0
+
+    # Locally
+    if [ -z "${HOST_NOLOCAL}" ]; then
+      [ -z "$(zpool list -H -o health "${zpool_name}" 2>/dev/null)" ] && echo "INFO[${SELF_HOST}]: ZPOOL is currently not active (${zpool_name})" && exit 0
+      zpool_device="drbd${DRBD_MINOR}"
+      echo "INFO[${SELF_HOST}]: Offlining ZPOOL device (${zpool_name}:${zpool_device}), ASYNCHRONOUSLY!"
+      "${SELF_SCRIPT}" zpool-offline --zpool-name "${zpool_name}" --zpool-device "${zpool_device}" --drbd-minor "${DRBD_MINOR}" --drbd-resource "${DRBD_RESOURCE}" >/dev/null 2>&1 &
+    fi
+  ;;
+
+  'zpool-offline')
+    ## Offline the ZPOOL device
+
+    # Check
+    [ -z "${ZPOOL_NAME}" ] && echo "ERROR[${SELF_HOST}]: Missing ZPOOL name option (--zpool-name)" && exit 1
+    [ -z "${ZPOOL_DEVICE}" ] && echo "ERROR[${SELF_HOST}]: Missing ZPOOL device name option (--zpool-device)" && exit 1
+
+    # Locally
+    if [ -z "${HOST_NOLOCAL}" ]; then
+      echo "INFO[${SELF_HOST}]: Offlining local ZPOOL device (${ZPOOL_NAME}:${ZPOOL_DEVICE})"
+
+      # Fault the ZFS pool device
+      zpool offline -f ${ZPOOL_NAME} ${ZPOOL_DEVICE} \
+      || echo "WARNING[${SELF_HOST}]: Failed to offline ZPOOL device (${ZPOOL_NAME}:${ZPOOL_DEVICE})"
+
+      # Online ZFS pool spare
+      zpool_spare="${ZDEV2ZSPARE[${ZPOOL_DEVICE}]}"
+      if [ -n "${zpool_spare}" ]; then
+        zpool replace ${ZPOOL_NAME} ${ZPOOL_DEVICE} ${zpool_spare} \
+        || echo "WARNING[${SELF_HOST}]: Failed to online ZPOOL spare (${ZPOOL_NAME}:${ZPOOL_DEVICE}->${zpool_spare})"
+      fi
+
+      # Switch the DRBD resource to Secondary
+      if [ -n "${DRBD_MINOR}" -o -n "${DRBD_RESOURCE}" ]; then
+        [ -z "${DRBD_RESOURCE}" ] && DRBD_RESOURCE="drbd${DRBD_MINOR}"
+        drbdadm secondary ${DRBD_RESOURCE} \
+        || echo "WARNING[${SELF_HOST}]: Failed to switch DRBD resource to Secondary (${DRBD_MINOR:-?}:${DRBD_RESOURCE})"
+      fi
+    fi
+
+    # Remotely
+    if [ -n "${HOST_REMOTE}" ]; then
+      echo "INFO[${SELF_HOST}]: Offlining remote ZPOOL device (-> ${HOST_REMOTE})"
+      ssh ${HOST_REMOTE} "'${SELF_SCRIPT}' zpool-offline --zpool-name '${ZPOOL_NAME}' --zpool-device '${ZPOOL_DEVICE}'${DRBD_MINOR:+ --drbd-minor '${DRBD_MINOR}'}${DRBD_RESOURCE:+ --drbd-resource '${DRBD_RESOURCE}'}"
+    fi
+  ;;
+
+  *)
+    echo "ERROR: Invalid action (${ACTION})" >&2 && exit 1
+  ;;
+
+esac
+
+
+## Done
+exit 0
+
