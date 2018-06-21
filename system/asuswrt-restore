@@ -40,7 +40,6 @@ while [ -n "${1}" ]; do
       PATH_OUTPUT="${1}"
       ;;
     -M|--migration)
-      shift
       MIGRATION=yes
       ;;
     -*)
@@ -74,7 +73,7 @@ join -t'=' -j 1 -o '2.1 2.2' \
   <(egrep -v "${GREP_FILTER}" "${NVRAM_INI}" | sort -u | sed 's/^@//') \
   <(sort -t'=' -k1,1 "${NVRAM_BKP}") \
 | tr '\n' '\0' \
-| sed 's/\r//g;s/\x0/\\n/g;s/\\n\([^=]*\)=/\n\1=/g' \
+| sed 's/\x0$//;s/\r//g;s/\x0/\\n/g;s/\\n\([^=]*\)=/\n\1=/g' \
 | sed 's/"/\\"/g;s/^\([^=]*\)=\(.*[^-.0-9].*\)$/\1="\2"/;s/^/nvram set /'
 cat << EOF
 nvram commit
