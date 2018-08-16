@@ -67,6 +67,10 @@ done
 [ -z "${ARG_ACTION}" ] && ARG_ACTION='start'
 
 
+## Check
+[ -z "$(which wipe)" ] && echo "ERROR: Missing the 'wipe' utility (apt-get install wipe)" && exit 1
+
+
 ## Vault
 case "${ARG_ACTION}" in
 
@@ -136,13 +140,13 @@ case "${ARG_ACTION}" in
       echo "WARNING: Found no RAM vault LOOP device to secure-wipe" >&2
     fi
 
-    # Unmount
+    # TMPFS
     if mountpoint -q "${OPT_MOUNTPOINT}"; then
       umount "${OPT_MOUNTPOINT}"
       [ $? -ne 0 ] && echo "WARNING: Failed to unmount the RAM vault TMPFS (${OPT_MOUNTPOINT})" >&2
     fi
 
-    # Enable SWAP
+    # SWAP
     swapon -a
     [ $? -ne 0 ] && echo "WARNING: Failed to (re-)enable SWAP" >&2
     echo "INFO: SWAP (re-)enabled"
