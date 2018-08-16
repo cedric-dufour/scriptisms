@@ -44,6 +44,10 @@ mysql-backup
 Backup a MySQL database according to the connection parameters specified
 in the configuration file(s).
 
+openssl-easy
+------------
+OpenSSL made easy (a command-line replacement for TinyCA)
+
 pgsql-backup
 ------------
 Backup a PostgreSQL database according to the connection parameters specified
