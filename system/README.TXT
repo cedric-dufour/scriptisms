@@ -58,6 +58,10 @@ qemu-easy
 Launch a QEMU (KVM) virtual machine with appropriate options for the
 requested mode.
 
+ramvault
+--------
+Temporary RAM vault (TMPFS), securily-wiped when unmounted
+
 rsync-backup
 ------------
 Backup (RSync) a given remote host according to the parameters specified in

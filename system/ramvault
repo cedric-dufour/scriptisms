@@ -1,0 +1,159 @@
+#!/bin/bash
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} [<options>] [{start|stop}]
+
+SYNOPSIS:
+  Mount a limited-access TMPFS (start) and secure-wipe its content before
+  unmounting it (stop).
+
+OPTIONS:
+  -M, --mountpoint <path>
+    TMPFS mountpoint (default: /ram/vault)
+
+  -S, --size <size>
+    TMPFS size; see 'man tmpfs' for formatting (default: 1m)
+
+  -U, --uid <UID>
+    User UID (default: root)
+
+WARNING:
+  The security of the RAM vault depends entirely on how the kernel allocates
+  the TMPFS memory. If this memory, at any time, is internally copied (by the
+  kernel) to another location, then the secure-wiping of the original location
+  will NOT take place.
+  For that reason, in addition to prevent the RAM vault content being swapped
+  to disk, all swap partitions are disabled before the RAM vault is started.
+  Also note that no encryption is used, since anyone able to read the kernel
+  memory will also be able to recover the encryption key from that memory.
+EOF
+
+# Arguments
+OPT_MOUNTPOINT='/ram/vault'
+OPT_SIZE='1m'
+OPT_UID='root'
+ARG_ACTION=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-M'|'--mountpoint')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      OPT_MOUNTPOINT="${2}"
+      shift
+      ;;
+    '-S'|'--size')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      OPT_SIZE="${2}"
+      shift
+      ;;
+    '-U'|'--uid')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      OPT_UID="${2}"
+      shift
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" && exit 1
+      ;;
+    *)
+      if [ -z "${ARG_ACTION}" ]; then
+        ARG_ACTION="${1}"
+      else
+        echo "ERROR: Too many arguments (${1})" && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+[ -z "${ARG_ACTION}" ] && ARG_ACTION='start'
+
+
+## Vault
+case "${ARG_ACTION}" in
+
+  'start')
+    # Mountpoint
+    mountpoint -q "${OPT_MOUNTPOINT}" && echo "INFO: RAM vault (TMPFS) is already started/mounted"
+    [ ! -e "${OPT_MOUNTPOINT}" ] && echo "INFO: Creating RAM vault mountpoint (${OPT_MOUNTPOINT})" && mkdir -p "${OPT_MOUNTPOINT}"
+    [ ! -d "${OPT_MOUNTPOINT}" -o ! -w "${OPT_MOUNTPOINT}" ] && echo "ERROR: Invalid/unwritable RAM vault mountpoint (${OPT_MOUNTPOINT})" >&2 && exit 1
+
+    # SWAP
+    echo "INFO: Disabling SWAP"
+    swapoff -a
+    [ $? -ne 0 ] && echo "ERROR: Failed to disable SWAP" >&2 && exit 1
+
+    # TMPFS
+    echo "INFO: Mounting the RAM vault TMPFS (${OPT_MOUNTPOINT}; size=${OPT_SIZE},mode=0700,uid=${OPT_UID},gid=nogroup)"
+    mount -t tmpfs -o size=${OPT_SIZE},mode=0700,uid=${OPT_UID},gid=nogroup,noatime tmpfs "${OPT_MOUNTPOINT}"
+    [ $? -ne 0 ] && echo "ERROR: Failed to mount RAM vault TMPFS" >&2 && exit 1
+
+    # LOOP
+    RAM_LOOP="$(losetup -f)"
+    echo "INFO: Creating and attaching the RAM vault LOOP device (${RAM_LOOP}: ${OPT_MOUNTPOINT}/LOOP)"
+    dd if=/dev/zero of="${OPT_MOUNTPOINT}/LOOP" 2>/dev/null
+    losetup "${RAM_LOOP}" "${OPT_MOUNTPOINT}/LOOP"
+    [ $? -ne 0 ] && echo "ERROR: Failed create/attach the RAM vault LOOP device" >&2 && exit 1
+
+    # EXT2
+    echo "INFO: Creating and mounting the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT}; mode=0700,uid=${OPT_UID},gid=nogroup)"
+    mke2fs -t ext2 -L RAMVAULT -m 0 -q "${RAM_LOOP}"
+    [ $? -ne 0 ] && echo "ERROR: Failed create the RAM vault EXT2 filesystem" >&2 && exit 1
+    mount -t ext2 -o noatime "${RAM_LOOP}" "${OPT_MOUNTPOINT}"
+    [ $? -ne 0 ] && echo "ERROR: Failed mount the RAM vault EXT2 filesystem" >&2 && exit 1
+    chmod 700 "${OPT_MOUNTPOINT}"
+    chown ${OPT_UID}:nogroup "${OPT_MOUNTPOINT}" 
+
+    # Done
+    echo "INFO: RAM vault ready to use (${OPT_MOUNTPOINT})"
+    echo "!!! DO NOT FORGET TO STOP THE VAULT TO SECURELY WIPE ITS CONTENT !!!"
+    ;;
+
+  'stop')
+    # Check
+    if ! mountpoint -q "${OPT_MOUNTPOINT}"; then
+       echo "ERROR: RAM vault is not started/mounted (${OPT_MOUNTPOINT})" >&2 && exit 1
+    fi
+
+    # EXT2
+    if [ ! -e "${OPT_MOUNTPOINT}/LOOP" ]; then
+      umount "${OPT_MOUNTPOINT}"
+      [ $? -ne 0 ] && echo "WARNING: Failed to unmount the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT})" >&2
+    fi
+
+    # LOOP
+    RAM_LOOP="$(losetup -nO NAME -j "${OPT_MOUNTPOINT}/LOOP")"
+    if [ -n "${RAM_LOOP}" ]; then
+      losetup -d "${RAM_LOOP}"
+      [ $? -ne 0 ] && echo "WARNING: Failed to detach the RAM vault LOOP device (${RAM_LOOP}: ${OPT_MOUNTPOINT}/LOOP)" >&2
+    fi
+
+    # Wipe
+    if [ -e "${OPT_MOUNTPOINT}/LOOP" ]; then
+      echo "INFO: Secure-wiping the RAM vault LOOP device (${OPT_MOUNTPOINT}/LOOP)"
+      wipe -f -e "${OPT_MOUNTPOINT}/LOOP"
+      [ $? -ne 0 ] && echo "ERROR: Failed to secure-wipe the RAM vault LOOP device" >&2 && exit 1
+      echo "INFO: RAM vault LOOP device wiped"
+    else
+      echo "WARNING: Found no RAM vault LOOP device to secure-wipe" >&2
+    fi
+
+    # Unmount
+    if mountpoint -q "${OPT_MOUNTPOINT}"; then
+      umount "${OPT_MOUNTPOINT}"
+      [ $? -ne 0 ] && echo "WARNING: Failed to unmount the RAM vault TMPFS (${OPT_MOUNTPOINT})" >&2
+    fi
+
+    # Enable SWAP
+    swapon -a
+    [ $? -ne 0 ] && echo "WARNING: Failed to (re-)enable SWAP" >&2
+    echo "INFO: SWAP (re-)enabled"
+
+    # Done
+    echo "INFO: RAM vault stopped"
+    ;;
+
+esac
+
+
+## DONE!
+exit 0
+
