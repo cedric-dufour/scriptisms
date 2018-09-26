@@ -92,10 +92,10 @@ case "${ARG_ACTION}" in
 
     # LOOP
     RAM_LOOP="$(losetup -f)"
-    echo "INFO: Creating and attaching the RAM vault LOOP device (${RAM_LOOP}: ${OPT_MOUNTPOINT}/LOOP)"
+    echo "INFO: Creating and attaching the RAM vault LOOP image/device (${RAM_LOOP}: ${OPT_MOUNTPOINT}/LOOP)"
     dd if=/dev/zero of="${OPT_MOUNTPOINT}/LOOP" 2>/dev/null
     losetup "${RAM_LOOP}" "${OPT_MOUNTPOINT}/LOOP"
-    [ $? -ne 0 ] && echo "ERROR: Failed create/attach the RAM vault LOOP device" >&2 && exit 1
+    [ $? -ne 0 ] && echo "ERROR: Failed to create/attach the RAM vault LOOP image/device" >&2 && exit 1
 
     # EXT2
     echo "INFO: Creating and mounting the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT}; mode=0700,uid=${OPT_UID},gid=nogroup)"
@@ -132,12 +132,12 @@ case "${ARG_ACTION}" in
 
     # Wipe
     if [ -e "${OPT_MOUNTPOINT}/LOOP" ]; then
-      echo "INFO: Secure-wiping the RAM vault LOOP device (${OPT_MOUNTPOINT}/LOOP)"
+      echo "INFO: Secure-wiping the RAM vault LOOP image (${OPT_MOUNTPOINT}/LOOP)"
       wipe -f -e "${OPT_MOUNTPOINT}/LOOP"
-      [ $? -ne 0 ] && echo "ERROR: Failed to secure-wipe the RAM vault LOOP device" >&2 && exit 1
-      echo "INFO: RAM vault LOOP device wiped"
+      [ $? -ne 0 ] && echo "ERROR: Failed to secure-wipe the RAM vault LOOP image" >&2 && exit 1
+      echo "INFO: RAM vault LOOP image wiped"
     else
-      echo "WARNING: Found no RAM vault LOOP device to secure-wipe" >&2
+      echo "WARNING: Found no RAM vault LOOP image to secure-wipe" >&2
     fi
 
     # TMPFS
