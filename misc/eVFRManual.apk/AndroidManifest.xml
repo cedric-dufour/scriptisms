@@ -7,8 +7,7 @@
   <uses-sdk android:minSdkVersion="16" android:targetSdkVersion="16" />
   <application android:label="@string/app_name"
       android:icon="@drawable/ic_launcher"
-      android:theme="@style/Theme.eVFRManual"
-      android:screenOrientation="portrait">
+      android:theme="@style/Theme.eVFRManual">
     <activity android:name=".eVFRManualActivity">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />

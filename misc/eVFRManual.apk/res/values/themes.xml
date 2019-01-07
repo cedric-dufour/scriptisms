@@ -3,5 +3,10 @@
   <style name="Theme.eVFRManual" parent="android:Theme.Holo">
     <item name="android:windowFullscreen">true</item>
     <item name="android:windowActionBar">true</item>
+    <item name="android:actionBarStyle">@style/ActionBar.eVFRManual</item>
+  </style>
+  <style name="ActionBar.eVFRManual" parent="android:Widget.Holo.ActionBar">
+    <item name="android:displayOptions">showTitle</item>
+    <item name="android:height">32dp</item>
   </style>
 </resources>
