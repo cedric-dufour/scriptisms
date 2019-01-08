@@ -62,6 +62,12 @@ COMMAND: start
     +uefi
       Boot via Unified Extensible Firmware Interface (UEFI) instead of legacy BIOS
 
+    +random
+      Add a (throttled) Random Number Generator (RNG) based on /dev/random
+
+    +urandom
+      Add a Random Number Generator (RNG) based on /dev/urandom
+
     +blkdev <device-type>, +netdev <device-type>
       Emulate the block or network subsystem using the given device type
       Default: virtio-*
@@ -129,6 +135,7 @@ MY_NET=
 MY_MAC=
 MY_BOOT=
 MY_UEFI=
+MY_RNG=
 MY_DEV_BLK=
 MY_DEV_NET=
 MY_RAM=
@@ -186,6 +193,14 @@ while [ -n "${1}" ]; do
 
     '+uefi')
       MY_UEFI='yes'
+      ;;
+
+    '+random')
+      MY_RNG='/dev/random'
+      ;;
+
+    '+urandom')
+      MY_RNG='/dev/urandom'
       ;;
 
     '+blkdev')
@@ -408,6 +423,13 @@ EOF
     if [ -n "${MY_UEFI}" ]; then
       QEMU_CMD="${QEMU_CMD}|-drive file='${DFLT_PATH_EFI}',if=pflash,format=raw,readonly"
       QEMU_CMD="${QEMU_CMD}|-drive file='${MY_PATH_EFIVARS}',if=pflash,format=raw"
+    fi
+
+    # ... RNG
+    if [ -n "${MY_RNG}" ]; then
+      QEMU_CMD="${QEMU_CMD}|-object rng-random,id=objrng0,filename=${MY_RNG}"
+      QEMU_CMD="${QEMU_CMD}|-device virtio-rng-pci,id=rng0,rng=objrng0"
+      [ "${MY_RNG}" == '/dev/random' ] && QEMU_CMD="${QEMU_CMD},max-bytes=128,period=1000"
     fi
 
     # ... primary HD
