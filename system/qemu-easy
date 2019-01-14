@@ -55,18 +55,21 @@ COMMAND: start
       Add network interface for corresponding MAC address
       (which MUST match a network interface; see ~/.qemu/network.cfg)
 
-    +boot {hd|cd|net}
-      Boot device
-      Default: as per QEMU or OVMF/UEFI default
-
-    +uefi
-      Boot via Unified Extensible Firmware Interface (UEFI) instead of legacy BIOS
+    +audio <driver>
+      Add audio card (see ${DFLT_QEMU_CMD%% *} -audio-help for available drivers)
 
     +random
       Add a (throttled) Random Number Generator (RNG) based on /dev/random
 
     +urandom
       Add a Random Number Generator (RNG) based on /dev/urandom
+
+    +boot {hd|cd|net}
+      Boot device
+      Default: as per QEMU or OVMF/UEFI default
+
+    +uefi
+      Boot via Unified Extensible Firmware Interface (UEFI) instead of legacy BIOS
 
     +blkdev <device-type>, +netdev <device-type>
       Emulate the block or network subsystem using the given device type
@@ -133,9 +136,10 @@ MY_CD1=
 MY_CD2=
 MY_NET=
 MY_MAC=
+MY_AUDIO=
+MY_RNG=
 MY_BOOT=
 MY_UEFI=
-MY_RNG=
 MY_DEV_BLK=
 MY_DEV_NET=
 MY_RAM=
@@ -185,14 +189,10 @@ while [ -n "${1}" ]; do
       MY_MAC="${1}"
       ;;
 
-    '+boot')
+    '+audio')
       [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
       shift
-      MY_BOOT="${1}"
-      ;;
-
-    '+uefi')
-      MY_UEFI='yes'
+      MY_AUDIO="${1}"
       ;;
 
     '+random')
@@ -201,6 +201,16 @@ while [ -n "${1}" ]; do
 
     '+urandom')
       MY_RNG='/dev/urandom'
+      ;;
+
+    '+boot')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_BOOT="${1}"
+      ;;
+
+    '+uefi')
+      MY_UEFI='yes'
       ;;
 
     '+blkdev')
@@ -394,7 +404,8 @@ EOF
   'start'|'run'|'create')
     [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <hd-image>)' >&2 && exit 1
 
-    # QEMU command
+    # QEMU command and environment
+    QEMU_ENV=
     QEMU_CMD="${MY_QEMU:-${DFLT_QEMU_CMD}}"
 
     # ... UUID
@@ -423,13 +434,6 @@ EOF
     if [ -n "${MY_UEFI}" ]; then
       QEMU_CMD="${QEMU_CMD}|-drive file='${DFLT_PATH_EFI}',if=pflash,format=raw,readonly"
       QEMU_CMD="${QEMU_CMD}|-drive file='${MY_PATH_EFIVARS}',if=pflash,format=raw"
-    fi
-
-    # ... RNG
-    if [ -n "${MY_RNG}" ]; then
-      QEMU_CMD="${QEMU_CMD}|-object rng-random,id=objrng0,filename=${MY_RNG}"
-      QEMU_CMD="${QEMU_CMD}|-device virtio-rng-pci,id=rng0,rng=objrng0"
-      [ "${MY_RNG}" == '/dev/random' ] && QEMU_CMD="${QEMU_CMD},max-bytes=128,period=1000"
     fi
 
     # ... primary HD
@@ -471,6 +475,19 @@ EOF
       QEMU_CMD="${QEMU_CMD}|-net none"
     fi
 
+    # ... RNG
+    if [ -n "${MY_RNG}" ]; then
+      QEMU_CMD="${QEMU_CMD}|-object rng-random,id=objrng0,filename=${MY_RNG}"
+      QEMU_CMD="${QEMU_CMD}|-device virtio-rng-pci,id=rng0,rng=objrng0"
+      [ "${MY_RNG}" == '/dev/random' ] && QEMU_CMD="${QEMU_CMD},max-bytes=128,period=1000"
+    fi
+
+    # ... audio
+    if [ -n "${MY_AUDIO}" ]; then
+      QEMU_ENV="${QEMU_ENV}|QEMU_AUDIO_DRV='${MY_AUDIO}'"
+      QEMU_CMD="${QEMU_CMD}|-soundhw hda"
+    fi
+
     # ... memory
     QEMU_CMD="${QEMU_CMD}|-m ${MY_RAM:-${DFLT_QEMU_RAM}}"
 
@@ -485,7 +502,7 @@ EOF
 
     # Check
     [ -z "$(lsmod | fgrep kvm)" ] && echo "WARNING: KVM kernel modules are not loaded" >&2
-    echo "${QEMU_CMD}" | sed 's/|/ \\\n /g' >&2
+    echo "${QEMU_ENV:+${QEMU_ENV}|}${QEMU_CMD}" | sed 's/^|/ /;s/|/ \\\n /g' >&2
     echo 'PRESS <ENTER> TO CONTINUE, <CTRL+C> To ABORT...' >&2
     read
 
@@ -515,7 +532,7 @@ EOF
     # GO!
     echo 'INFO: Running the virtual machine...' >&2
     echo " <->  ${0##*/} vnc ${MY_VNC:-${DFLT_QEMU_VNC}}" >&2
-    eval "${QEMU_CMD//|/ }"
+    eval "${QEMU_ENV//|/ } ${QEMU_CMD//|/ }"
     ;;
 
   'vnc')
