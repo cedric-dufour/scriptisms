@@ -112,7 +112,7 @@ done
 [ -z "${MY_VERSION}" ] && echo 'ERROR: Missing <version> argument' >&2 && exit 1
 [[ ${MY_VERSION} =~ ^[0-9]{1,}\.[0-9]{1,}$ ]]; [ $? -ne 0 ] && echo "ERROR: Invalid <version> argument (${MY_VERSION})" >&2 && exit 1
 [ -z "${MY_FLAVOR}" ] && echo 'ERROR: Missing <flavor> argument' >&2 && exit 1
-[[ ${MY_FLAVOR} =~ ^[a-z0-9]{2,}$ ]]; [ $? -ne 0 ] && echo "ERROR: Invalid <flavor> argument (${MY_FLAVOR})" >&2 && exit 1
+[[ ${MY_FLAVOR} =~ ^[-a-z0-9]{2,}$ ]]; [ $? -ne 0 ] && echo "ERROR: Invalid <flavor> argument (${MY_FLAVOR})" >&2 && exit 1
 # ... defaults
 [ -z "${MY_REVISION}" ] && MY_REVISION="$(date +'%Y%m%da~custom')"
 [ -z "${MY_CONFIG}" ] && MY_CONFIG="./config-${MY_VERSION}-${MY_FLAVOR}"
