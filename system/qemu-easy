@@ -8,7 +8,6 @@ DFLT_PATH_EFIVARS='/usr/share/OVMF/OVMF_VARS.fd'
 DFLT_QEMU_CMD='qemu-system-x86_64 -enable-kvm'
 DFLT_QEMU_RAM='1024'
 DFLT_QEMU_RTC='base=utc'
-DFLT_QEMU_VNC='none'
 
 
 ## Usage
@@ -55,6 +54,9 @@ COMMAND: start
       Add network interface for corresponding MAC address
       (which MUST match a network interface; see ~/.qemu/network.cfg)
 
+    +gui <driver>
+      Add graphic card/interface (available drivers: vnc, spice)
+
     +audio <driver>
       Add audio card (see ${DFLT_QEMU_CMD%% *} -audio-help for available drivers)
 
@@ -96,26 +98,30 @@ COMMAND: start
       Time reference for emulated Real Time Clock (RTC)
       Default: ${DFLT_QEMU_RTC}
 
-    -vnc [<host>]:<display>
-      VNC binding address and display
-      Default: ${DFLT_QEMU_VNC}
-
-COMMAND: vnc
-  ${0##*/} vnc [[<host>]:<display>]
-    > Launch the VNC viewer ('gnomeviewer' unless \${VNCVIEWER} is defined)
+COMMAND: netinfo
+  ${0##*/} netinfo +net <hostname|ip-address>
+    > Display configuration information about the given network
 
 COMMAND: stop, reset, kill, suspend, resume
-  ${0##*/} {stop|reset|kill|suspend|resume} <primary-hd-image>
+  ${0##*/} {stop|reset|kill|suspend|resume} +hd <primary-hd-image>
     > Gracefully shutdown, reset or focefully kill the virtual machine,
       or suspend/resume the emulation (via the QEMU monitor file/socket)
 
 COMMAND: console
-  ${0##*/} console <primary-hd-image>
+  ${0##*/} console +hd <primary-hd-image>
     > Connect to the given (serial) console
 
 COMMAND: monitor
-  ${0##*/} monitor <primary-hd-image> <command> ...
+  ${0##*/} monitor +hd <primary-hd-image> <command> ...
     > Send given command via the QEMU monitor file/socket
+
+COMMAND: vnc
+  ${0##*/} vnc +hd <primary-hd-image>
+    > Launch the graphical user interface viewer (Gnome 'gvncviewer')
+
+COMMAND: spice
+  ${0##*/} spice +hd <primary-hd-image>
+    > Launch the graphical user interface viewer (LibVirt 'remote-viewer')
 
 COMMAND: modprobe, rmmod
   ${0##*/} {modprobe|rmmod}
@@ -136,6 +142,7 @@ MY_CD1=
 MY_CD2=
 MY_NET=
 MY_MAC=
+MY_GUI=
 MY_AUDIO=
 MY_RNG=
 MY_BOOT=
@@ -144,7 +151,6 @@ MY_DEV_BLK=
 MY_DEV_NET=
 MY_RAM=
 MY_RTC=
-MY_VNC=
 MY_QEMU=
 MY_STDIO=
 QEMU_RAM=
@@ -187,6 +193,12 @@ while [ -n "${1}" ]; do
       [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
       shift
       MY_MAC="${1}"
+      ;;
+
+    '+gui')
+      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
+      shift
+      MY_GUI="${1}"
       ;;
 
     '+audio')
@@ -260,10 +272,14 @@ while [ -n "${1}" ]; do
       MY_RTC="${1}"
       ;;
 
-    '-vnc')
-      [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
-      shift
-      MY_VNC="${1}"
+    '-vnc'|'-spice')
+      echo "WARNING: Parameter ignored (${1}); see '+gui ...'" >&2
+      while [ -n "${2}" -a "${2:0:1}" != '+' -a "${2:0:1}" != '-' ]; do shift; done
+      ;;
+
+    '-soundhw')
+      echo "WARNING: Parameter ignored (${1}); see '+audio ...'" >&2
+      while [ -n "${2}" -a "${2:0:1}" != '+' -a "${2:0:1}" != '-' ]; do shift; done
       ;;
 
     '-help')
@@ -283,12 +299,7 @@ while [ -n "${1}" ]; do
       if [ -z "${MY_COMMAND}" ]; then
         MY_COMMAND="${1}"
       else
-        case "${MY_COMMAND}" in
-          'netinfo') MY_NET="${1}";;
-          'vnc') MY_VNC="${1}";;
-          'stop'|'shutdown'|'reset'|'kill'|'destroy'|'suspend'|'pause'|'resume'|'continue'|'cont') MY_HD1="${1}";;
-          'console'|'monitor') MY_HD1="${1}"; shift; break;;
-        esac
+        echo "ERROR: Too many arguments (${1})" >&2 && exit 1
       fi
       ;;
 
@@ -313,6 +324,7 @@ MY_FILE_PREFIX="$(basename "${MY_HD1%.*}")"
 MY_PATH_CONSOLE="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.console.sock"
 MY_PATH_MONITOR="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.monitor.sock"
 MY_PATH_EFIVARS="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.efivars.raw"
+MY_PATH_GUI="${MY_PATH_ROOT}/${MY_FILE_PREFIX}.gui.sock"
 
 # ... boot mode
 MY_BOOT_HD1=
@@ -389,11 +401,11 @@ MY_UUID="51454D55-4845-4C50-4552-$(echo "${MY_HD1}" | md5sum | sed 's/^\(.......
 case "${MY_COMMAND}" in
 
   'netinfo')
-    [ -z "${MY_NET}" ] && echo 'ERROR: Missing argument (<hostname>)' >&2 && exit 1
+    [ -z "${MY_NET}" -a -z "${MY_MAC}" ] && echo 'ERROR: Missing argument (+net/+mac ...)' >&2 && exit 1
     cat << EOF
 HOST INFORMATION:
- - host name: ..... ${MY_FQHN}
- - IPv4 address: .. ${MY_IPV4}
+ - host name: ..... ${MY_FQHN:-n/a}
+ - IPv4 address: .. ${MY_IPV4:-n/a}
  - MAC address: ... ${MY_MAC}
  - interfaces: .... ${MY_IFACES}
  - UUID: .......... ${MY_UUID}
@@ -402,7 +414,7 @@ EOF
     ;;
 
   'start'|'run'|'create')
-    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <hd-image>)' >&2 && exit 1
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <primary-hd-image>)' >&2 && exit 1
 
     # QEMU command and environment
     QEMU_ENV=
@@ -482,6 +494,17 @@ EOF
       [ "${MY_RNG}" == '/dev/random' ] && QEMU_CMD="${QEMU_CMD},max-bytes=128,period=1000"
     fi
 
+    # ... GUI
+    if [ "${MY_GUI}" == 'vnc' ]; then
+      QEMU_CMD="${QEMU_CMD}|-vnc unix:'${MY_PATH_GUI}'"
+    elif [ "${MY_GUI}" == 'spice' ]; then
+      QEMU_CMD="${QEMU_CMD}|-spice unix,addr='${MY_PATH_GUI}',disable-ticketing,image-compression=off,playback-compression=off"
+      QEMU_CMD="${QEMU_CMD}|-vga qxl"
+    else
+      [ -n "${MY_GUI}" ] && echo "WARNING: Invalid/unsupported graphic driver (${MY_GUI})" >&2
+      QEMU_CMD="${QEMU_CMD}|-vnc none"
+    fi
+
     # ... audio
     if [ -n "${MY_AUDIO}" ]; then
       QEMU_ENV="${QEMU_ENV}|QEMU_AUDIO_DRV='${MY_AUDIO}'"
@@ -493,9 +516,6 @@ EOF
 
     # ... RTC
     QEMU_CMD="${QEMU_CMD}|-rtc ${MY_RTC:-${DFLT_QEMU_RTC}}"
-
-    # ... VNC
-    QEMU_CMD="${QEMU_CMD}|-vnc ${MY_VNC:-${DFLT_QEMU_VNC}}"
 
     # ... other options
     QEMU_CMD="${QEMU_CMD}|${QEMU_OPTS}"
@@ -516,40 +536,16 @@ EOF
       cp -v "${DFLT_PATH_EFIVARS}" "${MY_PATH_EFIVARS}"
     fi
 
-    # ... console/monitor sockets
-    if [ "${MY_STDIO}" != 'console' ]; then
-      rm -f "${MY_PATH_CONSOLE}"
-      touch "${MY_PATH_CONSOLE}"
-      chmod 600 "${MY_PATH_CONSOLE}"
-    fi
-    if [ "${MY_STDIO}" != 'monitor' ]; then
-      rm -f "${MY_PATH_MONITOR}"
-      touch "${MY_PATH_MONITOR}"
-      chmod 600 "${MY_PATH_MONITOR}"
-    fi
-    trap "rm -f '${MY_PATH_CONSOLE}' '${MY_PATH_MONITOR}'" EXIT
+    # ... console/monitor/GUI sockets
+    trap "rm -f '${MY_PATH_CONSOLE}' '${MY_PATH_MONITOR}' '${MY_PATH_GUI}'" EXIT
 
     # GO!
     echo 'INFO: Running the virtual machine...' >&2
-    echo " <->  ${0##*/} vnc ${MY_VNC:-${DFLT_QEMU_VNC}}" >&2
-    eval "${QEMU_ENV//|/ } ${QEMU_CMD//|/ }"
-    ;;
-
-  'vnc')
-    vnc="${MY_VNC:-${DFLT_QEMU_VNC}}"
-    if [[ ! "${vnc}" =~ : ]]; then
-      vnc_host="${vnc}"
-      vnc_port=
-    else
-      vnc_host="${vnc%:*}"
-      vnc_port="${vnc#*:}"
-    fi
-    ${VNCVIEWER:-gvncviewer} ${vnc_host:-localhost}:${vnc_port:-0}
-    exit $?
+    umask 077 && eval "${QEMU_ENV//|/ } ${QEMU_CMD//|/ }"
     ;;
 
   'stop'|'shutdown'|'reset'|'kill'|'destroy'|'suspend'|'pause'|'resume'|'continue'|'cont')
-    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (<primary-hd-image>)' >&2 && exit 1
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <primary-hd-image>)' >&2 && exit 1
     [ ! -e "${MY_PATH_MONITOR}" ] && echo "ERROR: Missing QEMU monitor socket (${MY_PATH_MONITOR})" >&2 && exit 1
     case "${MY_COMMAND}" in
       'stop'|'shutdown') QEMU_MONITOR_CMD='system_powerdown';;
@@ -564,7 +560,7 @@ EOF
     ;;
 
   'console')
-    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (<primary-hd-image>)' >&2 && exit 1
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <primary-hd-image>)' >&2 && exit 1
     [ ! -e "${MY_PATH_CONSOLE}" ] && echo "ERROR: Missing VM (serial) console socket (${MY_PATH_CONSOLE})" >&2 && exit 1
     echo "minicom -D unix\\#'${MY_PATH_CONSOLE}'"
     minicom -D unix\#"${MY_PATH_CONSOLE}"
@@ -572,10 +568,22 @@ EOF
     ;;
 
   'monitor')
-    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (<primary-hd-image>)' >&2 && exit 1
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <primary-hd-image>)' >&2 && exit 1
     [ ! -e "${MY_PATH_MONITOR}" ] && echo "ERROR: Missing QEMU monitor socket (${MY_PATH_MONITOR})" >&2 && exit 1
     echo "echo $@ | socat - UNIX-CONNECT:'${MY_PATH_MONITOR}'"
     echo "$@" | socat - UNIX-CONNECT:"${MY_PATH_MONITOR}"
+    exit $?
+    ;;
+
+  'vnc')
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <primary-hd-image>)' >&2 && exit 1
+    gvncviewer "${MY_PATH_GUI}"
+    exit $?
+    ;;
+
+  'spice')
+    [ -z "${MY_HD1}" ] && echo 'ERROR: Missing primary HD image path (+hd <primary-hd-image>)' >&2 && exit 1
+    remote-viewer --title "${MY_FILE_PREFIX}" ${MY_COMMAND}+unix://"${MY_PATH_GUI}"
     exit $?
     ;;
 
