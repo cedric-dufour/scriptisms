@@ -100,12 +100,12 @@ touch "${PROCURVE_BACKUP_LOCK}"
 for host in $(sed 's/\s*#.*//' "${PROCURVE_BACKUP_CNF}"); do
   [ -z "${host}" ] && continue
   dst="${PROCURVE_BACKUP_DST}/${host}"
-  scp ${host}:/cfg/startup-config "${dst}.startup.cfg" >/dev/null 2>&1
-  [ $? -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
-  scp ${host}:/cfg/running-config "${dst}.running.cfg" >/dev/null 2>&1
-  [ $? -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
-  scp ${host}:/log/event-log "${dst}.event.log" >/dev/null 2>&1
-  [ $? -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
+  scp ${host}:/cfg/startup-config "${dst}.startup.cfg" 2>&1 >/dev/null | egrep -v '(^$|closed by remote host)'
+  [ ${PIPESTATUS[0]} -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
+  scp ${host}:/cfg/running-config "${dst}.running.cfg" 2>&1 >/dev/null | egrep -v '(^$|closed by remote host)'
+  [ ${PIPESTATUS[0]} -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
+  scp ${host}:/log/event-log "${dst}.event.log" 2>&1 >/dev/null | egrep -v '(^$|closed by remote host)'
+  [ ${PIPESTATUS[0]} -ne 0 ] && PROCURVE_BACKUP_ERROR=1 && continue
   echo "$(ls -aldh "${PROCURVE_BACKUP_DST}/${host}".*.{cfg,log})" | tee -a "${PROCURVE_BACKUP_LOG}"
 done
 rm "${PROCURVE_BACKUP_LOCK}"
