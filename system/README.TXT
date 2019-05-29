@@ -1,6 +1,11 @@
 Utilities for Linux Systems Administration and Daily Use
 ========================================================
 
+procurve-backup
+---------------
+Backup startup and running configuration, along events log, of ArubaOS-CX
+switches.
+
 asuswrt-*
 ---------
 Backup/restore configuration - NVRAM only - of devices running AsusWRT firmware.
@@ -52,6 +57,11 @@ pgsql-backup
 ------------
 Backup a PostgreSQL database according to the connection parameters specified
 in the configuration file(s).
+
+procurve-backup
+---------------
+Backup startup and running configuration, along events log, of HPE Procruve
+switches.
 
 qemu-easy
 ---------
