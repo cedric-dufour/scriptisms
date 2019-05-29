@@ -377,6 +377,9 @@ case "${ARG_COMMAND}" in
     [ ! -e "${OPENSSL_FILE_CA_CRLNUMBER}" ] && echo '01' > "${OPENSSL_FILE_CA_CRLNUMBER}"
     [ ! -f "${OPENSSL_FILE_CA_CRLNUMBER}" -o ! -w "${OPENSSL_FILE_CA_CRLNUMBER}" ] && echo "ERROR: Invalid/unwritable CA CRL number file (${OPENSSL_FILE_CA_CRLNUMBER})" >&2  && exit 1
 
+    # Intermediate CA ?
+    [ "${OPT_ID}" == 'CA:INTERMEDIATE' ] && exit 0
+
     # Private key
     [ -n "${OPT_PKCS11_URI}" ] && echo 'ERROR: Certificate authority cannot be created via PKCS#11' >&2 && exit 1
     FILE_KEY="${OPENSSL_FILE_CA_KEY}"
