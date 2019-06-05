@@ -1,0 +1,93 @@
+#!/bin/bash
+
+## Usage
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <context> <action>
+
+CONTEXTS / ACTIONS:
+
+  power (pwr)
+    save  - switch to "power" energy saving preference
+    mixed - switch to "balance_power" energy saving preference
+    perf  - switch to "balance_performance" energy saving preference
+    show  - show the current power consumption
+
+  bluetooth (bt)
+    off   - switch Bluetooth off
+    on    - switch Bluetooth on
+
+  wireless (wlan, wl)
+    off   - switch Wireless LAN off
+    on    - switch Wireless LAN on
+
+  brightness (br)
+    inc   - increase display brightness
+    dec   - decrease display brightness
+EOF
+
+
+## Context / action
+case "${1}" in
+
+  'power'|'pwr')
+    case "${2}" in
+      'save')
+        echo 'power' | tee /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference >/dev/null
+        echo 'powersupersave' | tee /sys/module/pcie_aspm/parameters/policy >/dev/null
+        service irqbalance stop
+        ;;
+      'mixed')
+        echo 'balance_power' | tee /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference >/dev/null
+        echo 'powersave' | tee /sys/module/pcie_aspm/parameters/policy >/dev/null
+        service irqbalance start
+        ;;
+      'perf')
+        echo 'balance_performance' | tee /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference >/dev/null
+        echo 'performance' | tee /sys/module/pcie_aspm/parameters/policy >/dev/null
+        service irqbalance start
+        ;;
+      'show')
+        (cat /sys/class/power_supply/BAT0/{current,voltage}_now; echo '2 k * 10 12 ^ / n [W]p') | dc
+        ;;
+      *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
+    esac
+    ;;
+
+  'bluetooth'|'bt')
+    case "${2}" in
+      'off') echo '0' | tee /sys/class/bluetooth/*/rfkill*/state >/dev/null;;
+      'on') echo '1' | tee /sys/class/bluetooth/*/rfkill*/state >/dev/null;;
+      *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
+    esac
+    ;;
+
+  'wireless'|'wlan'|'wl')
+    case "${2}" in
+      'off') echo '0' | tee /sys/class/ieee80211/*/rfkill*/state >/dev/null;;
+      'on') echo '1' | tee /sys/class/ieee80211/*/rfkill*/state >/dev/null;;
+      *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
+    esac
+    ;;
+
+  'brightness'|'br')
+    case "${2}" in
+      'increase'|'inc')
+        echo $(( $(cat /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/brightness) + 1000 )) \
+        > /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/brightness
+        ;;
+      'decrease'|'dec')
+        echo $(( $(cat /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/brightness) - 1000 )) \
+        > /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/brightness
+        ;;
+    esac
+    ;;
+
+  *)
+    echo "ERROR: Unknown context (${1})"; exit 1
+
+esac
+
+
+## Done
+exit 0
+

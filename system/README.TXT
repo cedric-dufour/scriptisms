@@ -92,6 +92,10 @@ tomato-backup
 Backup configuration - NVRAM or standard (web) - of devices running Tomato
 firmware.
 
+xps13-9380-control
+------------------
+A helper script to control some of the Dell XPS 13 (9380) elements.
+
 zfs [directory]
 ---------------
 A bunch of scripts to go along ZFS on Linux
