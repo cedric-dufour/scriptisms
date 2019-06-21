@@ -73,6 +73,9 @@ function _dircksum {
   local DIRECTORY="${1}"
   local DEPTH="${2}"
 
+  # Exclusions
+  [ "${DIRECTORY##*/}" == '.git' ] && echo "INFO: Ignoring '.git' directory (${DIRECTORY})" >&2 && return 0
+
   # Compute checksum
   [ -n "${VERBOSE}" ] && echo "INFO: Computing checksum for directory (${DIRECTORY})..."
   local __dircksum; local __cksum=''; local __dirs=0; local __files=0; local __size=0; local __exit=0
