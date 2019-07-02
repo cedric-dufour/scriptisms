@@ -23,6 +23,9 @@ CONTEXTS / ACTIONS:
   brightness (br)
     inc   - increase display brightness
     dec   - decrease display brightness
+
+  touchpad (tp)
+    reset - reset the touchpad driver (hid-multitouch)
 EOF
 
 
@@ -79,6 +82,18 @@ case "${1}" in
         echo $(( $(cat /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/brightness) - 1000 )) \
         > /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/brightness
         ;;
+      *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
+    esac
+    ;;
+
+  'touchpad'|'tp')
+    case "${2}" in
+      'reset'|'rst')
+	rmmod hid-multitouch
+        sleep 1
+        modprobe hid-multitouch
+        ;;
+      *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
     esac
     ;;
 
