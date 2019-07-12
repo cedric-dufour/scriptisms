@@ -72,6 +72,10 @@ ramvault
 --------
 Temporary RAM vault (TMPFS), securily-wiped when unmounted
 
+riemann-query
+-------------
+A (very) dump query client for Riemann
+
 rsync-backup
 ------------
 Backup (RSync) a given remote host according to the parameters specified in
