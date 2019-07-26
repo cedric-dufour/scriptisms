@@ -419,6 +419,7 @@ EOF
     # QEMU command and environment
     QEMU_ENV=
     QEMU_CMD="${MY_QEMU:-${DFLT_QEMU_CMD}}"
+    QEMU_VER="$(${QEMU_CMD} --version | sed -n 's|^.*version \([^ ]*\).*$|\1|p')"
 
     # ... UUID
     QEMU_CMD="${QEMU_CMD}|-uuid ${MY_UUID}"
@@ -426,6 +427,7 @@ EOF
     # ... console
     if [ "${MY_STDIO}" == 'console' ]; then
       QEMU_CMD="${QEMU_CMD}|-serial mon:stdio"
+      [ "${QEMU_VER%%.*}" -ge 3 ] && QEMU_ESC='<CTRL-A C> FOR QEMU' || QEMU_ESC='<CTRL+]> FOR QEMU'
     else
       QEMU_CMD="${QEMU_CMD}|-serial unix:'${MY_PATH_CONSOLE}',server,nowait"
     fi
@@ -523,7 +525,7 @@ EOF
     # Check
     [ -z "$(lsmod | fgrep kvm)" ] && echo "WARNING: KVM kernel modules are not loaded" >&2
     echo "${QEMU_ENV:+${QEMU_ENV}|}${QEMU_CMD}" | sed 's/^|/ /;s/|/ \\\n /g' >&2
-    echo 'PRESS <ENTER> TO CONTINUE, <CTRL+C> To ABORT...' >&2
+    echo "PRESS <ENTER> TO CONTINUE${QEMU_ESC:+, ${QEMU_ESC}}, <CTRL+C> TO ABORT..." >&2
     read
 
     # Resources
