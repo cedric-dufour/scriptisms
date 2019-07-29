@@ -427,7 +427,7 @@ EOF
     # ... console
     if [ "${MY_STDIO}" == 'console' ]; then
       QEMU_CMD="${QEMU_CMD}|-serial mon:stdio"
-      [ "${QEMU_VER%%.*}" -ge 3 ] && QEMU_ESC='<CTRL-A C> FOR QEMU' || QEMU_ESC='<CTRL+]> FOR QEMU'
+      QEMU_ESC='<CTRL-A C> FOR QEMU'
     else
       QEMU_CMD="${QEMU_CMD}|-serial unix:'${MY_PATH_CONSOLE}',server,nowait"
     fi
