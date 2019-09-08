@@ -1,7 +1,11 @@
 Utilities for Linux Systems Administration and Daily Use
 ========================================================
 
-procurve-backup
+apt-repo-easy
+-------------
+Easily manage a local APT repository
+
+arubacx-backup
 ---------------
 Backup startup and running configuration, along events log, of ArubaOS-CX
 switches.
