@@ -1,0 +1,236 @@
+#!/bin/bash
+set -e
+
+## Environment/defaults
+: ${DISTRIBUTION:=$(lsb_release -sc)}
+: ${ARCHITECTURE:=$(dpkg --print-architecture)}
+: ${MIRRORSITE:=http://ftp.debian.org/debian}
+: ${USENETWORK:=no}
+
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
+USAGE: ${0##*/} <action> [<options>]
+
+SYNOPSIS:
+  Easily build Debian packages using PBuilder
+
+ACTIONS:
+  create, update
+    Create or update the PBuilder base environment (base.tgz)
+
+  build <package.dsc>
+    Build the given package using PBuilder
+
+  git-build
+    Build the current GIT repository package(s) using GIT PBuilder
+
+OPTIONS:
+  -d, --distribution <distribution>
+    Distribution code name
+    (default: ${DISTRIBUTION})
+
+  -a, --architecture <architecture>
+    Distribution code name
+    (default: ${ARCHITECTURE})
+
+  -m, --mirror <URL>
+    Main packages repository URL
+    (default: ${MIRRORSITE})
+
+  -r, --repo <deb-line>
+    Additional packages repository (deb <url> ...)
+    (can be specified multiple times)
+
+  --no-updates
+    Do not include '${DISTRIBUTION}-updates' repository
+
+  -n, --use-network
+    Enable network during build (e.g. for debian-installer)
+EOF
+
+# Arguments
+ACTION=
+#OTHERMIRROR  # Let environment provide this value
+NO_UPDATES=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-d'|'--distribution')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      shift; DISTRIBUTION="${1}"
+      ;;
+    '-a'|'--architecture')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      shift; ARCHITECTURE="${1}"
+      ;;
+    '-m'|'--mirror')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      shift; MIRRORSITE="${1}"
+      ;;
+    '-r'|'--repo')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      shift; OTHERMIRROR="${OTHERMIRROR:+${OTHERMIRROR}|}${1}"
+      ;;
+    '--no-updates')
+      NO_UPDATES='yes'
+      ;;
+    '-n'|'--use-network')
+      USENETWORK='yes'
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      ;;
+    *)
+      if [ -z "${ACTION}" ]; then 
+        ACTION="${1}"
+      else
+        echo "ERROR: Unexpected argument (${1})" >&2 && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+[ -z "${NO_UPDATES}" ] && OTHERMIRROR="${OTHERMIRROR:+${OTHERMIRROR}|}deb ${MIRRORSITE} ${DISTRIBUTION}-updates main"
+
+# Parameters [cont'd]
+: ${PBUILDER_ROOT:=$(pwd)}
+PBUILDER_DIR="${PBUILDER_ROOT}/${DISTRIBUTION}-${ARCHITECTURE}"
+# ... sub-parameters (better not change)
+BASETGZ="${PBUILDER_DIR}/base.tgz"
+BUILDPLACE="${PBUILDER_DIR}/chroot"
+APTCACHE="${PBUILDER_DIR}/aptcache"
+CCACHEDIR="${PBUILDER_DIR}/ccache"
+
+
+## Action
+case "${ACTION}" in
+
+  'create'|'update')
+    # Verbose
+    echo "INFO: About to ${ACTION} PBuilder base environment: ${BASETGZ}"
+    echo 'PRESS <ENTER> TO PROCEED, <CTRL+C> TO ABORT ...'
+    read
+
+    # Create the required directories
+    umask 002
+    if [ "${ACTION}" == 'create' ]; then
+      [ -e "${BASETGZ}" ] && echo "ERROR: Base environment already exists (${BASETGZ})" >&2 && exit 1
+      sudo mkdir -p \
+        "${PBUILDER_DIR}" \
+        "${BUILDPLACE}" \
+        "${APTCACHE}" \
+        "${CCACHEDIR}"
+    fi
+
+    # Create/update the PBuilder base environment
+    # REF: man pbuilderrc
+    PBUILDER_CONFIG="$(mktemp)"
+    trap "rm -f '${PBUILDER_CONFIG}'" EXIT
+    cat > "${PBUILDER_CONFIG}" << EOF
+DISTRIBUTION="${DISTRIBUTION}"
+ARCHITECTURE="${ARCHITECTURE}"
+BASETGZ="${BASETGZ}"
+BUILDPLACE="${BUILDPLACE}"
+MIRRORSITE="${MIRRORSITE}"
+OTHERMIRROR="${OTHERMIRROR}"
+APTCACHE="${APTCACHE}"
+CCACHEDIR="${CCACHEDIR}"
+EOF
+    sudo pbuilder ${ACTION} \
+      --override-config \
+      --configfile "${PBUILDER_CONFIG}" \
+      --debootstrapopts '--variant=buildd' \
+      "${@}"
+
+    # Done
+    echo 'DONE!'
+    ls -lh "${BASETGZ}"
+    ;;
+
+  'build')
+    # Verbose
+    echo "INFO: About to build package: ${PACKAGE_DSC}"
+    echo "INFO: Using PBuilder base: ${BASETGZ}"
+    echo 'PRESS <ENTER> TO PROCEED, <CTRL+C> TO ABORT ...'
+    read
+
+    # Build package
+    # REF: man pbuilderrc
+    umask 002
+    PBUILDER_CONFIG="$(mktemp)"
+    trap "rm -f '${PBUILDER_CONFIG}'" EXIT
+    cat > "${PBUILDER_CONFIG}" << EOF
+DISTRIBUTION="${DISTRIBUTION}"
+ARCHITECTURE="${ARCHITECTURE}"
+BASETGZ="${BASETGZ}"
+BUILDPLACE="${BUILDPLACE}"
+BUILDRESULT="${PBUILDER_OUTPUT_DIR}"
+USENETWORK="${USENETWORK}"
+APTCACHE="${APTCACHE}"
+CCACHEDIR="${CCACHEDIR}"
+EOF
+    sudo pbuilder build \
+      --configfile "${PBUILDER_CONFIG}" \
+      "${@}" \
+      "${PACKAGE_DSC}"
+
+    # Done
+    echo 'DONE!'
+    find "${PBUILDER_OUTPUT_DIR}" -maxdepth 1 -name '*.deb' -exec ls -lh {} \;
+    ;;
+
+  'git-build')
+    # Verbose
+    echo "INFO: About to build package from branch: $(git branch 2>/dev/null | sed -n 's|^* \(.*\)$|\1|p')"
+    echo "INFO: Using PBuilder base: ${BASETGZ}"
+    echo 'PRESS <ENTER> TO PROCEED, <CTRL+C> TO ABORT ...'
+    read
+
+    # Build package
+    # REF: man pbuilderrc; man gbp-buildpackage
+    umask 002
+    PBUILDER_CONFIG="$(mktemp)"
+    trap "rm -f '${PBUILDER_CONFIG}'" EXIT
+    cat > "${PBUILDER_CONFIG}" << EOF
+BASETGZ="${BASETGZ}"
+BUILDPLACE="${BUILDPLACE}"
+BUILDRESULT="${PBUILDER_OUTPUT_DIR}"
+USENETWORK="${USENETWORK}"
+APTCACHE="${APTCACHE}"
+CCACHEDIR="${CCACHEDIR}"
+EOF
+    if [ -n "$(ls -1 ./*.orig.tar.* 2>/dev/null)" ]; then
+      sudo \
+        BUILDER='pbuilder' \
+        GIT_PBUILDER_AUTOCONF='no' GIT_PBUILDER_OPTIONS="--configfile '${PBUILDER_CONFIG}'" \
+        gbp buildpackage \
+          --git-pbuilder \
+          --git-dist="${DISTRIBUTION}" --git-arch="${ARCHITECTURE}" \
+          --git-ignore-branch \
+          --git-tarball-dir=. -i'.*\.orig\.tar\..*' \
+          --git-export-dir="${PBUILDER_OUTPUT_DIR}" \
+          "${@}"
+    else
+      sudo \
+        BUILDER='pbuilder' \
+        GIT_PBUILDER_AUTOCONF='no' GIT_PBUILDER_OPTIONS="--configfile '${PBUILDER_CONFIG}'" \
+        gbp buildpackage \
+          --git-pbuilder \
+          --git-dist="${DISTRIBUTION}" --git-arch="${ARCHITECTURE}" \
+          --git-ignore-branch \
+          --git-upstream-tree=SLOPPY \
+          --git-export-dir="${PBUILDER_OUTPUT_DIR}" \
+          "${@}"
+    fi
+
+    # Done
+    echo 'DONE!'
+    find "${PBUILDER_OUTPUT_DIR}" -maxdepth 1 \( -name '*.deb' -o -name '*.dsc' \) -exec ls -lh {} \;
+    ;;
+
+esac
+

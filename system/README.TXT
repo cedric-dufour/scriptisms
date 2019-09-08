@@ -57,6 +57,10 @@ openssl-easy
 ------------
 OpenSSL made easy (a command-line replacement for TinyCA)
 
+pbuilder-easy
+-------------
+Easily build Debian packages using PBuilder
+
 pgsql-backup
 ------------
 Backup a PostgreSQL database according to the connection parameters specified
