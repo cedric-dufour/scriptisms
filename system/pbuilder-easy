@@ -53,6 +53,7 @@ EOF
 ACTION=
 #OTHERMIRROR  # Let environment provide this value
 NO_UPDATES=
+PACKAGE_DSC=
 while [ -n "${1}" ]; do
   case "${1}" in
     '-d'|'--distribution')
@@ -85,8 +86,10 @@ while [ -n "${1}" ]; do
       echo "ERROR: Invalid option (${1})" >&2 && exit 1
       ;;
     *)
-      if [ -z "${ACTION}" ]; then 
+      if [ -z "${ACTION}" ]; then
         ACTION="${1}"
+      elif [ "${ACTION}" == 'build' -a -z "${PACKAGE_DSC}" ]; then
+        PACKAGE_DSC="${1}"
       else
         echo "ERROR: Unexpected argument (${1})" >&2 && exit 1
       fi
@@ -161,6 +164,7 @@ EOF
     # Build package
     # REF: man pbuilderrc
     umask 002
+    : ${PBUILDER_OUTPUT_DIR:=./output}
     PBUILDER_CONFIG="$(mktemp)"
     trap "rm -f '${PBUILDER_CONFIG}'" EXIT
     cat > "${PBUILDER_CONFIG}" << EOF
@@ -193,6 +197,7 @@ EOF
     # Build package
     # REF: man pbuilderrc; man gbp-buildpackage
     umask 002
+    : ${PBUILDER_OUTPUT_DIR:=../output}
     PBUILDER_CONFIG="$(mktemp)"
     trap "rm -f '${PBUILDER_CONFIG}'" EXIT
     cat > "${PBUILDER_CONFIG}" << EOF
