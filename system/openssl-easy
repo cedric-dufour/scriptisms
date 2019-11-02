@@ -1,5 +1,12 @@
 #!/bin/bash
 umask 077
+shopt -s extglob
+
+
+## Version
+VERSION='1.0.20191102a'
+[ "${1##*-}" == 'version' ] && echo "${VERSION}" && exit 0
+
 
 ## Defaults
 DFLT_ROOT="${OPENSSL_ROOT:-.}"
@@ -15,6 +22,7 @@ DFLT_DIR_KEYS="${DFLT_ROOT}/keys"
 DFLT_DIR_PUBS="${DFLT_ROOT}/pubs"
 DFLT_DIR_REQS="${DFLT_ROOT}/reqs"
 DFLT_DIR_CERTS="${DFLT_ROOT}/certs"
+DFLT_DIR_CRLS="${DFLT_ROOT}/crls"
 DFLT_FILE_DATABASE="${DFLT_ROOT}/database"
 DFLT_DATE="$(date +'%Y%m%d')"
 DFLT_ALGO_PKI='rsa'
@@ -68,14 +76,16 @@ GLOBAL:
     +algorithm {rsa|dsa|ec}
       Public cryptography algorithm (default: ${DFLT_ALGO_PKI})
 
-    +p11-token <token-label>
-      Private key PKCS#11 token (slot) label (as per 'pkcs11-tool --list-token-slots')
-
-    +p11-object <object-label>
-      Private key PKCS#11 object label (as per 'pkcs11-tool --list-objects')
+    +pkcs11-{token|object|id} <label|id>
+      Private key PKCS#11 token (slot) label, object label or ID
+      (as per 'pkcs11-tool --list-token-slots' or 'pkcs11-tool --list-objects')
 
     +verbose
       Output detailed information about imported/created material
+
+    +auto
+      Automatically create missing dependencies (priv. key and/or cert. signing request)
+      WARNING: the same options are passed to all commands (make-key and/or make-req)
 
     -...
       Option passed "as is" to OpenSSL
@@ -150,35 +160,38 @@ COMMAND: list-certs
     (ID DATE SUBJECT SERIAL STATUS DATE FILE)
 
   OPTIONS:
+    +valid
+      List valid certificates (the default)
+
     +expired
-      List expired certificates (use '+date ...' to change the reference date)
+      List expired certificates
 
     +revoked
       List revoked certificates
 
-COMMAND: revoke-cert
-  ${0##*/} revoke-cert +id ...
-    Create a CA-signed certificate
+COMMAND: export-pkcs12
+  ${0##*/} export-pkcs12 +id ... [-out ...]
+    Export the private key and certificate as a PKCS#12 bundle
 
-COMMAND: check-cert-{crl,ocsp}
-  ${0##*/} check-cert-{crl,ocsp} +id ...
-    Check a CA-signed certificate validity via CRL/OCSP
+COMMAND: revoke-cert [-crl_reason {supersed|cessationOfOperation|keyCompromise|...}]
+  ${0##*/} revoke-cert +id ...
+    Revoke a CA-signed certificate
+
+COMMAND: make-crl
+  ${0##*/} make-crl [-out ...] [-outform {PEM|DER}]
+    Create the CA-signed certificate revocation list (CRL)
+
+COMMAND: verify-{crl,ocsp}
+  ${0##*/} verify-{crl,ocsp} +id ...
+    Verify a CA-signed certificate validity via CRL/OCSP
 
 COMMAND: import-{key,pub,req,cert}
   ${0##*/} import-{key,pub,req,cert} [-in ...] [-inform {PEM|DER}]
     Import the given file (or standard input)
 
-COMMAND: show-{ca,key,pub,req,cert}
-  ${0##*/} show-{ca,key,pub,req,cert} +id ...
+COMMAND: show-{ca,key,pub,req,cert,crl}
+  ${0##*/} show-{ca,key,pub,req,cert,crl} +id ...
     Show the given file (in PEM format)
-
-COMMAND: export-p12
-  ${0##*/} export-p12 +id ... [-out ...]
-    Export the private key and certificate as a PKCS#12 bundle
-
-COMMAND: export-crl
-  ${0##*/} export-crl [-out ...] [-outform {PEM|DER}]
-    Create and export the CA-signed certificates revocation list (CRL)
 
 COMMAND: set-{key,ca}-passwd
   source ${0##*/} set-{key,ca}-passwd
@@ -203,6 +216,7 @@ export OPENSSL_DIR_KEYS="${DFLT_DIR_KEYS}"
 export OPENSSL_DIR_PUBS="${DFLT_DIR_PUBS}"
 export OPENSSL_DIR_REQS="${DFLT_DIR_REQS}"
 export OPENSSL_DIR_CERTS="${DFLT_DIR_CERTS}"
+export OPENSSL_DIR_CRLS="${DFLT_DIR_CRLS}"
 export OPENSSL_FILE_DATABASE="${DFLT_FILE_DATABASE}"
 export OPENSSL_ALGO_WRAP="${DFLT_ALGO_WRAP}"
 export OPENSSL_ALGO_MAC="${DFLT_ALGO_MAC}"
@@ -218,40 +232,49 @@ export OPENSSL_ALGO_MAC="${DFLT_ALGO_MAC}"
 [ ! -d "${OPENSSL_DIR_REQS}" -o ! -w "${OPENSSL_DIR_REQS}" ] && echo "ERROR: Invalid/unwritable certificate signing requests directory (${OPENSSL_DIR_REQS})" >&2  && exit 1
 [ ! -e "${OPENSSL_DIR_CERTS}" ] && mkdir "${OPENSSL_DIR_CERTS}"
 [ ! -d "${OPENSSL_DIR_CERTS}" -o ! -w "${OPENSSL_DIR_CERTS}" ] && echo "ERROR: Invalid/unwritable signed certificates directory (${OPENSSL_DIR_CERTS})" >&2  && exit 1
+[ ! -e "${OPENSSL_DIR_CRLS}" ] && mkdir "${OPENSSL_DIR_CRLS}"
+[ ! -d "${OPENSSL_DIR_CRLS}" -o ! -w "${OPENSSL_DIR_CRLS}" ] && echo "ERROR: Invalid/unwritable certificate revocation lists directory (${OPENSSL_DIR_CRLS})" >&2  && exit 1
 
 
 ## Arguments
 ARG_COMMAND=
 ARG_1=
+OPTS=()
 OPT_ID=
-OPT_DATE=${DFLT_DATE}
+OPT_DATE=
 OPT_ALGO_PKI="${OPENSSL_ALGO_PKI:-${DFLT_ALGO_PKI}}"
 OPT_KEY_LENGTH="${OPENSSL_KEY_LENGTH:-${DFLT_KEY_LENGTH}}"
 OPT_KEY_CURVE="${OPENSSL_KEY_CURVE:-${DFLT_KEY_CURVE}}"
 OPT_PKCS11_TOKEN="${OPENSSL_PKCS11_TOKEN}"
 OPT_PKCS11_OBJECT="${OPENSSL_PKCS11_OBJECT}"
+OPT_PKCS11_ID="${OPENSSL_PKCS11_ID}"
 OPT_DN_COMMONNAME="${OPENSSL_DN_COMMONNAME}"
 OPT_DN_EMAILADDRESS="${OPENSSL_DN_EMAILADDRESS}"
 OPT_DN_ORGANIZATIONALUNIT="${OPENSSL_DN_ORGANIZATIONALUNIT}"
 OPT_DN_TITLE="${OPENSSL_DN_TITLE}"
 OPT_EXT_SAN="${OPENSSL_EXT_SAN}"
+OPT_LIST_VALID=
 OPT_LIST_EXPIRED=
 OPT_LIST_REVOKED=
 OPT_VERBOSE="${OPENSSL_VERBOSE}"
+OPT_AUTO=
 OPT_OPENSSL=
 while [ -n "${1}" ]; do
   case "${1}" in
 
-    '+id'|'+date'|'+algorithm'|'+length'|'+curve'|'+p11-token'|'+p11-object'|'+name'|'+email'|'+unit'|'+title'|'+san-'*)
+    '+id'|'+date'|'+algorithm'|'+length'|'+curve'|'+pkcs11-token'|'+pkcs11-object'|'+pkcs11-id'|'+name'|'+email'|'+unit'|'+title'|'+san-'*)
       [ -z "${2}" ] && echo "ERROR: Missing option argument ($1)" >&2 && exit 1
+      OPTS[${#OPTS[*]}]="${1}"
+      OPTS[${#OPTS[*]}]="${2}"
       case "${1}" in
         '+id') OPT_ID="${2}";;
         '+date') OPT_DATE="${2}";;
         '+algorithm') OPT_ALGO_PKI="${2,,}";;
         '+length') OPT_KEY_LENGTH="${2}";;
         '+curve') OPT_KEY_CURVE="${2}";;
-        '+p11-token') OPT_PKCS11_TOKEN="${2}";;
-        '+p11-object') OPT_PKCS11_OBJECT="${2}";;
+        '+pkcs11-token') OPT_PKCS11_TOKEN="${2}";;
+        '+pkcs11-object') OPT_PKCS11_OBJECT="${2}";;
+        '+pkcs11-id') OPT_PKCS11_ID="${2}";;
         '+name') OPT_DN_COMMONNAME="${2}";;
         '+email') OPT_DN_EMAILADDRESS="${2}";;
         '+unit') OPT_DN_ORGANIZATIONALUNIT="${2}";;
@@ -268,18 +291,27 @@ while [ -n "${1}" ]; do
       shift
       ;;
 
-    '+expired') OPT_LIST_EXPIRED='yes';;
-    '+revoked') OPT_LIST_REVOKED='yes';;
-    '+verbose') OPT_VERBOSE='yes';;
+    '+valid'|'+expired'|'+revoked'|'+verbose'|'+auto')
+      OPTS[${#OPTS[*]}]="${1}"
+      case "${1}" in
+        '+valid') OPT_LIST_VALID='yes';;
+        '+expired') OPT_LIST_EXPIRED='yes';;
+        '+revoked') OPT_LIST_REVOKED='yes';;
+        '+verbose') OPT_VERBOSE='yes';;
+        '+auto') OPT_AUTO='yes';;
+      esac
+      ;;
 
     +*)
       echo "ERROR: Invalid option (${1})" >&2 && exit 1
       ;;
 
     -*)
+      OPTS[${#OPTS[*]}]="${1}"
       if [ "${2:0:1}" == '-' ]; then
         OPT_OPENSSL="${OPT_OPENSSL:+${OPT_OPENSSL} }${1}"
       else
+        OPTS[${#OPTS[*]}]="${2}"
         OPT_OPENSSL="${OPT_OPENSSL:+${OPT_OPENSSL} }${1} ${2}"
         shift
       fi
@@ -303,12 +335,16 @@ export OPENSSL_KEY_LENGTH="${OPT_KEY_LENGTH}"
 export OPENSSL_KEY_CURVE="${OPT_KEY_CURVE}"
 export OPENSSL_PKCS11_TOKEN="${OPT_PKCS11_TOKEN}"
 export OPENSSL_PKCS11_OBJECT="${OPT_PKCS11_OBJECT}"
+export OPENSSL_PKCS11_ID="${OPT_PKCS11_ID}"
 export OPENSSL_DN_COMMONNAME="${OPT_DN_COMMONNAME}"
 export OPENSSL_DN_EMAILADDRESS="${OPT_DN_EMAILADDRESS}"
 export OPENSSL_DN_ORGANIZATIONALUNIT="${OPT_DN_ORGANIZATIONALUNIT}"
 export OPENSSL_DN_TITLE="${OPT_DN_TITLE}"
 export OPENSSL_EXT_SAN="${OPT_EXT_SAN}"
 export OPENSSL_VERBOSE="${OPT_VERBOSE}"
+
+
+## Helpers
 
 # PKCS#11
 function _rawurlencode() {
@@ -329,14 +365,12 @@ function _rawurlencode() {
   echo "${encoded}"
 }
 OPT_PKCS11_URI=
-if [ -n "${OPT_PKCS11_TOKEN}" -o -n "${OPT_PKCS11_OBJECT}" ]; then
+if [ -n "${OPT_PKCS11_TOKEN}" -o -n "${OPT_PKCS11_OBJECT}" -o -n "${OPT_PKCS11_ID}" ]; then
   OPT_PKCS11_URI='pkcs11:type=private'
   [ -n "${OPT_PKCS11_TOKEN}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};token=$(_rawurlencode "${OPT_PKCS11_TOKEN}")"
   [ -n "${OPT_PKCS11_OBJECT}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};object=$(_rawurlencode "${OPT_PKCS11_OBJECT}")"
+  [ -n "${OPT_PKCS11_ID}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};id=%${OPT_PKCS11_ID}"
 fi
-
-
-## Commands
 
 # OpenSSL configuration quirks
 function _openssl_conf_quirks() {
@@ -351,37 +385,123 @@ function _openssl_conf_quirks() {
   export OPENSSL_CONF="${TMP_CONF}"
 }
 
-# Command
+# Files
+function _file_date() {
+  FILE_DATE="${1##*-}"
+  echo "${FILE_DATE%.*}"
+}
+
+function _file_key() {
+  [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && return 1
+  if [ -n "${OPT_DATE}" ]; then
+    FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${OPT_DATE}.pem"
+  else
+    FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+    if [ ! -e "${FILE_KEY}" ]; then
+      FILE_KEY="$(ls -1v "${OPENSSL_DIR_KEYS}/${OPT_ID}-key"-+([[:digit:]]).pem 2>/dev/null | tail -n -1)"
+      [ -n "${FILE_KEY}" ] && echo "NOTICE[${ARG_COMMAND}<key]: Unmatched/unspecified date; picked latest available date ($(_file_date "${FILE_KEY}"))" >&2
+    fi
+  fi
+  echo "${FILE_KEY}"
+  return 0
+}
+
+function _file_pub() {
+  [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && return 1
+  if [ -n "${OPT_DATE}" ]; then
+    FILE_PUB="${OPENSSL_DIR_PUBS}/${OPT_ID}-pub-${OPT_DATE}.pem"
+  else
+    FILE_PUB="${OPENSSL_DIR_PUBS}/${OPT_ID}-pub-${DFLT_DATE}.pem"
+    if [ ! -e "${FILE_PUB}" ]; then
+      FILE_PUB="$(ls -1v "${OPENSSL_DIR_PUBS}/${OPT_ID}-pub"-+([[:digit:]]).pem 2>/dev/null | tail -n -1)"
+      [ -n "${FILE_PUB}" ] && echo "NOTICE[${ARG_COMMAND}<pub]: Unmatched/unspecified date; picked latest available date ($(_file_date "${FILE_PUB}"))" >&2
+    fi
+  fi
+  echo "${FILE_PUB}"
+  return 0
+}
+
+function _file_req() {
+  [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && return 1
+  if [ -n "${OPT_DATE}" ]; then
+    FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${OPT_DATE}.pem"
+  else
+    FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${DFLT_DATE}.pem"
+    if [ ! -e "${FILE_REQ}" ]; then
+      FILE_REQ="$(ls -1v "${OPENSSL_DIR_REQS}/${OPT_ID}-req"-+([[:digit:]]).pem 2>/dev/null | tail -n -1)"
+      [ -n "${FILE_REQ}" ] && echo "NOTICE[${ARG_COMMAND}<req]: Unmatched/unspecified date; picked latest available date ($(_file_date "${FILE_REQ}"))" >&2
+    fi
+  fi
+  echo "${FILE_REQ}"
+  return 0
+}
+
+function _file_cert() {
+  [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && return 1
+  if [ -n "${OPT_DATE}" ]; then
+    FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${OPT_DATE}.pem"
+  else
+    FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${DFLT_DATE}.pem"
+    if [ ! -e "${FILE_CERT}" ]; then
+      FILE_CERT="$(ls -1v "${OPENSSL_DIR_CERTS}/${OPT_ID}-cert"-+([[:digit:]]).pem 2>/dev/null | tail -n -1)"
+      [ -n "${FILE_CERT}" ] && echo "NOTICE[${ARG_COMMAND}<cert]: Unmatched/unspecified date; picked latest available date ($(_file_date "${FILE_CERT}"))" >&2
+    fi
+  fi
+  echo "${FILE_CERT}"
+  return 0
+}
+
+function _file_crl() {
+  if [ -n "${OPT_DATE}" ]; then
+    FILE_CRL="${OPENSSL_DIR_CRLS}/crl-${OPT_DATE}.pem"
+  else
+    FILE_CRL="${OPENSSL_DIR_CRLS}/crl-${DFLT_DATE}.pem"
+    if [ ! -e "${FILE_CRL}" ]; then
+      FILE_CRL="$(ls -1v "${OPENSSL_DIR_CRLS}/crl"-+([[:digit:]]).pem 2>/dev/null | tail -n -1)"
+      [ -n "${FILE_CRL}" ] && echo "NOTICE[${ARG_COMMAND}<crl]: Unmatched/unspecified date; picked latest available date ($(_file_date "${FILE_CRL}"))" >&2
+    fi
+  fi
+  echo "${FILE_CRL}"
+  return 0
+}
+
+
+## Commands
 case "${ARG_COMMAND}" in
 
   ########################################################################
   # Certification authority (CA)
 
+  'help-ca')
+    man openssl-ca || echo 'https://www.openssl.org/docs/man1.1.1/man1/ca.html'
+    ;;
+
+
   'make-ca')
     # Resources
     [ ! -e "${OPENSSL_DIR_CA}" ] && mkdir "${OPENSSL_DIR_CA}"
-    [ ! -d "${OPENSSL_DIR_CA}" -o ! -w "${OPENSSL_DIR_CA}" ] && echo "ERROR: Invalid/unwritable CA directory (${OPENSSL_DIR_CA})" >&2  && exit 1
+    [ ! -d "${OPENSSL_DIR_CA}" -o ! -w "${OPENSSL_DIR_CA}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unwritable CA directory (${OPENSSL_DIR_CA})" >&2  && exit 1
     [ ! -e "${OPENSSL_DIR_CA_CERTS}" ] && mkdir "${OPENSSL_DIR_CA_CERTS}"
-    [ ! -d "${OPENSSL_DIR_CA_CERTS}" -o ! -w "${OPENSSL_DIR_CA_CERTS}" ] && echo "ERROR: Invalid/unwritable CA-signed certificates directory (${OPENSSL_DIR_CA_CERTS})" >&2  && exit 1
+    [ ! -d "${OPENSSL_DIR_CA_CERTS}" -o ! -w "${OPENSSL_DIR_CA_CERTS}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unwritable CA-signed certificates directory (${OPENSSL_DIR_CA_CERTS})" >&2  && exit 1
     [ ! -e "${OPENSSL_FILE_CA_DATABASE}" ] && touch "${OPENSSL_FILE_CA_DATABASE}"
-    [ ! -f "${OPENSSL_FILE_CA_DATABASE}" -o ! -w "${OPENSSL_FILE_CA_DATABASE}" ] && echo "ERROR: Invalid/unwritable CA database file (${OPENSSL_FILE_CA_DATABASE})" >&2  && exit 1
+    [ ! -f "${OPENSSL_FILE_CA_DATABASE}" -o ! -w "${OPENSSL_FILE_CA_DATABASE}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unwritable CA database file (${OPENSSL_FILE_CA_DATABASE})" >&2  && exit 1
 
     # External CA ?
     [ "${OPT_ID}" == 'CA:EXTERNAL' ] && exit 0
 
     # Resources (cont'd)
     [ ! -e "${OPENSSL_FILE_CA_DATABASE}.attr" ] && touch "${OPENSSL_FILE_CA_DATABASE}.attr"
-    [ ! -f "${OPENSSL_FILE_CA_DATABASE}.attr" -o ! -w "${OPENSSL_FILE_CA_DATABASE}.attr" ] && echo "ERROR: Invalid/unwritable CA attr file (${OPENSSL_FILE_CA_DATABASE}.attr)" >&2  && exit 1
+    [ ! -f "${OPENSSL_FILE_CA_DATABASE}.attr" -o ! -w "${OPENSSL_FILE_CA_DATABASE}.attr" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unwritable CA attr file (${OPENSSL_FILE_CA_DATABASE}.attr)" >&2  && exit 1
     [ ! -e "${OPENSSL_FILE_CA_SERIAL}" ] && echo '01' > "${OPENSSL_FILE_CA_SERIAL}"
-    [ ! -f "${OPENSSL_FILE_CA_SERIAL}" -o ! -w "${OPENSSL_FILE_CA_SERIAL}" ] && echo "ERROR: Invalid/unwritable CA serial file (${OPENSSL_FILE_CA_SERIAL})" >&2  && exit 1
+    [ ! -f "${OPENSSL_FILE_CA_SERIAL}" -o ! -w "${OPENSSL_FILE_CA_SERIAL}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unwritable CA serial file (${OPENSSL_FILE_CA_SERIAL})" >&2  && exit 1
     [ ! -e "${OPENSSL_FILE_CA_CRLNUMBER}" ] && echo '01' > "${OPENSSL_FILE_CA_CRLNUMBER}"
-    [ ! -f "${OPENSSL_FILE_CA_CRLNUMBER}" -o ! -w "${OPENSSL_FILE_CA_CRLNUMBER}" ] && echo "ERROR: Invalid/unwritable CA CRL number file (${OPENSSL_FILE_CA_CRLNUMBER})" >&2  && exit 1
+    [ ! -f "${OPENSSL_FILE_CA_CRLNUMBER}" -o ! -w "${OPENSSL_FILE_CA_CRLNUMBER}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unwritable CA CRL number file (${OPENSSL_FILE_CA_CRLNUMBER})" >&2  && exit 1
 
     # Intermediate CA ?
     [ "${OPT_ID}" == 'CA:INTERMEDIATE' ] && exit 0
 
     # Private key
-    [ -n "${OPT_PKCS11_URI}" ] && echo 'ERROR: Certificate authority cannot be created via PKCS#11' >&2 && exit 1
+    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate authority cannot be created via PKCS#11" >&2 && exit 1
     FILE_KEY="${OPENSSL_FILE_CA_KEY}"
     if [ ! -e "${FILE_KEY}" ]; then
       [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "CA (private key) password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
@@ -390,22 +510,20 @@ case "${ARG_COMMAND}" in
 
     # Certificate (self-signed)
     FILE_CERT="${OPENSSL_FILE_CA_CERT}"
-    [ -e "${FILE_CERT}" ] && echo "ERROR: CA certificate already exists (${FILE_CERT})" >&2 && exit 1
+    [ -e "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: CA certificate already exists (${FILE_CERT})" >&2 && exit 1
     [ -z "${OPENSSL_DN_COMMONNAME}" ] && export OPENSSL_DN_COMMONNAME='Authority'
     OPENSSL_INPUT="${FILE_KEY}" OPENSSL_OUTPUT="${FILE_CERT}" "${0}" make-cert +id 'CA:INTERNAL' -selfsign -extensions 'CA_Authority_Extensions' ${OPT_OPENSSL} || exit $?
     ;;
 
 
   'show-ca')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: CA certificate cannot be displayed from PKCS#11 (first import it '${0##*/} import-cert')" >&2 && exit 1
-
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_CERT="${OPENSSL_INPUT}"
     else
       FILE_CERT="${OPENSSL_DIR_CA}/cert.pem"
     fi
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR: Invalid/unreadable certificate (${FILE_CERT})" >&2 && exit 1
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
     fgrep -q 'CERTIFICATE' "${FILE_CERT}" && FORMAT_CERT='PEM' || FORMAT_CERT='DER'
 
     # OpenSSL
@@ -416,17 +534,22 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # Private key
 
+  'help-key')
+    man openssl-genpkey || echo 'https://www.openssl.org/docs/man1.1.1/man1/genpkey.html'
+    ;;
+
+
   'make-key')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Private key cannot be created via PKCS#11 (use 'pkcs11-tool')" >&2 && exit 1
+    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR[${ARG_COMMAND}]: Private key cannot be created via PKCS#11 (use 'pkcs11-tool')" >&2 && exit 1
 
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_KEY="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_KEY}" ] && echo "ERROR: Private key already exists (${FILE_KEY})" >&2 && exit 1
+    [ -e "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Private key already exists (${FILE_KEY})" >&2 && exit 1
 
     # OpenSSL
     [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "Private key password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
@@ -447,46 +570,45 @@ case "${ARG_COMMAND}" in
         openssl genpkey -paramfile "${TMP_PARAM}" -out "${FILE_KEY}" -pass env:OPENSSL_PASSWORD -${OPENSSL_ALGO_WRAP} || exit 1
         ;;
       *)
-        echo "ERROR: Unsupported algorithm (${OPT_ALGO_PKI})" >&2 && exit 1
+        echo "ERROR[${ARG_COMMAND}]: Unsupported algorithm (${OPT_ALGO_PKI})" >&2 && exit 1
         ;;
     esac
-    echo "INFO: Private key successfully created (${FILE_KEY})"
+    echo "INFO[${ARG_COMMAND}]: Private key successfully created (${FILE_KEY})"
     [ -n "${OPT_VERBOSE}" ] && openssl pkey -noout -text -in "${FILE_KEY}" -passin env:OPENSSL_PASSWORD
     ;;
 
 
   'import-key')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Private key cannot be imported from PKCS#11 (first export it with 'pkcs11-tool --read-object --type privkey --token-label \"${OPT_PKCS11_TOKEN}\" --label \"${OPT_PKCS11_OBJECT}\"')" >&2 && exit 1
+    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR[${ARG_COMMAND}]: Private key cannot be imported from PKCS#11" >&2 && exit 1
 
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_KEY="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_KEY}" ] && echo "ERROR: Private key already exists (${FILE_KEY})" >&2 && exit 1
+    [ -e "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Private key already exists (${FILE_KEY})" >&2 && exit 1
 
     # OpenSSL
     [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "Private key password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
     openssl pkey -out "${FILE_KEY}" -passout env:OPENSSL_PASSWORD -${OPENSSL_ALGO_WRAP} ${OPT_OPENSSL} || exit 1
-    [ ! -s "${FILE_KEY}" ] && rm -f "${${FILE_KEY}}" && echo "ERROR: Private key import failed" >&2 && exit 1
-    echo "INFO: Private key successfully imported (${FILE_KEY})"
+    [ ! -s "${FILE_KEY}" ] && rm -f "${${FILE_KEY}}" && echo "ERROR[${ARG_COMMAND}]: Private key import failed" >&2 && exit 1
+    echo "INFO[${ARG_COMMAND}]: Private key successfully imported (${FILE_KEY})"
     [ -n "${OPT_VERBOSE}" ] && openssl pkey -noout -text -in "${FILE_KEY}" -passin env:OPENSSL_PASSWORD
     ;;
 
 
   'show-key')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Private key cannot be displayed from PKCS#11 (first import it with '${0##*/} import-key')" >&2 && exit 1
+    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR[${ARG_COMMAND}]: Private key cannot be displayed from PKCS#11" >&2 && exit 1
 
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_KEY="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${OPT_DATE}.pem"
+      FILE_KEY="$(_file_key)" || exit $?
     fi
-    [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR: Invalid/unreadable private key (${FILE_KEY})" >&2 && exit 1
+    [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
     fgrep -q 'PRIVATE KEY' "${FILE_KEY}" && FORMAT_KEY='PEM' || FORMAT_KEY='DER'
 
     # OpenSSL
@@ -498,15 +620,20 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # Public key
 
+  'help-pub')
+    man openssl-pkey || echo 'https://www.openssl.org/docs/man1.1.1/man1/pkey.html'
+    ;;
+
+
   'make-pub')
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_PUB="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_PUB="${OPENSSL_DIR_PUBS}/${OPT_ID}-pub-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_PUB}" ] && echo "ERROR: Public key already exists (${FILE_PUB})" >&2 && exit 1
+    [ -e "${FILE_PUB}" ] && echo "ERROR[${ARG_COMMAND}]: Public key already exists (${FILE_PUB})" >&2 && exit 1
 
     # OpenSSL
     if [ -z "${OPT_PKCS11_URI}" ]; then
@@ -514,10 +641,13 @@ case "${ARG_COMMAND}" in
       if [ -n "${OPENSSL_INPUT}" ]; then
         FILE_KEY="${OPENSSL_INPUT}"
       else
-        [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-        FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${OPT_DATE}.pem"
+        FILE_KEY="$(_file_key)" || exit $?
       fi
-      [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR: Invalid/unreadable private key (${FILE_KEY})" >&2 && exit 1
+      if [ -z "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
+        FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+        OPENSSL_OUTPUT="${FILE_KEY}" "${0}" make-key "${OPTS[@]}" || exit $?
+      fi
+      [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
       fgrep -q 'PRIVATE KEY' "${FILE_KEY}" && FORMAT_KEY='PEM' || FORMAT_KEY='DER'
 
       # OpenSSL [cont'd]
@@ -526,43 +656,38 @@ case "${ARG_COMMAND}" in
     else
       openssl pkey -engine pkcs11 -inform engine -in "${OPT_PKCS11_URI}" -pubout -out "${FILE_PUB}" || exit 1
     fi
-    [ ! -s "${FILE_PUB}" ] && rm -f "${${FILE_PUB}}" && echo "ERROR: Public key creation failed" >&2 && exit 1
-    echo "INFO: Public key successfully created (${FILE_PUB})"
+    [ ! -s "${FILE_PUB}" ] && rm -f "${${FILE_PUB}}" && echo "ERROR[${ARG_COMMAND}]: Public key creation failed" >&2 && exit 1
+    echo "INFO[${ARG_COMMAND}]: Public key successfully created (${FILE_PUB})"
     [ -n "${OPT_VERBOSE}" ] && openssl pkey -noout -text -pubin -in "${FILE_PUB}"
     ;;
 
 
   'import-pub')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Public key cannot be imported from PKCS#11 (first export it with 'pkcs11-tool --read-object --type pubkey --token-label \"${OPT_PKCS11_TOKEN}\" --label \"${OPT_PKCS11_OBJECT}\"')" >&2 && exit 1
-
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_PUB="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_PUB="${OPENSSL_DIR_PUBS}/${OPT_ID}-pub-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_PUB}" ] && echo "ERROR: Public key already exists (${FILE_PUB})" >&2 && exit 1
+    [ -e "${FILE_PUB}" ] && echo "ERROR[${ARG_COMMAND}]: Public key already exists (${FILE_PUB})" >&2 && exit 1
 
     # OpenSSL
     openssl pkey -pubout -out "${FILE_PUB}" -pubin ${OPT_OPENSSL} || exit 1
-    [ ! -s "${FILE_PUB}" ] && rm -f "${${FILE_PUB}}" && echo "ERROR: Public key import failed" >&2 && exit 1
-    echo "INFO: Public key successfully imported (${FILE_PUB})"
+    [ ! -s "${FILE_PUB}" ] && rm -f "${${FILE_PUB}}" && echo "ERROR[${ARG_COMMAND}]: Public key import failed" >&2 && exit 1
+    echo "INFO[${ARG_COMMAND}]: Public key successfully imported (${FILE_PUB})"
     [ -n "${OPT_VERBOSE}" ] && openssl pkey -noout -text -pubin -in "${FILE_PUB}"
     ;;
 
 
   'show-pub')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Public key cannot be displayed from PKCS#11 (first import it with '${0##*/} import-pub')" >&2 && exit 1
-
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_PUB="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_PUB="${OPENSSL_DIR_PUBS}/${OPT_ID}-pub-${OPT_DATE}.pem"
+      FILE_PUB="$(_file_pub)" || exit $?
     fi
-    [ ! -f "${FILE_PUB}" -o ! -r "${FILE_PUB}" ] && echo "ERROR: Invalid/unreadable public key (${FILE_PUB})" >&2 && exit 1
+    [ ! -f "${FILE_PUB}" -o ! -r "${FILE_PUB}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable public key (${FILE_PUB:-<no match>})" >&2 && exit 1
     fgrep -q 'PUBLIC KEY' "${FILE_PUB}" && FORMAT_PUB='PEM' || FORMAT_PUB='DER'
 
     # OpenSSL
@@ -573,18 +698,23 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # Certificate signing request (CSR)
 
+  'help-req')
+    man openssl-req || echo 'https://www.openssl.org/docs/man1.1.1/man1/req.html'
+    ;;
+
+
   'make-req')
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_REQ="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_REQ}" ] && echo "ERROR: Certificate signing request already exists (${FILE_REQ})" >&2 && exit 1
+    [ -e "${FILE_REQ}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate signing request already exists (${FILE_REQ})" >&2 && exit 1
 
     # Configuration
-    [ -z "${OPENSSL_DN_COMMONNAME}" ] && echo "ERROR: Missing/empty '+name ...' option" >&2 && exit 1
+    [ -z "${OPENSSL_DN_COMMONNAME}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty name (+name ...)" >&2 && exit 1
     _openssl_conf_quirks
 
     # OpenSSL
@@ -593,10 +723,13 @@ case "${ARG_COMMAND}" in
       if [ -n "${OPENSSL_INPUT}" ]; then
         FILE_KEY="${OPENSSL_INPUT}"
       else
-        [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-        FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${OPT_DATE}.pem"
+        FILE_KEY="$(_file_key)" || exit $?
       fi
-      [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR: Invalid/unreadable private key (${FILE_KEY})" >&2 && exit 1
+      if [ -z "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
+        FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+        OPENSSL_OUTPUT="${FILE_KEY}" "${0}" make-key "${OPTS[@]}" || exit $?
+      fi
+      [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
       fgrep -q 'PRIVATE KEY' "${FILE_KEY}" && FORMAT_KEY='PEM' || FORMAT_KEY='DER'
 
       # OpenSSL [cont'd]
@@ -605,43 +738,38 @@ case "${ARG_COMMAND}" in
     else
       openssl req -new -engine pkcs11 -keyform engine -key "${OPT_PKCS11_URI}" -out "${FILE_REQ}" ${OPT_OPENSSL} || exit 1
     fi
-    [ ! -s "${FILE_REQ}" ] && rm -f "${${FILE_REQ}}" && echo "ERROR: Certificate signing request creation failed" >&2 && exit 1
-    echo "INFO: Certificate signing request successfully created (${FILE_REQ})"
+    [ ! -s "${FILE_REQ}" ] && rm -f "${${FILE_REQ}}" && echo "ERROR[${ARG_COMMAND}]: Certificate signing request creation failed" >&2 && exit 1
+    echo "INFO[${ARG_COMMAND}]: Certificate signing request successfully created (${FILE_REQ})"
     [ -n "${OPT_VERBOSE}" ] && openssl req -noout -text -in "${FILE_REQ}"
     ;;
 
 
   'import-req')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Certificate signing request cannot be imported from PKCS#11 (use '${0##*/} make-req' instead)" >&2 && exit 1
-
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_REQ="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_REQ}" ] && echo "ERROR: Certificate signing request already exists (${FILE_REQ})" >&2 && exit 1
+    [ -e "${FILE_REQ}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate signing request already exists (${FILE_REQ})" >&2 && exit 1
 
     # OpenSSL
     OPENSSL_CONF=/dev/null openssl req -out "${FILE_REQ}" ${OPT_OPENSSL} || exit 1
-    [ ! -s "${FILE_REQ}" ] && rm -f "${${FILE_REQ}}" && echo "ERROR: Certificate signing request import failed" >&2 && exit 1
-    echo "INFO: Certificate signing request successfully imported (${FILE_REQ})"
+    [ ! -s "${FILE_REQ}" ] && rm -f "${${FILE_REQ}}" && echo "ERROR[${ARG_COMMAND}]: Certificate signing request import failed" >&2 && exit 1
+    echo "INFO[${ARG_COMMAND}]: Certificate signing request successfully imported (${FILE_REQ})"
     [ -n "${OPT_VERBOSE}" ] && OPENSSL_CONF=/dev/null openssl req -noout -text -in "${FILE_REQ}"
     ;;
 
 
   'show-req')
-    [ -n "${OPT_PKCS11_URI}" ] && echo 'ERROR: Certificate signing request cannot be displayed from PKCS#11' >&2 && exit 1
-
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_REQ="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${OPT_DATE}.pem"
+      FILE_REQ="$(_file_req)" || exit $?
     fi
-    [ ! -f "${FILE_REQ}" -o ! -r "${FILE_REQ}" ] && echo "ERROR: Invalid/unreadable certificate signing request (${FILE_REQ})" >&2 && exit 1
+    [ ! -f "${FILE_REQ}" -o ! -r "${FILE_REQ}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate signing request (${FILE_REQ:-<no match>})" >&2 && exit 1
     fgrep -q 'CERTIFICATE REQUEST' "${FILE_REQ}" && FORMAT_REQ='PEM' || FORMAT_REQ='DER'
 
     # OpenSSL
@@ -652,15 +780,20 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # Certificates
 
+  'help-cert')
+    man openssl-ca || echo 'https://www.openssl.org/docs/man1.1.1/man1/ca.html'
+    ;;
+
+
   'make-cert')
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_CERT="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_CERT}" ] && echo "ERROR: Certificate already exists (${FILE_CERT})" >&2 && exit 1
+    [ -e "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate already exists (${FILE_CERT})" >&2 && exit 1
 
     # OpenSSL
     if [[ "${OPT_OPENSSL}" == *'-selfsign'* ]]; then
@@ -672,15 +805,18 @@ case "${ARG_COMMAND}" in
         if [ -n "${OPENSSL_INPUT}" ]; then
           FILE_KEY="${OPENSSL_INPUT}"
         else
-          [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-          FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${OPT_DATE}.pem"
+          FILE_KEY="$(_file_key)" || exit $?
         fi
-        [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR: Invalid/unreadable private key (${FILE_KEY})" >&2 && exit 1
+        if [ -z "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
+          FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+          OPENSSL_OUTPUT="${FILE_KEY}" "${0}" make-key "${OPTS[@]}" || exit $?
+        fi
+        [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
         fgrep -q 'PRIVATE KEY' "${FILE_KEY}" && FORMAT_KEY='PEM' || FORMAT_KEY='DER'
       fi
 
       # Configuration
-      [ -z "${OPENSSL_DN_COMMONNAME}" ] && echo "ERROR: Missing/empty '+name ...' option" >&2 && exit 1
+      [ -z "${OPENSSL_DN_COMMONNAME}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty name (+name ...)" >&2 && exit 1
       _openssl_conf_quirks
 
       # OpenSSL [cont'd]
@@ -690,7 +826,7 @@ case "${ARG_COMMAND}" in
       else
         openssl req -new -x509 -engine pkcs11 -keyform engine -key "${OPT_PKCS11_URI}" -out "${FILE_CERT}" ${OPT_OPENSSL}
       fi
-      [ ! -s "${FILE_CERT}" ] && rm -f "${FILE_CERT}" && echo "ERROR: Certificate creation failed" >&2 && exit 1
+      [ ! -s "${FILE_CERT}" ] && rm -f "${FILE_CERT}" && echo "ERROR[${ARG_COMMAND}]: Certificate creation failed" >&2 && exit 1
 
       # Database (self-signed)
       serial="$(openssl x509 -noout -serial -in "${FILE_CERT}" | sed 's|^[^=]*=||')"
@@ -698,7 +834,7 @@ case "${ARG_COMMAND}" in
       date="$(date --utc --date "$(openssl x509 -noout -enddate -in "${FILE_CERT}" | sed 's|^[^=]*=||')" +'%y%m%d%H%M%SZ')"
       entry="V\t${date}\t\t${serial}\t${FILE_CERT##*/}\t${subject}"
       echo -e "${entry}" >> "${OPENSSL_FILE_DATABASE}"
-      [ $? -ne 0 ] && echo "ERROR: Failed to add certificate to database (${OPENSSL_FILE_DATABASE})" >&2 && echo -e "${entry}" >&2 && exit 1
+      [ $? -ne 0 ] && echo "ERROR[${ARG_COMMAND}]: Failed to add certificate to database (${OPENSSL_FILE_DATABASE})" >&2 && echo -e "${entry}" >&2 && exit 1
 
     else
       # ... CA-signed
@@ -707,11 +843,14 @@ case "${ARG_COMMAND}" in
       if [ -n "${OPENSSL_INPUT}" ]; then
         FILE_REQ="${OPENSSL_INPUT}"
       else
-        [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-        FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${OPT_DATE}.pem"
+        FILE_REQ="$(_file_req)" || exit $?
       fi
-      [ ! -f "${FILE_REQ}" -o ! -r "${FILE_REQ}" ] && echo "ERROR: Invalid/unreadable certificate signing request (${FILE_REQ})" >&2 && exit 1
-      fgrep -q 'CERTIFICATE REQUEST' "${FILE_REQ}" || ( echo "ERROR: Certificate signing request MUST be in PEM format (${FILE_REQ})" >&2 && exit 1 )
+      if [ -z "${FILE_REQ}" -a -n "${OPT_AUTO}" ]; then
+        FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${DFLT_DATE}.pem"
+        OPENSSL_OUTPUT="${FILE_REQ}" "${0}" make-req "${OPTS[@]}" || exit $?
+      fi
+      [ ! -f "${FILE_REQ}" -o ! -r "${FILE_REQ}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate signing request (${FILE_REQ:-<no match>})" >&2 && exit 1
+      fgrep -q 'CERTIFICATE REQUEST' "${FILE_REQ}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate signing request MUST be in PEM format (${FILE_REQ})" >&2 && exit 1 )
 
       # Output [bis]
       CA_SERIAL="$(cat "${OPENSSL_FILE_CA_SERIAL}")"
@@ -728,35 +867,34 @@ case "${ARG_COMMAND}" in
       else
         openssl ca -engine pkcs11 -keyform engine -keyfile "${OPT_PKCS11_URI}" -in "${FILE_REQ}" -out /dev/null -notext ${OPT_OPENSSL} || exit 1
       fi
-      [ ! -s "${FILE_SERIAL}" ] && rm -f "${FILE_SERIAL}" && echo "ERROR: Certificate creation failed" >&2 && exit 1
+      [ ! -s "${FILE_SERIAL}" ] && rm -f "${FILE_SERIAL}" && echo "ERROR[${ARG_COMMAND}]: Certificate creation failed" >&2 && exit 1
       ln -s -r "${FILE_SERIAL}" "${FILE_CERT}"
-    
+
       # Database (quirk)
       sed -i "s|\t${CA_SERIAL}\tunknown|\t${CA_SERIAL}\t${FILE_CERT##*/}|" "${OPENSSL_FILE_CA_DATABASE}"
-      [ $? -ne 0 ] && echo "ERROR: Failed to update the certificates database (${OPENSSL_FILE_CA_DATABASE})" >&2 && exit 1
+      [ $? -ne 0 ] && echo "ERROR[${ARG_COMMAND}]: Failed to update the certificates database (${OPENSSL_FILE_CA_DATABASE})" >&2 && exit 1
 
     fi
-    echo "INFO: Certificate successfully signed (${FILE_CERT})"
+    echo "INFO[${ARG_COMMAND}]: Certificate successfully signed (${FILE_CERT})"
     [ -n "${OPT_VERBOSE}" ] && openssl x509 -noout -text -in "${FILE_CERT}"
     ;;
 
 
   'import-cert')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Certificate cannot be imported from PKCS#11 (first export it with 'pkcs11-tool --read-object --type cert --token-label \"${OPT_PKCS11_TOKEN}\" --label \"${OPT_PKCS11_OBJECT}\"')" >&2 && exit 1
 
     # Output
     if [ -n "${OPENSSL_OUTPUT}" ]; then
       FILE_CERT="${OPENSSL_OUTPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
+      [ -z "${OPT_ID}" ] && echo "ERROR[${ARG_COMMAND}]: Missing/empty ID (+id ...)" >&2 && exit 1
       FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${DFLT_DATE}.pem"
     fi
-    [ -e "${FILE_CERT}" ] && echo "ERROR: Certificate already exists (${FILE_CERT})" >&2 && exit 1
+    [ -e "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate already exists (${FILE_CERT})" >&2 && exit 1
 
     # OpenSSL
     OPENSSL_CONF=/dev/null openssl x509 -out "${FILE_CERT}" ${OPT_OPENSSL} || exit 1
-    [ ! -s "${FILE_CERT}" ] && rm -f "${${FILE_CERT}}" && echo "ERROR: Certificate import failed" >&2 && exit 1
-    echo "INFO: Certificate successfully imported (${FILE_CERT})"
+    [ ! -s "${FILE_CERT}" ] && rm -f "${${FILE_CERT}}" && echo "ERROR[${ARG_COMMAND}]: Certificate import failed" >&2 && exit 1
+    echo "INFO[${ARG_COMMAND}]: Certificate successfully imported (${FILE_CERT})"
     [ -n "${OPT_VERBOSE}" ] && OPENSSL_CONF=/dev/null openssl x509 -noout -text -in "${FILE_CERT}"
 
     # Database
@@ -766,29 +904,26 @@ case "${ARG_COMMAND}" in
     entry="V\t${date}\t\t${serial}\t${FILE_CERT##*/}\t${subject}"
     [[ "${OPT_OPENSSL}" == *'-selfsign'* ]] && FILE_DATABASE="${OPENSSL_FILE_DATABASE}" || FILE_DATABASE="${OPENSSL_FILE_CA_DATABASE}"
     echo -e "${entry}" >> "${FILE_DATABASE}"
-    [ $? -ne 0 ] && echo "ERROR: Failed to add certificate to database (${FILE_DATABASE})" >&2 && echo -e "${entry}" >&2 && exit 1
+    [ $? -ne 0 ] && echo "ERROR[${ARG_COMMAND}]: Failed to add certificate to database (${FILE_DATABASE})" >&2 && echo -e "${entry}" >&2 && exit 1
 
     # Relocate CA-signed certificate per its serial
     if [[ "${OPT_OPENSSL}" != *'-selfsign'* ]]; then
       FILE_SERIAL="${OPENSSL_DIR_CA_CERTS}/${serial}.pem"
       mv "${FILE_CERT}" "${FILE_SERIAL}"
-      [ $? -ne 0 ] && echo "ERROR: Failed to relocate serialized certificate (${FILE_SERIAL})" >&2 && exit 1
+      [ $? -ne 0 ] && echo "ERROR[${ARG_COMMAND}]: Failed to relocate serialized certificate (${FILE_SERIAL})" >&2 && exit 1
       ln -s -r "${FILE_SERIAL}" "${FILE_CERT}"
     fi
     ;;
 
 
   'show-cert')
-    [ -n "${OPT_PKCS11_URI}" ] && echo "ERROR: Certificate cannot be displayed from PKCS#11 (first import it '${0##*/} import-cert')" >&2 && exit 1
-
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_CERT="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${OPT_DATE}.pem"
+      FILE_CERT="$(_file_cert)" || exit $?
     fi
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR: Invalid/unreadable certificate (${FILE_CERT})" >&2 && exit 1
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
     fgrep -q 'CERTIFICATE' "${FILE_CERT}" && FORMAT_CERT='PEM' || FORMAT_CERT='DER'
 
     # OpenSSL
@@ -798,30 +933,53 @@ case "${ARG_COMMAND}" in
 
   'list-certs')
     # Input
-    [ ! -f "${OPENSSL_FILE_CA_DATABASE}" -o ! -r "${OPENSSL_FILE_CA_DATABASE}" ] && echo "ERROR: Invalid/unreadable certificates database (${OPENSSL_FILE_CA_DATABASE})" >&2 && exit 1
+    [ ! -f "${OPENSSL_FILE_CA_DATABASE}" -o ! -r "${OPENSSL_FILE_CA_DATABASE}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificates database (${OPENSSL_FILE_CA_DATABASE})" >&2 && exit 1
 
     # Output
     [[ "${OPT_OPENSSL}" == *'-selfsign'* ]] && FILE_DATABASE="${OPENSSL_FILE_DATABASE}" || FILE_DATABASE="${OPENSSL_FILE_CA_DATABASE}"
-    if [ -n "${OPT_LIST_REVOKED}" ]; then
-      awk -F$'\t' "{if(\$1==\"R\" && \"20\"\$3<\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tREVOKED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$3,\$5)}}" "${FILE_DATABASE}" | sort -k3
-    elif [ -n "${OPT_LIST_EXPIRED}" ]; then
-      awk -F$'\t' "{if((\$1==\"V\"||\$1==\"E\") && \"20\"\$2<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tEXPIRED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k3
-    else
-      awk -F$'\t' "{if(\$1==\"V\" && \"20\"\$2>\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tVALID\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k1
-    fi
+    [ -z "${OPT_DATE}" ] && OPT_DATE="${DFLT_DATE}"
+    [ -z "${OPT_LIST_VALID}" -a -z "${OPT_LIST_EXPIRED}" -a -z "${OPT_LIST_REVOKED}" ] && OPT_LIST_VALID='yes'
+    [ -n "${OPT_LIST_VALID}" ] && awk -F$'\t' "{if(\$1==\"V\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tVALID\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k2 -k1
+    [ -n "${OPT_LIST_EXPIRED}" ] && awk -F$'\t' "{if((\$1==\"V\"||\$1==\"E\") &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tEXPIRED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
+    [ -n "${OPT_LIST_REVOKED}" ] && awk -F$'\t' "{if(\$1==\"R\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\" && \"20\"\$3<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tREVOKED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$3,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
     ;;
 
+
+  ########################################################################
+  # PKCS#12 (private key + certificate) bundle
+
+  'help-pkcs12')
+    man openssl-pkcs12 || echo 'https://www.openssl.org/docs/man1.1.1/man1/pkcs12.html'
+    ;;
+
+
+  'export-pkcs12')
+    # Input
+    FILE_KEY="$(_file_key)" || exit $?
+    [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
+    fgrep -q 'PRIVATE KEY' "${FILE_KEY}" || ( echo "ERROR[${ARG_COMMAND}]: Private key MUST be in PEM format (${FILE_KEY})" >&2 && exit 1 )
+    FILE_CERT="$(_file_cert)" || exit $?
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
+    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
+
+    # OpenSSL
+    [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "Private key password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
+    OPENSSL_CONF=/dev/null openssl pkcs12 -export -name "${OPT_ID}" -inkey "${FILE_KEY}" -passin env:OPENSSL_PASSWORD -in "${FILE_CERT}" ${OPT_OPENSSL}
+    ;;
+
+
+  ########################################################################
+  # Certificate revocation list (CRL)
 
   'revoke-cert')
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_CERT="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${OPT_DATE}.pem"
+      FILE_CERT="$(_file_cert)" || exit $?
     fi
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR: Invalid/unreadable certificate (${FILE_CERT})" >&2 && exit 1
-    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
+    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
 
     # OpenSSL
     if [ -z "${OPT_PKCS11_URI}" ]; then
@@ -833,73 +991,146 @@ case "${ARG_COMMAND}" in
     ;;
 
 
-  'check-cert-crl')
+  'help-crl')
+    man openssl-crl || echo 'https://www.openssl.org/docs/man1.1.1/man1/crl.html'
+    ;;
+
+
+  'make-crl')
+    # Output
+    if [ -n "${OPENSSL_OUTPUT}" ]; then
+      FILE_CRL="${OPENSSL_OUTPUT}"
+    else
+      FILE_CRL="${OPENSSL_DIR_CRLS}/crl-${DFLT_DATE}.pem"
+    fi
+    [ -e "${FILE_CRL}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate revocation list already exists (${FILE_CRL})" >&2 && exit 1
+
+    # OpenSSL
+    if [ -z "${OPT_PKCS11_URI}" ]; then
+      [ -z "${OPENSSL_PASSWORD_CA}" ] && read -s -p "CA (private key) password: " OPENSSL_PASSWORD_CA && export OPENSSL_PASSWORD_CA && echo
+      openssl ca -gencrl -passin env:OPENSSL_PASSWORD_CA -out "${FILE_CRL}" -updatedb ${OPT_OPENSSL}
+    else
+      openssl ca -gencrl -engine pkcs11 -keyform engine -keyfile "${OPT_PKCS11_URI}" -out "${FILE_CRL}" -updatedb ${OPT_OPENSSL}
+    fi
+    echo "INFO[${ARG_COMMAND}]: Certificate revocation list successfully created (${FILE_CRL})"
+    [ -n "${OPT_VERBOSE}" ] && openssl crl -noout -text -in "${FILE_CRL}"
+    ;;
+
+
+  'show-crl')
+    # Input
+    if [ -n "${OPENSSL_INPUT}" ]; then
+      FILE_CRL="${OPENSSL_INPUT}"
+    else
+      FILE_CRL="$(_file_crl)" || exit $?
+    fi
+    [ ! -f "${FILE_CRL}" -o ! -r "${FILE_CRL}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate revocation list (${FILE_CRL:-<no match>})" >&2 && exit 1
+    fgrep -q 'X509 CRL' "${FILE_CRL}" && FORMAT_CRL='PEM' || FORMAT_CRL='DER'
+
+    # OpenSSL
+    openssl crl -inform ${FORMAT_CRL} -in "${FILE_CRL}" ${OPT_OPENSSL}
+    ;;
+
+
+  'help-verify')
+    man openssl-verify || echo 'https://www.openssl.org/docs/man1.1.1/man1/verify.html'
+    ;;
+
+
+  'verify-crl')
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_CERT="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${OPT_DATE}.pem"
+      FILE_CERT="$(_file_cert)" || exit $?
     fi
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR: Invalid/unreadable certificate (${FILE_CERT})" >&2 && exit 1
-    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
+    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
 
     # OpenSSL
     OPENSSL_CONF=/dev/null openssl verify -crl_check -crl_download -CAfile "${OPENSSL_FILE_CA_CERT}" ${OPT_OPENSSL} "${FILE_CERT}"
     ;;
 
 
-  'check-cert-ocsp')
+  ########################################################################
+  # OCSP
+
+  'help-ocsp')
+    man openssl-ocsp || echo 'https://www.openssl.org/docs/man1.1.1/man1/ocsp.html'
+    ;;
+
+
+  'verify-ocsp')
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
       FILE_CERT="${OPENSSL_INPUT}"
     else
-      [ -z "${OPT_ID}" ] && echo 'ERROR: Missing/empty "+id ..." option' >&2 && exit 1
-      FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${OPT_DATE}.pem"
+      FILE_CERT="$(_file_cert)" || exit $?
     fi
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR: Invalid/unreadable certificate (${FILE_CERT})" >&2 && exit 1
-    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
+    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
 
     # OpenSSL
     URI_OCSP="$(openssl x509 -noout -ocsp_uri -in "${FILE_CERT}" | head -n 1)"
-    [ -z "${URI_OCSP}" ] && echo 'ERROR: Certificate contains not OCSP Responder URI(s)' >&2 && exit 1
+    [ -z "${URI_OCSP}" ] && echo "ERROR[${ARG_COMMAND}]: Certificate contains not OCSP Responder URI(s)" >&2 && exit 1
     OPENSSL_CONF=/dev/null openssl ocsp -url "${URI_OCSP}" -issuer "${OPENSSL_FILE_CA_CERT}" -cert "${FILE_CERT}" ${OPT_OPENSSL}
     ;;
 
 
-  'export-p12')
-    [ -n "${OPT_PKCS11_URI}" ] && echo 'ERROR: PKCS#12 package cannot be exported via PKCS#11' >&2 && exit 1
+  ########################################################################
+  # PKCS#11 Goodies
 
-    # Input
-    FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${OPT_DATE}.pem"
-    [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR: Invalid/unreadable private key (${FILE_KEY})" >&2 && exit 1
-    fgrep -q 'PRIVATE KEY' "${FILE_KEY}" || ( echo "ERROR: Private key MUST be in PEM format (${FILE_KEY})" >&2 && exit 1 )
-    FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${OPT_DATE}.pem"
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR: Invalid/unreadable certificate (${FILE_CERT})" >&2 && exit 1
-    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
+  # NOTE: Those are only read-only primitives. Writing to PKCS#11 tokens
+  #       is much better and safer done by using the token ad-hoc
+  #       utilities; e.g. pkcs15-tool, yubico-piv-tool, etc.
 
-    # OpenSSL
-    [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "Private key password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
-    OPENSSL_CONF=/dev/null openssl pkcs12 -export -name "${OPT_ID}" -inkey "${FILE_KEY}" -passin env:OPENSSL_PASSWORD -in "${FILE_CERT}" ${OPT_OPENSSL}
+  'help-pkcs11')
+    man pkcs11-tool
     ;;
 
 
-  ########################################################################
-  # Certificates revocation list (CRL)
+  'pkcs11-key')
+    # WARNING: Most PKCS#11 token will not let you retrieve the private key (by design)!
+    pkcs11-tool \
+      ${OPT_PKCS11_TOKEN:+--token-label "${OPT_PKCS11_TOKEN}"} \
+      ${OPT_PKCS11_OBJECT:+--label "${OPT_PKCS11_OBJECT}"} \
+      ${OPT_PKCS11_ID:+--id "${OPT_PKCS11_ID}"} \
+      --read-object --type privkey --login \
+    | openssl pkey -inform DER ${OPT_OPENSSL}
+    ;;
 
-  'export-crl')
-    # OpenSSL
-    if [ -z "${OPT_PKCS11_URI}" ]; then
-      [ -z "${OPENSSL_PASSWORD_CA}" ] && read -s -p "CA (private key) password: " OPENSSL_PASSWORD_CA && export OPENSSL_PASSWORD_CA && echo
-      openssl ca -gencrl -passin env:OPENSSL_PASSWORD_CA ${OPT_OPENSSL}
-    else
-      openssl ca -gencrl -engine pkcs11 -keyform engine -keyfile "${OPT_PKCS11_URI}" ${OPT_OPENSSL}
-    fi
+
+  'pkcs11-pub')
+    pkcs11-tool \
+      ${OPT_PKCS11_TOKEN:+--token-label "${OPT_PKCS11_TOKEN}"} \
+      ${OPT_PKCS11_OBJECT:+--label "${OPT_PKCS11_OBJECT}"} \
+      ${OPT_PKCS11_ID:+--id "${OPT_PKCS11_ID}"} \
+      --read-object --type pubkey \
+    | openssl pkey -pubin -inform DER ${OPT_OPENSSL}
+    ;;
+
+
+  'pkcs11-cert')
+    pkcs11-tool \
+      ${OPT_PKCS11_TOKEN:+--token-label "${OPT_PKCS11_TOKEN}"} \
+      ${OPT_PKCS11_OBJECT:+--label "${OPT_PKCS11_OBJECT}"} \
+      ${OPT_PKCS11_ID:+--id "${OPT_PKCS11_ID}"} \
+      --read-object --type cert \
+    | openssl x509 -inform DER ${OPT_OPENSSL}
+    ;;
+
+
+  'pkcs11-test')
+    pkcs11-tool \
+      ${OPT_PKCS11_TOKEN:+--token-label "${OPT_PKCS11_TOKEN}"} \
+      ${OPT_PKCS11_OBJECT:+--label "${OPT_PKCS11_OBJECT}"} \
+      ${OPT_PKCS11_ID:+--id "${OPT_PKCS11_ID}"} \
+      --test --login
     ;;
 
 
   *)
-    echo "ERROR: Invalid command (${ARG_COMMAND})" >&2 && exit 1
+    echo "ERROR[${ARG_COMMAND}]: Invalid command" >&2 && exit 1
 
 esac
 
