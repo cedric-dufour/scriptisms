@@ -4,7 +4,7 @@ shopt -s extglob
 
 
 ## Version
-VERSION='1.0.20191102a'
+VERSION='1.0.20191103a'
 [ "${1##*-}" == 'version' ] && echo "${VERSION}" && exit 0
 
 
@@ -62,141 +62,69 @@ cat >&2 << EOF
 USAGE: ${0##*/} <command> [options]
 
 SYNOPSIS:
-  An easy wrapper for everyday-use of OpenSSL.
+  An easy wrapper for everyday-use of OpenSSL
 
-GLOBAL:
+COMMANDS:
 
-  OPTIONS:
-    +id <ID>
-      Output file ID, used to prefix output files
+  Certification Authority (CA) management
+    -> ${0##*/} help-ca
 
-    +date <YYYYMMDD>
-      Generation date, used to suffix outout files (default: ${DFLT_DATE})
+  Private keys management
+    -> ${0##*/} help-key
 
-    +algorithm {rsa|dsa|ec}
-      Public cryptography algorithm (default: ${DFLT_ALGO_PKI})
+  Public keys management
+    -> ${0##*/} help-pub
 
-    +pkcs11-{token|object|id} <label|id>
-      Private key PKCS#11 token (slot) label, object label or ID
-      (as per 'pkcs11-tool --list-token-slots' or 'pkcs11-tool --list-objects')
+  Certificate Signing Requests (CSR) management
+    -> ${0##*/} help-req
 
-    +verbose
-      Output detailed information about imported/created material
+  Certificates management
+    -> ${0##*/} help-cert
 
-    +auto
-      Automatically create missing dependencies (priv. key and/or cert. signing request)
-      WARNING: the same options are passed to all commands (make-key and/or make-req)
+  Certificate Revocation List (CRL) management
+    -> ${0##*/} help-crl
 
-    -...
-      Option passed "as is" to OpenSSL
+  PKCS#11 integration (private key)
+    -> ${0##*/} help-pkcs11
 
-  ENVIRONMENT:
-    OPENSSL_ROOT=${DFLT_ROOT}
-      Path to the working directory, where all OpenSSL material is stored
+  Prompt for and store the (CA) private key password
+    -> source ${0##*/} set-ca-passwd
+    -> source ${0##*/} set-key-passwd
 
-    OPENSSL_CONF=${DFLT_CONF}
-      Path to the OpenSSL configuration file
+GLOBAL OPTIONS:
 
-    OPENSSL_PASSWORD, OPENSSL_PASSWORD_CA
-      (CA) Private key password
+  +id <ID>
+    File identifier, used to prefix files
 
-    OPENSSL_DN_{ORGANIZATIONALUNIT,COMMONNAME,EMAILADDRESS,TITLE}
-      Certificate distinguished name (DN) components
+  +date <YYYYMMDD>
+    Generation date, used to suffix files (default: ${DFLT_DATE})
 
-    OPENSSL_EXT_SAN
-      Certificate subject alternative names (SAN)
+  +verbose
+    Output detailed information about imported/created material
 
-COMMAND: make-ca
-  ${0##*/} make-ca
-    Create the certificate authority (CA) self-signed certificate
-    (and other required resources)
+  +auto
+    Automatically create missing dependencies (priv. key and/or cert. signing request)
+    WARNING: the same options are passed to all commands ('make-key' and/or 'make-req')
 
-COMMAND: make-key
-  ${0##*/} make-key +id ...
-    Create a private key
+  -...
+    Option passed "as is" to OpenSSL
 
-  OPTIONS:
-    +length <bits>
-      Key length, for RSA and DSA keys (default: ${DFLT_KEY_LENGTH})
+ENVIRONMENT:
 
-    +curve <curve-name>
-      Key curve, for EC keys (default: ${DFLT_KEY_CURVE})
+  OPENSSL_ROOT=${DFLT_ROOT}
+    Path to the working directory, where all OpenSSL material is stored
 
-COMMAND: make-pub
-  ${0##*/} make-pub +id ...
-    Create a public key
+  OPENSSL_CONF=${DFLT_CONF}
+    Path to the OpenSSL configuration file
 
-COMMAND: make-req
-  ${0##*/} make-req +id ...
-    Create a certificate signing request (CSR)
+  OPENSSL_PASSWORD, OPENSSL_PASSWORD_CA
+    (CA) Private key password
 
-  OPTIONS:
-    +unit <organizational-unit>
-      Certificate distinguished name (DN) organizational unit (OU)
+  OPENSSL_DN_{ORGANIZATIONALUNIT,COMMONNAME,EMAILADDRESS,TITLE}
+    Certificate distinguished name (DN) components
 
-    +name <common-name>
-      Certificate distinguished name (DN) common name (CN)
-
-    +email <email-address>
-      Certificate distinguished name (DN) e-mail address (emailAddress)
-
-    +title <title>
-      Certificate distinguished name (DN) title (title)
-
-    +san-{dns,uri,ip,rid,dir,email,other} [+...]
-      Certificate subject alternative names (SAN)
-
-COMMAND: make-cert
-  ${0##*/} make-cert +id ...
-    Create a self/CA-signed certificate
-
-  OPTIONS:
-    +san-{dns,uri,ip,rid,dir,email,other} [+...]
-      Certificate subject alternative names (SAN)
-
-COMMAND: list-certs
-  ${0##*/} list-certs
-    List CA-signed (only) certificates as TSV
-    (ID DATE SUBJECT SERIAL STATUS DATE FILE)
-
-  OPTIONS:
-    +valid
-      List valid certificates (the default)
-
-    +expired
-      List expired certificates
-
-    +revoked
-      List revoked certificates
-
-COMMAND: export-pkcs12
-  ${0##*/} export-pkcs12 +id ... [-out ...]
-    Export the private key and certificate as a PKCS#12 bundle
-
-COMMAND: revoke-cert [-crl_reason {supersed|cessationOfOperation|keyCompromise|...}]
-  ${0##*/} revoke-cert +id ...
-    Revoke a CA-signed certificate
-
-COMMAND: make-crl
-  ${0##*/} make-crl [-out ...] [-outform {PEM|DER}]
-    Create the CA-signed certificate revocation list (CRL)
-
-COMMAND: verify-{crl,ocsp}
-  ${0##*/} verify-{crl,ocsp} +id ...
-    Verify a CA-signed certificate validity via CRL/OCSP
-
-COMMAND: import-{key,pub,req,cert}
-  ${0##*/} import-{key,pub,req,cert} [-in ...] [-inform {PEM|DER}]
-    Import the given file (or standard input)
-
-COMMAND: show-{ca,key,pub,req,cert,crl}
-  ${0##*/} show-{ca,key,pub,req,cert,crl} +id ...
-    Show the given file (in PEM format)
-
-COMMAND: set-{key,ca}-passwd
-  source ${0##*/} set-{key,ca}-passwd
-    Prompt for and store the (CA) private key password
-    (in ad-hoc environment variable)
+  OPENSSL_EXT_SAN
+    Certificate subject alternative names (SAN)
 EOF
 }
 [ $# -lt 1 -o "${1##*-}" == 'help' ] && _help && exit 1
@@ -347,7 +275,9 @@ export OPENSSL_VERBOSE="${OPT_VERBOSE}"
 ## Helpers
 
 # PKCS#11
-function _rawurlencode() {
+function _rfc7512_pchar() {
+  # REF: https://tools.ietf.org/html/rfc7512#section-2.3
+  # REF: https://tools.ietf.org/html/rfc3986#section-2.2
   # REF: https://stackoverflow.com/questions/296536/how-to-urlencode-data-for-curl-command
   local string="${1}"
   local strlen=${#string}
@@ -364,12 +294,30 @@ function _rawurlencode() {
   done
   echo "${encoded}"
 }
+function _rfc7512_hexnum() {
+  local string="$(printf '%x' "0x${1}")"
+  local strlen=${#string}
+  local encoded=
+  local pos o
+
+  for (( pos=strlen-2; pos>=0; pos-=2 )); do
+    c="${string:$pos:2}"
+    printf -v o '%%%02X' "0x${c}"
+    encoded="${o}${encoded}"
+  done
+  if [ ${pos} -eq -1 ]; then
+    c="${string:0:1}"
+    printf -v o '%%%02X' "0x${c}"
+    encoded="${o}${encoded}"
+  fi
+  echo "${encoded}"
+}
 OPT_PKCS11_URI=
 if [ -n "${OPT_PKCS11_TOKEN}" -o -n "${OPT_PKCS11_OBJECT}" -o -n "${OPT_PKCS11_ID}" ]; then
   OPT_PKCS11_URI='pkcs11:type=private'
-  [ -n "${OPT_PKCS11_TOKEN}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};token=$(_rawurlencode "${OPT_PKCS11_TOKEN}")"
-  [ -n "${OPT_PKCS11_OBJECT}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};object=$(_rawurlencode "${OPT_PKCS11_OBJECT}")"
-  [ -n "${OPT_PKCS11_ID}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};id=%${OPT_PKCS11_ID}"
+  [ -n "${OPT_PKCS11_TOKEN}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};token=$(_rfc7512_pchar "${OPT_PKCS11_TOKEN}")"
+  [ -n "${OPT_PKCS11_OBJECT}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};object=$(_rfc7512_pchar "${OPT_PKCS11_OBJECT}")"
+  [ -n "${OPT_PKCS11_ID}" ] && OPT_PKCS11_URI="${OPT_PKCS11_URI};id=$(_rfc7512_hexnum "${OPT_PKCS11_ID}")"
 fi
 
 # OpenSSL configuration quirks
@@ -470,9 +418,47 @@ function _file_crl() {
 case "${ARG_COMMAND}" in
 
   ########################################################################
-  # Certification authority (CA)
+  # Certification Authority (CA)
 
-  'help-ca')
+  'help-ca') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  Certification Authority (CA) management
+
+COMMANDS:
+
+  ${0##*/} make-ca [<options>]
+    Create the certificate authority (CA) self-signed certificate
+    (and initialize other required resources)
+
+  ${0##*/} show-ca
+    Show the CA certificate
+
+  ${0##*/} man-ca
+    Show OpenSSL ad-hoc manual page
+
+OPTIONS:
+
+  +name <common-name>
+    CA certificate distinguished name (DN) common name (CN)
+
+(special usage)
+
+  +id CA:EXTERNAL
+    Initialize this CA as an external CA
+    The CA private key is not available
+    Signed certificates can only imported (not issued)
+
+  +id CA:INTERMEDIATE
+    Initialize this CA as an intermediate, issuing CA
+    The CA private key (key.pem) and certificate (cert.pem) must already be
+    present in the CA sub-folder (${OPENSSL_DIR_CA})
+EOF
+    ;;
+
+
+  'man-ca')
     man openssl-ca || echo 'https://www.openssl.org/docs/man1.1.1/man1/ca.html'
     ;;
 
@@ -532,9 +518,48 @@ case "${ARG_COMMAND}" in
 
 
   ########################################################################
-  # Private key
+  # Private keys
 
-  'help-key')
+
+  'help-key') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  Private keys management
+
+COMMANDS:
+
+  ${0##*/} make-key [<options>]
+    Create a private key
+
+  ${0##*/} import-key [<options>] [-inform {PEM|DER}] [-in ...]
+    Import an existing private key (from stdin or specified file)
+
+  ${0##*/} show-key [<options>]
+    Show a private key
+
+  ${0##*/} man-key
+    Show OpenSSL ad-hoc manual page
+
+OPTIONS:
+
+  +id <ID>
+    Private key identifier
+
+(make-key)
+
+  +algorithm {rsa|dsa|ec}
+    Public cryptography algorithm (default: ${DFLT_ALGO_PKI})
+
+  +length <bits>
+    Key length, for RSA and DSA keys (default: ${DFLT_KEY_LENGTH})
+
+  +curve <curve-name>
+    Key curve, for EC keys (default: ${DFLT_KEY_CURVE})
+EOF
+    ;;
+
+  'man-key')
     man openssl-genpkey || echo 'https://www.openssl.org/docs/man1.1.1/man1/genpkey.html'
     ;;
 
@@ -618,9 +643,37 @@ case "${ARG_COMMAND}" in
 
 
   ########################################################################
-  # Public key
+  # Public keys
 
-  'help-pub')
+  'help-pub') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  Public keys management
+
+COMMANDS:
+
+  ${0##*/} make-pub [<options>]
+    Create a public key
+
+  ${0##*/} import-pub [<options>] [-inform {PEM|DER}] [-in ...]
+    Import an existing public key (from stdin or specified file)
+
+  ${0##*/} show-pub [<options>]
+    Show a public key
+
+  ${0##*/} man-pub
+    Show OpenSSL ad-hoc manual page
+
+OPTIONS:
+
+  +id <ID>
+    Public key identifier
+EOF
+    ;;
+
+
+  'man-pub')
     man openssl-pkey || echo 'https://www.openssl.org/docs/man1.1.1/man1/pkey.html'
     ;;
 
@@ -696,9 +749,54 @@ case "${ARG_COMMAND}" in
 
 
   ########################################################################
-  # Certificate signing request (CSR)
+  # Certificate Signing Requests (CSR)
 
-  'help-req')
+  'help-req') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  Certificate Signing Requests (CSR) management
+
+COMMANDS:
+
+  ${0##*/} make-req [<options>]
+    Create a certificate signing request
+
+  ${0##*/} import-req [<options>] [-inform {PEM|DER}] [-in ...]
+    Import an existing certificate signing request (from stdin or specified file)
+
+  ${0##*/} show-req [<options>]
+    Show a certificate signing request
+
+  ${0##*/} man-req
+    Show OpenSSL ad-hoc manual page
+
+OPTIONS:
+
+  +id <ID>
+    Certificate signing request identifier
+
+(make-req)
+
+  +name <common-name>
+    Certificate distinguished name (DN) common name (CN)
+
+  +email <email-address>
+    Certificate distinguished name (DN) e-mail address (emailAddress)
+
+  +title <title>
+    Certificate distinguished name (DN) title (title)
+
+  +unit <organizational-unit>
+    Certificate distinguished name (DN) organizational unit (OU)
+
+  +san-{dns,uri,ip,rid,dir,email,other} [+san-...]
+    Requested certificate Subject Alternative Name (SAN) extensions
+EOF
+    ;;
+
+
+  'man-req')
     man openssl-req || echo 'https://www.openssl.org/docs/man1.1.1/man1/req.html'
     ;;
 
@@ -780,7 +878,64 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # Certificates
 
-  'help-cert')
+  'help-cert') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  Signed certificates management
+
+COMMANDS:
+
+  ${0##*/} make-cert [<options>] [-selfsign]
+    Create a CA-signed (or self-signed) certificate
+
+  ${0##*/} import-cert [<options>] [-inform {PEM|DER}] [-in ...]
+    Import an existing certificate (from stdin or specified file)
+
+  ${0##*/} show-cert [<options>]
+    Show a certificate
+
+  ${0##*/} list-certs [<options>]
+    List CA-signed (only) certificates as TSV
+    (ID DATE SUBJECT SERIAL STATUS DATE FILE)
+
+  ${0##*/} revoke-cert [<options>] [-crl_reason ...]
+    Revoke a CA-signed certificate
+
+  ${0##*/} export-pkcs12 [<options>] [-out ...]
+    Export the private key and certificate as a PKCS#12 bundle
+
+  ${0##*/} verify-{crl,ocsp} [<options>]
+    Verify a CA-signed certificate validity via CRL/OCSP
+
+  ${0##*/} { man-cert | man-pkcs12 | man-verify | man-ocsp }
+    Show OpenSSL ad-hoc manual page
+
+OPTIONS:
+
+  +id <ID>
+    Certificate identifier
+
+(make-cert)
+
+  +san-{dns,uri,ip,rid,dir,email,other} [+san-...]
+    Certificate Subject Alternative Name (SAN) extensions
+
+(list-certs)
+
+  +valid
+    List valid certificates (the default)
+
+  +expired
+    List expired certificates
+
+  +revoked
+    List revoked certificates
+EOF
+    ;;
+
+
+  'man-cert')
     man openssl-ca || echo 'https://www.openssl.org/docs/man1.1.1/man1/ca.html'
     ;;
 
@@ -931,46 +1086,6 @@ case "${ARG_COMMAND}" in
     ;;
 
 
-  'list-certs')
-    # Input
-    [ ! -f "${OPENSSL_FILE_CA_DATABASE}" -o ! -r "${OPENSSL_FILE_CA_DATABASE}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificates database (${OPENSSL_FILE_CA_DATABASE})" >&2 && exit 1
-
-    # Output
-    [[ "${OPT_OPENSSL}" == *'-selfsign'* ]] && FILE_DATABASE="${OPENSSL_FILE_DATABASE}" || FILE_DATABASE="${OPENSSL_FILE_CA_DATABASE}"
-    [ -z "${OPT_DATE}" ] && OPT_DATE="${DFLT_DATE}"
-    [ -z "${OPT_LIST_VALID}" -a -z "${OPT_LIST_EXPIRED}" -a -z "${OPT_LIST_REVOKED}" ] && OPT_LIST_VALID='yes'
-    [ -n "${OPT_LIST_VALID}" ] && awk -F$'\t' "{if(\$1==\"V\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tVALID\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k2 -k1
-    [ -n "${OPT_LIST_EXPIRED}" ] && awk -F$'\t' "{if((\$1==\"V\"||\$1==\"E\") &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tEXPIRED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
-    [ -n "${OPT_LIST_REVOKED}" ] && awk -F$'\t' "{if(\$1==\"R\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\" && \"20\"\$3<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tREVOKED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$3,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
-    ;;
-
-
-  ########################################################################
-  # PKCS#12 (private key + certificate) bundle
-
-  'help-pkcs12')
-    man openssl-pkcs12 || echo 'https://www.openssl.org/docs/man1.1.1/man1/pkcs12.html'
-    ;;
-
-
-  'export-pkcs12')
-    # Input
-    FILE_KEY="$(_file_key)" || exit $?
-    [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
-    fgrep -q 'PRIVATE KEY' "${FILE_KEY}" || ( echo "ERROR[${ARG_COMMAND}]: Private key MUST be in PEM format (${FILE_KEY})" >&2 && exit 1 )
-    FILE_CERT="$(_file_cert)" || exit $?
-    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
-    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
-
-    # OpenSSL
-    [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "Private key password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
-    OPENSSL_CONF=/dev/null openssl pkcs12 -export -name "${OPT_ID}" -inkey "${FILE_KEY}" -passin env:OPENSSL_PASSWORD -in "${FILE_CERT}" ${OPT_OPENSSL}
-    ;;
-
-
-  ########################################################################
-  # Certificate revocation list (CRL)
-
   'revoke-cert')
     # Input
     if [ -n "${OPENSSL_INPUT}" ]; then
@@ -991,7 +1106,65 @@ case "${ARG_COMMAND}" in
     ;;
 
 
-  'help-crl')
+  'list-certs')
+    # Input
+    [ ! -f "${OPENSSL_FILE_CA_DATABASE}" -o ! -r "${OPENSSL_FILE_CA_DATABASE}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificates database (${OPENSSL_FILE_CA_DATABASE})" >&2 && exit 1
+
+    # Output
+    [[ "${OPT_OPENSSL}" == *'-selfsign'* ]] && FILE_DATABASE="${OPENSSL_FILE_DATABASE}" || FILE_DATABASE="${OPENSSL_FILE_CA_DATABASE}"
+    [ -z "${OPT_DATE}" ] && OPT_DATE="${DFLT_DATE}"
+    [ -z "${OPT_LIST_VALID}" -a -z "${OPT_LIST_EXPIRED}" -a -z "${OPT_LIST_REVOKED}" ] && OPT_LIST_VALID='yes'
+    [ -n "${OPT_LIST_VALID}" ] && awk -F$'\t' "{if(\$1==\"V\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tVALID\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k2 -k1
+    [ -n "${OPT_LIST_EXPIRED}" ] && awk -F$'\t' "{if((\$1==\"V\"||\$1==\"E\") &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tEXPIRED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
+    [ -n "${OPT_LIST_REVOKED}" ] && awk -F$'\t' "{if(\$1==\"R\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\" && \"20\"\$3<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tREVOKED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$3,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
+    ;;
+
+
+  ########################################################################
+  # PKCS#12 (private key + certificate) bundle
+
+  'man-pkcs12')
+    man openssl-pkcs12 || echo 'https://www.openssl.org/docs/man1.1.1/man1/pkcs12.html'
+    ;;
+
+
+  'export-pkcs12')
+    # Input
+    FILE_KEY="$(_file_key)" || exit $?
+    [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
+    fgrep -q 'PRIVATE KEY' "${FILE_KEY}" || ( echo "ERROR[${ARG_COMMAND}]: Private key MUST be in PEM format (${FILE_KEY})" >&2 && exit 1 )
+    FILE_CERT="$(_file_cert)" || exit $?
+    [ ! -f "${FILE_CERT}" -o ! -r "${FILE_CERT}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate (${FILE_CERT:-<no match>})" >&2 && exit 1
+    fgrep -q 'CERTIFICATE' "${FILE_CERT}" || ( echo "ERROR[${ARG_COMMAND}]: Certificate MUST be in PEM format (${FILE_CERT})" >&2 && exit 1 )
+
+    # OpenSSL
+    [ -z "${OPENSSL_PASSWORD}" ] && read -s -p "Private key password: " OPENSSL_PASSWORD && export OPENSSL_PASSWORD && echo
+    OPENSSL_CONF=/dev/null openssl pkcs12 -export -name "${OPT_ID}" -inkey "${FILE_KEY}" -passin env:OPENSSL_PASSWORD -in "${FILE_CERT}" ${OPT_OPENSSL}
+    ;;
+
+
+  ########################################################################
+  # Certificate Revocation List (CRL)
+
+  'help-crl') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  Certificate Revocation List (CRL) management
+
+COMMANDS:
+
+  ${0##*/} make-crl [<options>]
+    Create the CA-signed certificate revocation list
+    WARNING: The CRL number is increased each time a new CRL is created!
+
+  ${0##*/} show-crl
+    Show the certificate revocation list
+EOF
+    ;;
+
+
+  'man-crl')
     man openssl-crl || echo 'https://www.openssl.org/docs/man1.1.1/man1/crl.html'
     ;;
 
@@ -1032,7 +1205,7 @@ case "${ARG_COMMAND}" in
     ;;
 
 
-  'help-verify')
+  'man-verify')
     man openssl-verify || echo 'https://www.openssl.org/docs/man1.1.1/man1/verify.html'
     ;;
 
@@ -1055,7 +1228,7 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # OCSP
 
-  'help-ocsp')
+  'man-ocsp')
     man openssl-ocsp || echo 'https://www.openssl.org/docs/man1.1.1/man1/ocsp.html'
     ;;
 
@@ -1078,19 +1251,59 @@ case "${ARG_COMMAND}" in
 
 
   ########################################################################
-  # PKCS#11 Goodies
+  # PKCS#11 integration (private key)
 
   # NOTE: Those are only read-only primitives. Writing to PKCS#11 tokens
   #       is much better and safer done by using the token ad-hoc
   #       utilities; e.g. pkcs15-tool, yubico-piv-tool, etc.
 
-  'help-pkcs11')
+  'help-pkcs11') cat >&2 << EOF
+USAGE: ${0##*/} <command> [options]
+
+SYNOPSIS:
+  PKCS#11 integration (private key)
+
+COMMANDS:
+
+  ${0##*/} pkcs11-key [<options>]
+    Retrieve a private key from a PKCS#11 token
+    WARNING: Most PKCS#11 tokens will not let you retrieve a private key (by design)!
+
+  ${0##*/} pkcs11-pub [<options>]
+    Retrieve a public key from a PKCS#11 token
+
+  ${0##*/} pkcs11-cert [<options>]
+    Retrieve a certificate from a PKCS#11 token
+
+  ${0##*/} pkcs11-test
+    Test a PKCS#11 token
+
+  ${0##*/} pkcs11-uri [<options>]
+    Display a PKCS#11 token/object URI (RFC 7512)
+
+  ${0##*/} man-pkcs11
+    Show PKCS#11 ad-hoc manual page
+
+OPTIONS:
+
+  +pkcs11-token <label>
+    PKCS#11 token label (as per 'pkcs11-tool --list-token-slots')
+
+  +pkcs11-object <label>
+    PKCS#11 object label (as per 'pkcs11-tool --list-objects')
+
+  +pkcs11-id <id>
+    PKCS#11 object ID (as per 'pkcs11-tool --list-objects')
+EOF
+    ;;
+
+
+  'man-pkcs11')
     man pkcs11-tool
     ;;
 
 
   'pkcs11-key')
-    # WARNING: Most PKCS#11 token will not let you retrieve the private key (by design)!
     pkcs11-tool \
       ${OPT_PKCS11_TOKEN:+--token-label "${OPT_PKCS11_TOKEN}"} \
       ${OPT_PKCS11_OBJECT:+--label "${OPT_PKCS11_OBJECT}"} \
@@ -1126,6 +1339,11 @@ case "${ARG_COMMAND}" in
       ${OPT_PKCS11_OBJECT:+--label "${OPT_PKCS11_OBJECT}"} \
       ${OPT_PKCS11_ID:+--id "${OPT_PKCS11_ID}"} \
       --test --login
+    ;;
+
+
+  'pkcs11-uri')
+    echo "${OPT_PKCS11_URI}"
     ;;
 
 
