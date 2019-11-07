@@ -4,7 +4,7 @@ shopt -s extglob
 
 
 ## Version
-VERSION='1.0.20191103a'
+VERSION='1.0.20191107a'
 [ "${1##*-}" == 'version' ] && echo "${VERSION}" && exit 0
 
 
@@ -190,13 +190,20 @@ OPT_OPENSSL=
 while [ -n "${1}" ]; do
   case "${1}" in
 
-    '+id'|'+date'|'+algorithm'|'+length'|'+curve'|'+pkcs11-token'|'+pkcs11-object'|'+pkcs11-id'|'+name'|'+email'|'+unit'|'+title'|'+san-'*)
+    '+id'|'+date')
       [ -z "${2}" ] && echo "ERROR: Missing option argument ($1)" >&2 && exit 1
       OPTS[${#OPTS[*]}]="${1}"
       OPTS[${#OPTS[*]}]="${2}"
       case "${1}" in
         '+id') OPT_ID="${2}";;
         '+date') OPT_DATE="${2}";;
+      esac
+      shift
+      ;;
+
+    '+algorithm'|'+length'|'+curve'|'+pkcs11-token'|'+pkcs11-object'|'+pkcs11-id'|'+name'|'+email'|'+unit'|'+title'|'+san-'*)
+      [ -z "${2}" ] && echo "ERROR: Missing option argument ($1)" >&2 && exit 1
+      case "${1}" in
         '+algorithm') OPT_ALGO_PKI="${2,,}";;
         '+length') OPT_KEY_LENGTH="${2}";;
         '+curve') OPT_KEY_CURVE="${2}";;
@@ -1346,6 +1353,9 @@ EOF
     echo "${OPT_PKCS11_URI}"
     ;;
 
+
+  ########################################################################
+  # (nope...)
 
   *)
     echo "ERROR[${ARG_COMMAND}]: Invalid command" >&2 && exit 1
