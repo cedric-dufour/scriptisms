@@ -108,6 +108,10 @@ xps13-9380-control
 ------------------
 A helper script to control some of the Dell XPS 13 (9380) elements.
 
+yubikey-piv-easy
+----------------
+Yubico's YubiKey PIV made easy
+
 zfs [directory]
 ---------------
 A bunch of scripts to go along ZFS on Linux
