@@ -4,7 +4,7 @@ shopt -s extglob
 
 
 ## Version
-VERSION='1.0.20191107a'
+VERSION='1.0.20191108a'
 [ "${1##*-}" == 'version' ] && echo "${VERSION}" && exit 0
 
 
@@ -703,8 +703,10 @@ EOF
       else
         FILE_KEY="$(_file_key)" || exit $?
       fi
-      if [ -z "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
+      if [ -z "${FILE_KEY}" ]; then
         FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+      fi
+      if [ ! -e "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
         OPENSSL_OUTPUT="${FILE_KEY}" "${0}" make-key "${OPTS[@]}" || exit $?
       fi
       [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
@@ -830,8 +832,10 @@ EOF
       else
         FILE_KEY="$(_file_key)" || exit $?
       fi
-      if [ -z "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
+      if [ -z "${FILE_KEY}" ]; then
         FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+      fi
+      if [ ! -e "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
         OPENSSL_OUTPUT="${FILE_KEY}" "${0}" make-key "${OPTS[@]}" || exit $?
       fi
       [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
@@ -969,8 +973,10 @@ EOF
         else
           FILE_KEY="$(_file_key)" || exit $?
         fi
-        if [ -z "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
+        if [ -z "${FILE_KEY}" ]; then
           FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
+        fi
+        if [ ! -e "${FILE_KEY}" -a -n "${OPT_AUTO}" ]; then
           OPENSSL_OUTPUT="${FILE_KEY}" "${0}" make-key "${OPTS[@]}" || exit $?
         fi
         [ ! -f "${FILE_KEY}" -o ! -r "${FILE_KEY}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable private key (${FILE_KEY:-<no match>})" >&2 && exit 1
@@ -1007,8 +1013,10 @@ EOF
       else
         FILE_REQ="$(_file_req)" || exit $?
       fi
-      if [ -z "${FILE_REQ}" -a -n "${OPT_AUTO}" ]; then
+      if [ -z "${FILE_REQ}" ]; then
         FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${DFLT_DATE}.pem"
+      fi
+      if [ ! -e "${FILE_REQ}" -a -n "${OPT_AUTO}" ]; then
         OPENSSL_OUTPUT="${FILE_REQ}" "${0}" make-req "${OPTS[@]}" || exit $?
       fi
       [ ! -f "${FILE_REQ}" -o ! -r "${FILE_REQ}" ] && echo "ERROR[${ARG_COMMAND}]: Invalid/unreadable certificate signing request (${FILE_REQ:-<no match>})" >&2 && exit 1
