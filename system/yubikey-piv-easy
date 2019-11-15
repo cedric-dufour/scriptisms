@@ -1,10 +1,24 @@
 #!/bin/bash
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/yubikey-piv-easy
+SCRIPT="${0##*/}"
+VERSION='1.0.20191115a'
+[ "${1##*-}" == 'version' ] && echo "${SCRIPT} ${VERSION}" && exit 0
 shopt -s nocasematch
 
 
-## Version
-VERSION='1.0.20191114a'
-[ "${1##*-}" == 'version' ] && echo "${VERSION}" && exit 0
+## Helpers
+function _INFO {
+  [ -n "${OPT_VERBOSE}" ] && echo "INFO[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}"
+}
+function _NOTICE {
+  echo "NOTICE[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}"
+}
+function _WARNING {
+  echo "WARNING[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+}
+function _ERROR {
+  echo "ERROR[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+}
 
 
 ## Defaults
@@ -22,9 +36,9 @@ if [ ${BASH_LINENO[0]} -ne 0 ]; then
     'set-mgmt-key')
       read -s -p "Management key: " p1 && echo
       read -s -p "Management key (confirm): " p2 && echo
-      [ "${p1}" != "${p2}" ] && echo 'ERROR: Key/confirmation mismatch' >&2 && return 1
+      [ "${p1}" != "${p2}" ] && _ERROR 'Key/confirmation mismatch' && return 1
       export YUBIKEY_PIV_MGMT_KEY="${p1}"
-      echo 'INFO: Management key successfully set (YUBIKEY_PIV_MGMT_KEY)'
+      _INFO 'Management key successfully set (YUBIKEY_PIV_MGMT_KEY)'
       unset p1 p2
       ;;
   esac
@@ -35,7 +49,7 @@ fi
 ## Usage
 function _help {
 cat >&2 << EOF
-USAGE: ${0##*/} <command> [options]
+USAGE: ${SCRIPT} <command> [options]
 
 SYNOPSIS:
   An easy wrapper for everyday-use of Yubico's YubiKey PIV
@@ -43,19 +57,19 @@ SYNOPSIS:
 COMMANDS:
 
   YubiKey PIV initialization
-    -> ${0##*/} help-init
+    -> ${SCRIPT} help-init
 
   Private keys management
-    -> ${0##*/} help-key
+    -> ${SCRIPT} help-key
 
   Certificates management
-    -> ${0##*/} help-cert
+    -> ${SCRIPT} help-cert
 
   YubiKey variables dump
-    -> ${0##*/} help-vars
+    -> ${SCRIPT} help-vars
 
   Prompt for and store the YubiKey PIV management key
-    -> source ${0##*/} set-mgmt-key
+    -> source ${SCRIPT} set-mgmt-key
 
 GLOBAL OPTIONS:
 
@@ -73,14 +87,7 @@ EOF
 }
 [ $# -lt 1 -o "${1##*-}" == 'help' ] && _help && exit 1
 
-
-## Environment
-
-# Checks
-[ -z  "$(which yubico-piv-tool)" ] && echo "ERROR: Missing YubiKey PIV utility (yubico-piv-tool)" >&2  && exit 1
-
-
-## Arguments
+# Arguments
 ARG_COMMAND=
 ARG_1=
 OPT_SLOT="${DFLT_SLOT}"
@@ -90,7 +97,7 @@ while [ -n "${1}" ]; do
   case "${1}" in
 
     '+slot')
-      [ -z "${2}" ] && echo "ERROR: Missing option argument ($1)" >&2 && exit 1
+      [ -z "${2}" ] && _ERROR "Missing option argument ($1)" && exit 1
       case "${1}" in
         '+slot') OPT_SLOT="${2}";;
       esac
@@ -104,7 +111,7 @@ while [ -n "${1}" ]; do
       ;;
 
     +*)
-      echo "ERROR: Invalid option (${1})" >&2 && exit 1
+      _ERROR "Invalid option (${1})" && exit 1
       ;;
 
     -*)
@@ -122,7 +129,7 @@ while [ -n "${1}" ]; do
       elif [ -z "${ARG_1}" ]; then
         ARG_1="${1}"
       else
-        echo "ERROR: Too many arguments (${1})" >&2 && exit 1
+        _ERROR "Too many arguments (${1})" && exit 1
       fi
       ;;
 
@@ -133,7 +140,13 @@ export YUBIKEY_PIV_SLOT="${OPT_SLOT}"
 export YUBIKEY_PIV_VERBOSE="${OPT_VERBOSE}"
 
 
-## Helpers
+## Environment
+
+# Checks
+[ -z  "$(which yubico-piv-tool)" ] && _ERROR "Missing YubiKey PIV utility (yubico-piv-tool)"  && exit 1
+
+
+## Helpers (cont'd)
 
 # YubiKey
 function _YKINFO_vars() {
@@ -152,34 +165,34 @@ case "${ARG_COMMAND}" in
   ########################################################################
   # Initialization
 
-  'help-init') cat >&2 << EOF
-USAGE: ${0##*/} <command> [options]
+  'help-init') cat << EOF
+USAGE: ${SCRIPT} <command> [options]
 
 SYNOPSIS:
   YubiKey PIV initialization
 
 COMMANDS:
 
-  ${0##*/} init-key
+  ${SCRIPT} init-key
     Initialize the YubiKey PIV
     Always safe (all actions are idempotent)
 
-  ${0##*/} init-puk-pin
+  ${SCRIPT} init-puk-pin
     Set the YubiKey PIV PUK and PIN codes
     WARNING! Make sure to store the PUK and PIN codes in a safe place!
 
-  ${0##*/} init-lock
+  ${SCRIPT} init-lock
     Lock the YubiKey PIV (set the management key)
     WARNING! Make sure to store the management key in a safe place!
 
-  ${0##*/} init-unlock
+  ${SCRIPT} init-unlock
     Unlock the YubiKey PIV (reset the management key to its default value)
 
-  ${0##*/} init-reset
+  ${SCRIPT} init-reset
     Factory-reset the YubiKey PIV
     DANGEROUS!!! THE PIV DATA WILL BE IRREVOCABLY WIPED!!!
 
-  ${0##*/} init-man
+  ${SCRIPT} init-man
     Show YubiKey PIV utility manual page
 
 EOF
@@ -193,22 +206,22 @@ EOF
 
   'init-key')
     # Checks
-    [ -z  "$(which ykinfo)" ] && echo "ERROR[${ARG_COMMAND}]: Missing YubiKey information utility (ykinfo)" >&2  && exit 1
-    [ -z  "$(which ykpersonalize)" ] && echo "ERROR[${ARG_COMMAND}]: Missing YubiKey personalization utility (ykpersonalize)" >&2  && exit 1
+    [ -z  "$(which ykinfo)" ] && _ERROR "Missing YubiKey information utility (ykinfo)"  && exit 1
+    [ -z  "$(which ykpersonalize)" ] && _ERROR "Missing YubiKey personalization utility (ykpersonalize)"  && exit 1
 
     # Dump the key information
     eval $(_YKINFO_vars) || exit 1
-    [ "${YKINFO_vendor_id}" != '1050' ] && echo "ERROR[${ARG_COMMAND}]: Invalid/missing YubiKey vendor ID (${YKINFO_vendor_id})" >&2  && exit 1
-    [ -z "${YKINFO_serial}" ] && echo "ERROR[${ARG_COMMAND}]: Missing YubiKey serial number" >&2  && exit 1
+    [ "${YKINFO_vendor_id}" != '1050' ] && _ERROR "Invalid/missing YubiKey vendor ID (${YKINFO_vendor_id})"  && exit 1
+    [ -z "${YKINFO_serial}" ] && _ERROR "Missing YubiKey serial number"  && exit 1
 
     # Dump the key status
     eval $(_YKPIV_vars) || exit 1
-    [ "${YKPIV_Serial_Number}" != "${YKINFO_serial}" ] && echo "ERROR[${ARG_COMMAND}]: Mismatched YubiKey serial number (${YKINFO_serial} <-> ${YKPIV_Serial_Number})" >&2  && exit 1
+    [ "${YKPIV_Serial_Number}" != "${YKINFO_serial}" ] && _ERROR "Mismatched YubiKey serial number (${YKINFO_serial} <-> ${YKPIV_Serial_Number})"  && exit 1
 
     # Swap slot 1 <-> 2 (enforce two-second delay for on-touch OTP generation)
     if [ "${YKINFO_slot1_status}" == '1' ]; then
       ykpersonalize -x || exit 1
-      echo "INFO[${ARG_COMMAND}]: Successfully swapped the YubiKey slots 1 and 2"
+      _INFO "Successfully swapped the YubiKey slots 1 and 2"
     fi
     [ -n "${OPT_VERBOSE}" ] && echo 'YubiKey Slot Status:' && ykinfo -1 -2
 
@@ -218,7 +231,7 @@ EOF
         ${YUBIKEY_PIV_MGMT_KEY:+--key="${YUBIKEY_PIV_MGMT_KEY}"} \
         --action=set-chuid \
       || exit 1
-      echo "INFO[${ARG_COMMAND}]: Successfully the YubiKey PIV CHUID"
+      _INFO "Successfully the YubiKey PIV CHUID"
     fi
     [ -n "${OPT_VERBOSE}" ] && yubico-piv-tool -a status | grep -i '^CHUID:'
 
@@ -228,7 +241,7 @@ EOF
         ${YUBIKEY_PIV_MGMT_KEY:+--key=${YUBIKEY_PIV_MGMT_KEY}} \
         --action=set-ccc \
       || exit 1
-      echo "INFO[${ARG_COMMAND}]: Successfully the YubiKey PIV CCC"
+      _INFO "Successfully the YubiKey PIV CCC"
     fi
     [ -n "${OPT_VERBOSE}" ] && yubico-piv-tool -a status | grep -i '^CCC:'
     ;;
@@ -258,7 +271,7 @@ EOF
       --pin-retries=${YUBIKEY_PIV_PIN_RETRIES} \
       --puk-retries=${YUBIKEY_PIV_PUK_RETRIES} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully set the PIN/PUK retries limit (3/5)"
+    _INFO "Successfully set the PIN/PUK retries limit (3/5)"
 
     # ... PUK (first, or it is definitely locked)
     yubico-piv-tool \
@@ -266,7 +279,7 @@ EOF
       --pin=12345678 \
       --new-pin=${PUK} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully set the PUK code (${PUK})"
+    _NOTICE "Successfully set the PUK code (${PUK})"
 
     # ... PIN
     yubico-piv-tool \
@@ -274,7 +287,7 @@ EOF
       --pin=123456 \
       --new-pin=${PIN} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully set the PIN code (${PIN})"
+    _NOTICE "Successfully set the PIN code (${PIN})"
     ;;
 
 
@@ -288,7 +301,7 @@ EOF
       --action=set-mgm-key \
       --new-key=${KEY} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully set the management key (${KEY})"
+    _NOTICE "Successfully set the management key (${KEY})"
     ;;
 
 
@@ -299,7 +312,7 @@ EOF
       --action=set-mgm-key \
       --new-key=010203040506070801020304050607080102030405060708 \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully reset the management key to its default value"
+    _INFO "Successfully reset the management key to its default value"
     ;;
 
 
@@ -308,14 +321,14 @@ EOF
 
     # ... block PIN
     i=10; while true; do
-      let i=i-1; [ ${i} == 0 ] && echo "INFO[${ARG_COMMAND}]: Failed to block the PIN" && exit 1
+      let i=i-1; [ ${i} == 0 ] && _ERROR "Failed to block the PIN" && exit 1
       yubico-piv-tool --action=verify-pin --pin=0 2>&1 | grep -qiE 'PIN code( is)? blocked'
       [ $? -eq 0 ] && break
     done
 
     # ... block PUK
     i=10; while true; do
-      let i=i-1; [ ${i} == 0 ] && echo "INFO[${ARG_COMMAND}]: Failed to block the PUK" && exit 1
+      let i=i-1; [ ${i} == 0 ] && _ERROR "Failed to block the PUK" && exit 1
       yubico-piv-tool --action=unblock-pin --pin=0 --new-pin=999999 2>&1 | grep -qiE 'PUK code( is)? blocked'
       [ $? -eq 0 ] && break
     done
@@ -324,26 +337,26 @@ EOF
     yubico-piv-tool \
       --action=reset \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully reset the YubiKey PIV"
+    _INFO "Successfully reset the YubiKey PIV"
     ;;
 
 
   ########################################################################
   # Private keys
 
-  'help-key') cat >&2 << EOF
-USAGE: ${0##*/} <command> [options]
+  'help-key') cat << EOF
+USAGE: ${SCRIPT} <command> [options]
 
 SYNOPSIS:
   Private keys management
 
 COMMANDS:
 
-  ${0##*/} make-key [--output=...]
+  ${SCRIPT} make-key [--output=...]
     Create a private key and ouput the corresponding public key
     (to stdout or specified file)
 
-  ${0##*/} import-key [--input=...]
+  ${SCRIPT} import-key [--input=...]
     Import an existing private key (from stdin or specified file)
 
 (make-key)
@@ -366,7 +379,7 @@ EOF
       --action=generate \
       ${OPT_YUBIKEY_PIV} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully generated a new private+public key"
+    _INFO "Successfully generated a new private+public key"
     ;;
 
 
@@ -378,25 +391,25 @@ EOF
       --action=import-key \
       ${OPT_YUBIKEY_PIV} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully imported private key"
+    _INFO "Successfully imported private key"
     ;;
 
 
   ########################################################################
   # Certificate
 
-  'help-cert') cat >&2 << EOF
-USAGE: ${0##*/} <command> [options]
+  'help-cert') cat << EOF
+USAGE: ${SCRIPT} <command> [options]
 
 SYNOPSIS:
   Certificates management
 
 COMMANDS:
 
-  ${0##*/} import-cert [--input=...]
+  ${SCRIPT} import-cert [--input=...]
     Import an existing certificate (from stdin or specified file)
 
-  ${0##*/} show-cert
+  ${SCRIPT} show-cert
     Show the stored certificate
 
 EOF
@@ -411,7 +424,7 @@ EOF
       --action=import-certificate \
       ${OPT_YUBIKEY_PIV} \
     || exit 1
-    echo "INFO[${ARG_COMMAND}]: Successfully imported certificate"
+    _INFO "Successfully imported certificate"
     ;;
 
 
@@ -428,18 +441,18 @@ EOF
   ########################################################################
   # Variables
 
-  'help-vars') cat >&2 << EOF
-USAGE: ${0##*/} <command> [options]
+  'help-vars') cat << EOF
+USAGE: ${SCRIPT} <command> [options]
 
 SYNOPSIS:
   YubiKey variables dump
 
 COMMANDS:
 
-  ${0##*/} vars-info
+  ${SCRIPT} vars-info
     YubiKey information variables
 
-  ${0##*/} vars-piv
+  ${SCRIPT} vars-piv
     YubiKey PIV status variables
 
 EOF
@@ -460,7 +473,7 @@ EOF
   # (nope...)
 
   *)
-    echo "ERROR[${ARG_COMMAND}]: Invalid command" >&2 && exit 1
+    _ERROR "Invalid command" && exit 1
 
 esac
 
