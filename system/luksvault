@@ -1,0 +1,296 @@
+#!/bin/bash
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/luksvault
+SCRIPT="${0##*/}"
+VERSION='1.0.20191115a'
+
+
+## Helpers
+function _INFO {
+  [ -n "${OPT_VERBOSE}" ] && echo "INFO[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}"
+}
+function _WARNING {
+  echo "WARNING[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+}
+function _ERROR {
+  echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+}
+
+
+## Usage
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat >&2 << EOF && exit 1
+USAGE: ${SCRIPT} [<options>] {create|fsck|start|stop}
+
+SYNOPSIS:
+  Create, open (start) or close (stop) a file-based LUKS encrypted partition.
+
+OPTIONS:
+
+  -I, --image <path>
+    LUKS image file (default: /var/lib/vault/<UID>)
+
+  -K, --key-file <path>
+    LUKS key file (default: user is prompted for key)
+
+  -M, --mountpoint <path>
+    LUKS partition mountpoint (default: /tmp/vault/<UID>)
+
+  -U, --uid <UID>
+    User UID (default: root)
+
+  -S, --size <size> [MiB]
+    LUKS partition creation size (default: 50)
+    WARNING: The actual image file size will be 10MiB larger to accomodate
+    LUKS2 metadata and keyslots
+
+EOF
+
+# Arguments
+OPTS=()
+OPT_IMAGE=
+OPT_KEYFILE=
+OPT_MOUNTPOINT=
+OPT_UID='root'
+OPT_SIZE='50'
+#OPT_VERBOSE=  # let it be passed by the environment
+ARG_ACTION=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-I'|'--image')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_IMAGE="${2}";
+      OPTS[${#OPTS[*]}]="${1}"; OPTS[${#OPTS[*]}]="${2}"; shift
+      ;;
+    '-K'|'--keyfile')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_KEYFILE="${2}"
+      OPTS[${#OPTS[*]}]="${1}"; OPTS[${#OPTS[*]}]="${2}"; shift
+      ;;
+    '-M'|'--mountpoint')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_MOUNTPOINT="${2}"
+      OPTS[${#OPTS[*]}]="${1}"; OPTS[${#OPTS[*]}]="${2}"; shift
+      ;;
+    '-U'|'--uid')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_UID="${2}"
+      OPTS[${#OPTS[*]}]="${1}"; OPTS[${#OPTS[*]}]="${2}"; shift
+      ;;
+    '-S'|'--size')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_SIZE="${2}"
+      shift
+      ;;
+    '--verbose')
+      OPT_VERBOSE='yes'
+      OPTS[${#OPTS[*]}]="${1}"
+      ;;
+    '--version')
+      echo "${SCRIPT} ${VERSION}" && exit 0
+      ;;
+    -*)
+      _ERROR "Invalid option (${1})" && exit 1
+      ;;
+    *)
+      if [ -z "${ARG_ACTION}" ]; then
+        ARG_ACTION="${1}"
+      else
+        _ERROR "Too many arguments (${1})" && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+[ -z "${ARG_ACTION}" ] && ARG_ACTION='start'
+[ -z "${OPT_IMAGE}" ] && OPT_IMAGE="/var/lib/vault/${OPT_UID}"
+[ -z "${OPT_MOUNTPOINT}" ] && OPT_MOUNTPOINT="/tmp/vault/${OPT_UID}"
+
+## Check
+[ "$(id -u)" != '0' ] && _ERROR "This utility must be run as root (sudo)" && exit 1
+[ -z "$(which cryptsetup)" ] && _ERROR "Missing the 'cryptsetup' utility (apt-get install cryptsetup-bin)" && exit 1
+
+
+## Vault
+DEV_MAPPER="luksvault.${OPT_UID}"
+case "${ARG_ACTION}" in
+
+  'create')
+    # Check image file
+    [ -e "${OPT_IMAGE}" ] && _ERROR "LUKS image file already exists (${OPT_IMAGE})" 1>&2 && exit 1
+
+    # Check/create mountpoint
+    umask 022
+    [ ! -d "${OPT_MOUNTPOINT}" ] && _INFO "Creating the mountpoint (${OPT_MOUNTPOINT})" && mkdir -p "${OPT_MOUNTPOINT}"
+    [ ! -d "${OPT_MOUNTPOINT}" ] && _ERROR "Failed to create mountpoint (${OPT_MOUNTPOINT})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+    umask 077
+
+    # Create image file
+    trap "rm -f '${OPT_IMAGE}'" EXIT
+    _INFO "Initializing LUKS image file with random data (${OPT_IMAGE}: ${OPT_SIZE}MiB)"
+    dd status=progress if=/dev/urandom of="${OPT_IMAGE}" bs=1M count=$(( ${OPT_SIZE} + 10 ))  # Add 10MiB <-> LUKS2 metadata/keyslots
+    [ $? -ne 0 ] && _ERROR "Failed to initialize LUKS image file (${OPT_IMAGE})" 1>&2 && exit 1
+
+    # Find free loop device
+    DEV_LOOP="$(losetup -f)"
+
+    # Mount LUKS image
+    _INFO "Mounting the LUKS image (${OPT_IMAGE})"
+    losetup "${DEV_LOOP}" "${OPT_IMAGE}"
+    [ $? -ne 0 ] && _ERROR "Failed to mount LUKS image (${OPT_IMAGE} -> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+    echo "${DEV_LOOP}" > "${OPT_IMAGE}.loop"
+
+    # Format LUKS device
+    _INFO "Formatting the LUKS image (${OPT_IMAGE})"
+    if [ -n "${OPT_KEYFILE}" ]; then
+      cryptsetup luksFormat --type luks2 --batch-mode --luks2-keyslots-size 8M --pbkdf argon2id --key-file "${OPT_KEYFILE}" "${DEV_LOOP}"
+    else
+      cryptsetup luksFormat --type luks2 --batch-mode --luks2-keyslots-size 8M --pbkdf argon2id --verify-passphrase "${DEV_LOOP}"
+    fi
+    [ $? -ne 0 ] && _ERROR "Failed to format LUKS device (${OPT_IMAGE} <-> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+
+    # Open LUKS device
+    _INFO "Opening the LUKS device (${OPT_IMAGE})"
+    cryptsetup luksOpen ${OPT_KEYFILE:+--key-file "${OPT_KEYFILE}"} "${DEV_LOOP}" "${DEV_MAPPER}"
+    [ $? -ne 0 ] && _ERROR "Failed to open LUKS device (${OPT_IMAGE} <-> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+
+    # Create filesystem
+    _INFO "Creating the filesystem (${OPT_IMAGE})"
+    mke2fs -t ext4 -L "luksvault.${OPT_UID}" -m 0 "/dev/mapper/${DEV_MAPPER}"
+    [ $? -ne 0 ] && _ERROR "Failed to create filesystem (${OPT_IMAGE} <-> /dev/mapper/${DEV_MAPPER})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+
+    # Mount filesystem
+    _INFO "Mounting and initializing the filesystem (${OPT_IMAGE} -> ${OPT_MOUNTPOINT})"
+    mount "/dev/mapper/${DEV_MAPPER}" "${OPT_MOUNTPOINT}"
+    [ $? -ne 0 ] && _ERROR "Failed to mount filesystem (${OPT_IMAGE} -> ${OPT_MOUNTPOINT})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+    chmod 700 "${OPT_MOUNTPOINT}"
+    chown ${OPT_UID}:nogroup "${OPT_MOUNTPOINT}"
+
+    # Done
+    trap - EXIT
+    _INFO "LUKS vault created (${OPT_IMAGE})"
+    cryptsetup luksDump "${DEV_LOOP}"
+    "${0}" "${OPTS[@]}" stop
+    ;;
+
+  'fsck')
+    # Check mountpoint
+    mountpoint -q "${OPT_MOUNTPOINT}" && _ERROR "LUKS vault is started (${OPT_MOUNTPOINT})" && exit 1
+
+    # Check image file
+    [ ! -e "${OPT_IMAGE}" ] && _ERROR "Invalid/missing LUKS image file (${OPT_IMAGE})" 1>&2 && exit 1
+
+    # Find free loop device
+    DEV_LOOP="$(losetup -f)"
+
+    # Mount LUKS image
+    _INFO "Mounting the LUKS image (${OPT_IMAGE})"
+    losetup "${DEV_LOOP}" "${OPT_IMAGE}"
+    [ $? -ne 0 ] && _ERROR "Failed to mount LUKS image (${OPT_IMAGE} -> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+    echo "${DEV_LOOP}" > "${OPT_IMAGE}.loop"
+
+    # Open LUKS device
+    _INFO "Opening the LUKS device (${OPT_IMAGE})"
+    cryptsetup luksOpen ${OPT_KEYFILE:+--key-file "${OPT_KEYFILE}"} "${DEV_LOOP}" "${DEV_MAPPER}"
+    [ $? -ne 0 ] && _ERROR "Failed to open LUKS device (${OPT_IMAGE} <-> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+
+    # Filesystem check
+    _INFO "Checking the filesystem (${OPT_IMAGE})"
+    e2fsck -f "/dev/mapper/${DEV_MAPPER}"
+
+    # Done
+    "${0}" "${OPTS[@]}" stop
+    ;;
+
+  'start')
+    # Check/create mountpoint
+    mountpoint -q "${OPT_MOUNTPOINT}" && _WARNING "LUKS vault is already started (${OPT_MOUNTPOINT})" && exit 0
+    umask 022
+    [ ! -d "${OPT_MOUNTPOINT}" ] && _INFO "Creating the mountpoint (${OPT_MOUNTPOINT})" && mkdir -p "${OPT_MOUNTPOINT}"
+    [ ! -d "${OPT_MOUNTPOINT}" ] && _ERROR "Failed to create mountpoint (${OPT_MOUNTPOINT})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+    umask 077
+
+    # Check image file
+    [ ! -e "${OPT_IMAGE}" ] && _ERROR "Invalid/missing LUKS image file (${OPT_IMAGE})" 1>&2 && exit 1
+
+    # Check we're not already started
+    [ -n "$(losetup -a | fgrep "${OPT_IMAGE}" | cut -d':' -f1 | tail -n 1)" ] && _ERROR "LUKS image already mounted" && exit 1
+
+    # Find free loop device
+    DEV_LOOP="$(losetup -f)"
+
+    # Mount LUKS image
+    _INFO "Mounting the LUKS image (${OPT_IMAGE})"
+    losetup "${DEV_LOOP}" "${OPT_IMAGE}"
+    [ $? -ne 0 ] && _ERROR "Failed to mount LUKS image (${OPT_IMAGE} -> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+    echo "${DEV_LOOP}" > "${OPT_IMAGE}.loop"
+
+    # Open LUKS device
+    _INFO "Opening the LUKS device (${OPT_IMAGE})"
+    cryptsetup luksOpen ${OPT_KEYFILE:+--key-file "${OPT_KEYFILE}"} "${DEV_LOOP}" "${DEV_MAPPER}"
+    [ $? -ne 0 ] && _ERROR "Failed to open LUKS device (${OPT_IMAGE} <-> ${DEV_LOOP})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+
+    # Mount filesystem
+    _INFO "Mounting the filesystem (${OPT_IMAGE} -> ${OPT_MOUNTPOINT})"
+    mount "/dev/mapper/${DEV_MAPPER}" "${OPT_MOUNTPOINT}"
+    [ $? -ne 0 ] && _ERROR "Failed to mount filesystem (${OPT_IMAGE} on ${OPT_MOUNTPOINT})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
+
+    # Done
+    _INFO "LUKS vault ready to use (${OPT_IMAGE} on ${OPT_MOUNTPOINT})"
+    ;;
+
+  'stop')
+    w=0
+
+    # Unmount filesystem
+    if mountpoint -q "${OPT_MOUNTPOINT}"; then
+      _INFO "Unmounting the filesystem (${OPT_MOUNTPOINT})"
+      umount "${OPT_MOUNTPOINT}"
+      [ $? -ne 0 ] && _WARNING "Failed to unmount the filesystem (${OPT_MOUNTPOINT})" && w=1
+    fi
+
+    # Remove mountpoint
+    if [ -e "${OPT_MOUNTPOINT}" ]; then
+      _INFO "Removing the mountpoint (${OPT_MOUNTPOINT})"
+      rmdir "${OPT_MOUNTPOINT}"
+      [ $? -ne 0 ] && _WARNING "Failed to remote the mountpoint (${OPT_MOUNTPOINT})" && w=1
+    fi
+
+    # Close encrypted LUKS filesystem
+    if [ -e "/dev/mapper/${DEV_MAPPER}" ]; then
+      _INFO "Closing the LUKS device (${OPT_IMAGE})"
+      cryptsetup luksClose "${DEV_MAPPER}"
+      [ $? -ne 0 ] && _WARNING "Failed to close the LUKS device (${DEV_MAPPER})" && w=1
+      sleep 1
+    fi
+
+    # Unmount LUKS image
+    DEV_LOOP_FILE="${OPT_IMAGE}.loop"
+    if [ -e "${DEV_LOOP_FILE}" ]; then
+      DEV_LOOP="$(cat "${DEV_LOOP_FILE}")"
+      rm -f "${DEV_LOOP_FILE}"
+    else
+      DEV_LOOP="$(losetup -a | fgrep "${OPT_IMAGE}" | cut -d':' -f1 | tail -n 1)"
+    fi
+    if [ -n "${DEV_LOOP}" ]; then
+      _INFO "Unmounting the LUKS image (${OPT_IMAGE})"
+      losetup -d "${DEV_LOOP}"
+      [ $? -ne 0 ] && _WARNING "Failed to unmount the LUKS image (${OPT_IMAGE} <-> ${DEV_LOOP})" && w=1
+    fi
+
+    # Done
+    if [ ${w} -ne 0 ]; then
+      _WARNING "Failed to stop LUKS vault properly (${OPT_IMAGE} on ${OPT_MOUNTPOINT})"
+    else
+      _INFO "LUKS vault stopped (${OPT_IMAGE} on ${OPT_MOUNTPOINT})"
+    fi
+    ;;
+
+    *)
+    _ERROR "Invalid action (${ARG_ACTION:-<none>})" && exit 1
+    ;;
+
+esac
+
+
+## DONE!
+exit 0
+

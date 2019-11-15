@@ -43,6 +43,10 @@ kernel [directory]
 ------------------
 Deal with the Linux kernel with less headaches.
 
+luksvault
+---------
+File-based LUKS encrypted vault made easy
+
 makejail-ssh
 ------------
 Create a chroot-ed resources for jailed SSH proxying:
