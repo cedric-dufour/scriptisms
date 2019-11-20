@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/openssl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20191115b'
+VERSION='1.0.20191119a'
 [ "${1##*-}" == 'version' ] && echo "${SCRIPT} ${VERSION}" && exit 0
 umask 077
 shopt -s extglob
@@ -10,15 +10,19 @@ shopt -s extglob
 ## Helpers
 function _INFO {
   echo "INFO[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}"
+  return 0
 }
 function _NOTICE {
   echo "NOTICE[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}"
+  return 0
 }
 function _WARNING {
   echo "WARNING[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
 }
 function _ERROR {
   echo "ERROR[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
 }
 
 

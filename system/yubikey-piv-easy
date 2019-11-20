@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/yubikey-piv-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20191115a'
+VERSION='1.0.20191119a'
 [ "${1##*-}" == 'version' ] && echo "${SCRIPT} ${VERSION}" && exit 0
 shopt -s nocasematch
 
@@ -9,15 +9,19 @@ shopt -s nocasematch
 ## Helpers
 function _INFO {
   [ -n "${OPT_VERBOSE}" ] && echo "INFO[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}"
+  return 0
 }
 function _NOTICE {
   echo "NOTICE[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}"
+  return 0
 }
 function _WARNING {
   echo "WARNING[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
 }
 function _ERROR {
   echo "ERROR[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
 }
 
 
