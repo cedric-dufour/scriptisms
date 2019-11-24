@@ -1,8 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/yubikey-piv-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20191119a'
-[ "${1##*-}" == 'version' ] && echo "${SCRIPT} ${VERSION}" && exit 0
+VERSION='1.0.20191124a'
 shopt -s nocasematch
 
 
@@ -30,6 +29,7 @@ DFLT_SLOT="${YUBIKEY_PIV_SLOT:-9a}"
 
 
 ## Parameters
+: ${YUBIKEY_PIV_VERBOSE:=${VERBOSE}}
 : ${YUBIKEY_PIV_PIN_RETRIES:=3}
 : ${YUBIKEY_PIV_PUK_RETRIES:=5}
 
@@ -89,7 +89,6 @@ ENVIRONMENT:
     YubiKey management key
 EOF
 }
-[ $# -lt 1 -o "${1##*-}" == 'help' ] && _help && exit 1
 
 # Arguments
 ARG_COMMAND=
@@ -112,6 +111,14 @@ while [ -n "${1}" ]; do
       case "${1}" in
         '+verbose') OPT_VERBOSE='yes';;
       esac
+      ;;
+
+    'version'|'+version'|'--version')
+      echo "${SCRIPT} ${VERSION}" && exit 0
+      ;;
+
+    'help'|'+help'|'--help')
+      _help && exit 1
       ;;
 
     +*)

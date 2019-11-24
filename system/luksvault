@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/luksvault
 SCRIPT="${0##*/}"
-VERSION='1.0.20191119a'
+VERSION='1.0.20191124a'
 
 
 ## Helpers
@@ -54,7 +54,8 @@ OPT_KEYFILE=
 OPT_MOUNTPOINT=
 OPT_UID='root'
 OPT_SIZE='50'
-#OPT_VERBOSE=  # let it be passed by the environment
+OPT_LUKS1=
+OPT_VERBOSE="${VERBOSE}"
 ARG_ACTION=
 while [ -n "${1}" ]; do
   case "${1}" in
@@ -83,12 +84,18 @@ while [ -n "${1}" ]; do
       OPT_SIZE="${2}"
       shift
       ;;
+    '-1'|'--luks1')
+      OPT_LUKS1='yes'
+      ;;
     '--verbose')
       OPT_VERBOSE='yes'
       OPTS[${#OPTS[*]}]="${1}"
       ;;
-    '--version')
+    'version'|'--version')
       echo "${SCRIPT} ${VERSION}" && exit 0
+      ;;
+    'help'|'--help')
+      "${0}" --help; exit 1
       ;;
     -*)
       _ERROR "Invalid option (${1})" && exit 1
@@ -133,10 +140,11 @@ case "${ARG_ACTION}" in
 
     # Format LUKS volume
     _INFO "Formatting the LUKS volume (${OPT_IMAGE})"
+    [ -n "${OPT_LUKS1}" ] && LUKS_OPTIONS='--type luks1' || LUKS_OPTIONS='--type luks2 --luks2-keyslots-size 8M --pbkdf argon2id'
     if [ -n "${OPT_KEYFILE}" ]; then
-      cryptsetup luksFormat --type luks2 --batch-mode --luks2-keyslots-size 8M --pbkdf argon2id --key-file "${OPT_KEYFILE}" "${OPT_IMAGE}"
+      cryptsetup luksFormat --batch-mode ${LUKS_OPTIONS} --key-file "${OPT_KEYFILE}" "${OPT_IMAGE}"
     else
-      cryptsetup luksFormat --type luks2 --batch-mode --luks2-keyslots-size 8M --pbkdf argon2id --verify-passphrase "${OPT_IMAGE}"
+      cryptsetup luksFormat --batch-mode ${LUKS_OPTIONS} --verify-passphrase "${OPT_IMAGE}"
     fi
     [ $? -ne 0 ] && _ERROR "Failed to format LUKS volume (${OPT_IMAGE})" 1>&2 && "${0}" "${OPTS[@]}" stop && exit 1
 

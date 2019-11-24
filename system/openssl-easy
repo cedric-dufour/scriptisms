@@ -1,8 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/openssl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20191119a'
-[ "${1##*-}" == 'version' ] && echo "${SCRIPT} ${VERSION}" && exit 0
+VERSION='1.0.20191124a'
 umask 077
 shopt -s extglob
 
@@ -145,7 +144,6 @@ ENVIRONMENT:
     Certificate subject alternative names (SAN)
 EOF
 }
-[ $# -lt 1 -o "${1##*-}" == 'help' ] && _help && exit 1
 
 # Environment
 export OPENSSL_ROOT="${DFLT_ROOT}"
@@ -237,6 +235,14 @@ while [ -n "${1}" ]; do
         '+verbose') OPT_VERBOSE='yes';;
         '+auto') OPT_AUTO='yes';;
       esac
+      ;;
+
+    'version'|'+version'|'--version')
+      echo "${SCRIPT} ${VERSION}" && exit 0
+      ;;
+
+    'help'|'+help'|'--help')
+      _help && exit 1
       ;;
 
     +*)
