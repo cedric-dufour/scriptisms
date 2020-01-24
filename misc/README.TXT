@@ -25,6 +25,10 @@ gpx2flightlog
 -------------
 Convert a GPX (XML) track data to SkyDemon flightlog data format.
 
+m2requests.py
+-------------
+M2Crypto-based plugin enabling PKCS#11 support in Python requests library
+
 openaip2gpx
 -----------
 Convert OpenAIP (XML) data to GPX format, textualizing as description (or
