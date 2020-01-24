@@ -1,3 +1,4 @@
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/m2requests.py
 import os
 import urllib.parse
 
@@ -13,6 +14,7 @@ import requests.utils
 import urllib3.response
 
 # Parameters
+M2REQUESTS_VERSION='1.0.20200124a'
 M2REQUESTS_SSL_ENGINE_ID = os.getenv("M2REQUESTS_SSL_ENGINE_ID", "pkcs11")
 M2REQUESTS_SSL_ENGINE_PATH = os.getenv(
     "M2REQUESTS_SSL_ENGINE_PATH",
@@ -45,7 +47,8 @@ class M2HttpsAdapter(requests.adapters.BaseAdapter):
     call to send(), using the *same* SSL context(/engine), which can *not* be
     changed once initialized.
 
-    This adapter currently does *not* support proxied connections.
+    This adapter currently does *not* support proxied connections, nor HTTP
+    streams.
 
     USAGE:
       from m2requests import M2HttpsAdapter
