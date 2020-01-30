@@ -1,5 +1,6 @@
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/m2requests.py
 import os
+import os.path
 import urllib.parse
 
 import M2Crypto.Engine
@@ -14,7 +15,7 @@ import requests.utils
 import urllib3.response
 
 # Parameters
-M2REQUESTS_VERSION='1.0.20200124a'
+M2REQUESTS_VERSION='1.0.20200130a'
 M2REQUESTS_SSL_ENGINE_ID = os.getenv("M2REQUESTS_SSL_ENGINE_ID", "pkcs11")
 M2REQUESTS_SSL_ENGINE_PATH = os.getenv(
     "M2REQUESTS_SSL_ENGINE_PATH",
@@ -372,7 +373,10 @@ class M2HttpsAdapter(requests.adapters.BaseAdapter):
                 depth=verify_depth,
             )
             if len(ca_path):
-                ssl_context.load_verify_locations(capath=ca_path)
+                if os.path.isfile(ca_path):
+                    ssl_context.load_verify_locations(cafile=ca_path)
+                else:
+                    ssl_context.load_verify_locations(capath=ca_path)
             else:
                 ssl_context.set_default_verify_paths()
         else:
