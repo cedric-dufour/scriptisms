@@ -1,0 +1,117 @@
+#!/bin/bash
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/screen-split
+SCRIPT="${0##*/}"
+VERSION='1.0.20200205a'
+
+
+## Helpers
+function _ERROR {
+  echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+  return 0
+}
+
+
+## Usage
+function _USAGE() {
+cat << EOF
+USAGE: ${SCRIPT} [<options>] [{on|off}]
+
+SYNOPSIS:
+  Enable, disable (or toggle) split screen output
+
+OPTIONS:
+
+  -Z, --zoom <float>
+    Zoom factor (default: 1.0)
+
+EOF
+}
+
+# Arguments
+ARG_ZOOM='1.0'
+ARG_ACTION=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-h'|'--help'|'help')
+      _USAGE
+      exit 1
+      ;;
+    '-Z'|'--zoom')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      ARG_ZOOM="${2}"
+      shift
+      ;;
+    -*)
+      _ERROR "Invalid option (${1})" && exit 1
+      ;;
+    *)
+      if [ -z "${ARG_ACTION}" ]; then
+        ARG_ACTION="${1}"
+      else
+        _ERROR "Too many arguments (${1})" && exit 1
+      fi
+  esac
+  shift
+done
+[ -z "${ARG_ACTION}" ] && ARG_ACTION='toggle'
+
+
+## XRandR
+
+# Query
+XRANDR_DATA="$(xrandr --query)"
+[ -z "${XRANDR_DATA}" ] && _ERROR "Failed to query XRandR" && exit 1
+
+# Primary display
+read PRI_NAME PRI_X_PHYS PRI_Y_PHYS PRI_X_RES PRI_Y_RES PRI_X_VIRT PRI_Y_VIRT PRI_X_OFF PRI_Y_OFF < \
+<(
+  echo "${XRANDR_DATA}" \
+  | grep -A 1 '\sprimary\s' \
+  | awk '{if($0=="--") getline; f=$0; getline; print f,$0}' \
+  | head -n 1 \
+  | sed -nE 's|^(\S*) .* ([0-9]*)x([0-9]*)\+([0-9]*)\+([0-9]*) .* ([0-9]*)mm x ([0-9]*)mm *([0-9]*)x([0-9]*).*$|\1 \6 \7 \8 \9 \2 \3 \4 \5|p'
+)
+[ -z "${PRI_NAME}" ] && _ERROR "Failed to detect primary output" && exit 1
+
+# Secondary
+read SEC_NAME SEC_X_PHYS SEC_Y_PHYS SEC_X_RES SEC_Y_RES SEC_X_VIRT SEC_Y_VIRT SEC_X_OFF SEC_Y_OFF < \
+<(
+  echo "${XRANDR_DATA}" \
+  | grep -A 1 '\sconnected\s' \
+  | awk '{if($0=="--") getline; f=$0; getline; print f,$0}' \
+  | grep -v '\sprimary\s' \
+  | head -n 1 \
+  | sed -nE 's|^(\S*) .* ([0-9]*)x([0-9]*)\+([0-9]*)\+([0-9]*) .* ([0-9]*)mm x ([0-9]*)mm *([0-9]*)x([0-9]*).*$|\1 \6 \7 \8 \9 \2 \3 \4 \5|p'
+)
+[ -z "${SEC_NAME}" ] && _ERROR "Failed to detect secondary output" && exit 1
+
+
+## Action
+case "${ARG_ACTION}" in
+
+  'off')
+    # XRandR
+    xrandr --output ${SEC_NAME} --same-as ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale 1x1
+    ;;
+
+  'on')
+    # Scale
+    SCALE="$(echo "scale=2; ${SEC_Y_PHYS}/${PRI_Y_PHYS} * ${PRI_Y_RES}/${SEC_Y_RES} / ${ARG_ZOOM}" | bc)"
+
+    # XRandR
+    xrandr --output ${SEC_NAME} --right-of ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
+    ;;
+
+  'toggle')
+    if [ "${SEC_X_OFF}" != "0" -o "${PRI_X_OFF}" != "0" ]; then
+      "${0}" off
+    else
+      "${0}" on
+    fi
+    ;;
+
+  *)
+    _ERROR "Invalid action (${ARG_ACTION})" && exit 1
+    ;;
+esac
+

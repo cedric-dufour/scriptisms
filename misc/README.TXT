@@ -42,6 +42,10 @@ pdfxunite
 ---------
 A version of 'pdfunite' that is compatible with 'xargs'.
 
+screen-split
+------------
+Easily toggle split (dual) screen output.
+
 xps-index
 ---------
 Extract strings from given XPS file, located within given bounding frame.
