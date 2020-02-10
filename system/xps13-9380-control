@@ -26,6 +26,9 @@ CONTEXTS / ACTIONS:
 
   touchpad (tp)
     reset - reset the touchpad driver (hid-multitouch)
+
+  ethernet (eth)
+    reset - reset the (WD15 docking station) ethernet driver (r8152)
 EOF
 
 
@@ -92,6 +95,17 @@ case "${1}" in
 	rmmod hid-multitouch
         sleep 1
         modprobe hid-multitouch
+        ;;
+      *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
+    esac
+    ;;
+
+  'ethernet'|'eth')
+    case "${2}" in
+      'reset'|'rst')
+	rmmod r8152
+        sleep 1
+        modprobe r8152
         ;;
       *) echo "ERROR: Unknown action (${1}:${2})"; exit 1
     esac
