@@ -4,6 +4,7 @@
 # ... deb: python3-bernhard
 import argparse
 import bernhard
+import json
 import sys
 
 class CRiemannQueryClient:
@@ -32,7 +33,7 @@ class CRiemannQueryClient:
         # ... query
         self.oArgumentParser.add_argument('query', type=str,
                                           metavar='<query>',
-                                          help='Query (filter)')
+                                          help='Query (REF: https://github.com/riemann/riemann/blob/master/resources/query.g4)')
 
         # ... host
         self.oArgumentParser.add_argument('-H', '--host', type=str,
@@ -42,9 +43,30 @@ class CRiemannQueryClient:
 
         # ... port
         self.oArgumentParser.add_argument('-P', '--port', type=int,
-                                          default=5555,
+                                          default=0,
                                           metavar='<port>',
-                                          help='Host TCP port (default:5555)')
+                                          help='Host TCP port (default:5555 for PLAIN, 5554 for SSL)')
+
+        # ... SSL certificate
+        self.oArgumentParser.add_argument('--cert', type=str,
+                                          metavar='<certificate>',
+                                          help='Path to certificate (PEM) file')
+
+        # ... SSL private key
+        self.oArgumentParser.add_argument('--key', type=str,
+                                          metavar='<private-key>',
+                                          help='Path to private key (PEM) file')
+
+        # ... SSL CA bundle
+        self.oArgumentParser.add_argument('--ca', type=str,
+                                          metavar='<CA-bundle>',
+                                          help='Path to Certification Authorities bundle (PEM) file')
+
+        # ... JSON output
+        self.oArgumentParser.add_argument('--json',
+                                          default=False,
+                                          action='store_true',
+                                          help='Output full JSON-formatted events')
 
 
     def __initArguments(self, _aArguments=None):
@@ -72,10 +94,35 @@ class CRiemannQueryClient:
         self.__initArguments()
 
         # Execute
-        oRiemann = bernhard.Client(host=self.oArguments.host, port=self.oArguments.port)
+        if self.oArguments.cert or self.oArguments.key or self.oArguments.ca:
+            iPort = self.oArguments.port if self.oArguments.port > 0 else 5554
+            oRiemann = bernhard.SSLClient(
+                host=self.oArguments.host, port=iPort,
+                certfile=self.oArguments.cert, keyfile=self.oArguments.key,
+                ca_certs=self.oArguments.ca,
+            )
+        else:
+            iPort = self.oArguments.port if self.oArguments.port > 0 else 5555
+            oRiemann = bernhard.Client(host=self.oArguments.host, port=iPort)
         oQuery = oRiemann.query(self.oArguments.query)
         for oEvent in oQuery:
-            sys.stdout.write('%s %s %f\n' % (oEvent.host, oEvent.service, oEvent.metric_d))
+            if self.oArguments.json:
+                dEvent = {
+                    'host': oEvent.host,
+                    'service': oEvent.service,
+                    'time': oEvent.time,
+                    'state': oEvent.state,
+                    'ttl': oEvent.ttl,
+                }
+                if(oEvent.attributes):
+                    dEvent['attributes'] = {}
+                    for oAttr in oEvent.attributes:
+                        dEvent['attributes'][oAttr.key] = oAttr.value
+                if(oEvent.tags):
+                    dEvent['tags'] = [ str(a).strip(' "') for a in oEvent.tags ]
+                sys.stdout.write('%s\n' % json.dumps(dEvent, indent=2))
+            else:
+                sys.stdout.write('%s %s %f\n' % (oEvent.host, oEvent.service, oEvent.metric_d))
 
 # Main
 if(__name__=='__main__'):
