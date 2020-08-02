@@ -80,6 +80,10 @@ qemu-easy
 Launch a QEMU (KVM) virtual machine with appropriate options for the
 requested mode.
 
+ramoverlay
+----------
+Temporary RAM overlay (TMPFS)
+
 ramvault
 --------
 Temporary RAM vault (TMPFS), securily-wiped when unmounted

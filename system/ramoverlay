@@ -1,0 +1,192 @@
+#!/bin/bash
+# -*- mode:bash; tab-width:2; sh-basic-offset:2; intent-tabs-mode:nil; -*- ex: set tabstop=2 expandtab: 
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/luksvault
+SCRIPT="${0##*/}"
+VERSION='1.0.20200802a'
+
+## Usage
+function _USAGE {
+  cat >&2 << EOF
+USAGE: ${SCRIPT} [<options>] {start|stop}
+
+SYNOPSIS:
+  Start or stop a RAM (TMPFS) overlay over the regular filesystem.
+
+OPTIONS:
+
+  -D, --dir <path>[:<path>:...]
+    Directory(ies) to overlay (default: /tmp:/var/tmp:/var/cache:/var/log)
+
+  -M, --mountpoint <path>
+    TMPFS mountpoint (default: /ramoverlay)
+
+  -S, --size <size> [MiB]
+    TMPFS size; see 'man tmpfs' for formatting (default: 256)
+
+EOF
+}
+[ $# -lt 1 ] && _USAGE && exit 1
+
+
+## Logging
+function _INFO {
+  [ -n "${OPT_VERBOSE}" ] && echo "INFO[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}"
+  return 0
+}
+function _WARNING {
+  echo "WARNING[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+  return 0
+}
+function _ERROR {
+  echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+  return 0
+}
+
+
+## Environment
+: ${RAMOVERLAY_DIR:=/tmp:/var/tmp:/var/cache:/var/log}
+: ${RAMOVERLAY_MOUNTPOINT:=/ramoverlay}
+: ${RAMOVERLAY_SIZE:=256}
+
+
+
+## Arguments
+OPT_DIR="${RAMOVERLAY_DIR}"
+OPT_MOUNTPOINT="${RAMOVERLAY_MOUNTPOINT}"
+OPT_SIZE="${RAMOVERLAY_SIZE}"
+OPT_VERBOSE="${VERBOSE}"
+ARG_ACTION=
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-h'|'--help'|'help')
+       _USAGE && exit 0
+       ;;
+    '-v'|'--version'|'version')
+      echo "${SCRIPT} ${VERSION}" && exit 0
+      ;;
+    '-D'|'--dir')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_DIR="${2}"; shift
+      ;;
+    '-M'|'--mountpoint')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_MOUNTPOINT="${2}"; shift
+      ;;
+    '-S'|'--size')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_SIZE="${2}"; shift
+      ;;
+    '--verbose')
+      OPT_VERBOSE='yes'
+      ;;
+    -*)
+      _ERROR "Invalid option (${1})" && exit 1
+      ;;
+    *)
+      if [ -z "${ARG_ACTION}" ]; then
+        ARG_ACTION="${1}"
+      else
+        _ERROR "Too many arguments (${1})" && exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+
+
+## Checks
+[ "$(id -u)" != '0' ] && _ERROR "This utility must be run as root (sudo)" && exit 1
+
+
+## Actions
+
+# start
+function _DO_start {
+  # Mountpoint
+  mountpoint -q "${OPT_MOUNTPOINT}" && _WARNING "RAM overlay is already started/mounted" && exit 0
+  [ ! -e "${OPT_MOUNTPOINT}" ] && _INFO "Creating RAM overlay mountpoint (${OPT_MOUNTPOINT})" && mkdir -p "${OPT_MOUNTPOINT}"
+  [ ! -d "${OPT_MOUNTPOINT}" -o ! -w "${OPT_MOUNTPOINT}" ] && _ERROR "Invalid/unwritable RAM overlay mountpoint (${OPT_MOUNTPOINT})" && exit 1
+
+  # TMPFS
+  trap '_DO_stop' EXIT
+  _INFO "Mounting the RAM overlay TMPFS (${OPT_MOUNTPOINT}; size=${OPT_SIZE}m,mode=0755,uid=root,gid=root)"
+  mount -t tmpfs -o size=${OPT_SIZE}m,mode=0755,uid=root,gid=root,noatime tmpfs "${OPT_MOUNTPOINT}"
+  [ $? -ne 0 ] && _ERROR "Failed to mount RAM overlay TMPFS" && exit 1
+
+  # Overlay
+  IFS=$':'
+  for dir in ${OPT_DIR}; do
+    [ "${dir:0:1}" != '/' ] && _ERROR "Directory path must be absolute (${dir})" && exit 1
+    dir="${dir%%/}"
+    dir="/${dir##/}"
+    _INFO "Mounting the RAM overlay (${dir})"
+    [ ! -d "${dir}" ] && _ERROR "Invalid RAM overlay target directory (${dir})" && exit 1
+    dir_upper="${OPT_MOUNTPOINT}${dir}/upper"
+    mkdir -p "${dir_upper}"
+    [ $? -ne 0 ] && _ERROR "Failed to create RAM overlay upper directory (${dir_upper})" && exit 1
+    chown --reference="${dir}" "${dir_upper}"
+    [ $? -ne 0 ] && _ERROR "Failed to set ownership of RAM overlay upper directory (${dir_upper})" && exit 1
+    chmod --reference="${dir}" "${dir_upper}"
+    [ $? -ne 0 ] && _ERROR "Failed to set permissions of RAM overlay upper directory (${dir_upper})" && exit 1
+    dir_work="${OPT_MOUNTPOINT}${dir}/work"
+    mkdir "${dir_work}"
+    [ $? -ne 0 ] && _ERROR "Failed to create RAM overlay work directory (${dir_work})" && exit 1
+    mount -t overlay -o lowerdir="${dir}",upperdir="${dir_upper}",workdir="${dir_work}" overlay "${dir}"
+  done
+  unset IFS
+
+  # Done
+  trap - EXIT
+  _INFO "RAM overlay started"
+}
+
+# stop
+function _DO_stop {
+  trap - EXIT
+  w=0
+
+  # Overlay
+  IFS=$':'
+  for dir in ${OPT_DIR}; do
+    [ "${dir:0:1}" != '/' ] && _WARNING "Directory path must be absolute (${dir}); skipping..." && w=1 && continue
+    dir="${dir%%/}"
+    dir="/${dir##/}"
+    if findmnt -n -t overlay "${dir}" >/dev/null; then
+      _INFO "Unmounting the RAM overlay (${dir})"
+      umount "${dir}"
+      [ $? -ne 0 ] && _WARNING "Failed to unmount the RAM overlay (${dir})" && w=1
+    fi
+  done
+  unset IFS
+
+  # TMPFS
+  if [ ${w} -eq 0 ] && findmnt -n -t tmpfs "${OPT_MOUNTPOINT}" >/dev/null; then
+    _INFO "Unmounting the RAM overlay TMPFS (${OPT_MOUNTPOINT})"
+    umount "${OPT_MOUNTPOINT}"
+    [ $? -ne 0 ] && _WARNING "Failed to unmount the overlay TMPFS (${OPT_MOUNTPOINT})" && w=1
+  fi
+
+  # Done
+  if [ ${w} -ne 0 ]; then
+    _WARNING "Failed to stop RAM overlay properly"
+    exit ${w}
+  else
+    _INFO "RAM overlay stopped"
+  fi
+}
+
+
+## Main
+case "${ARG_ACTION}" in
+  'start')
+    _DO_start
+    ;;
+  'stop')
+    _DO_stop
+    ;;
+    *)
+    _ERROR "Invalid action (${ARG_ACTION:-<none>})" && exit 1
+    ;;
+esac
+exit 0
+

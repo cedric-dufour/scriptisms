@@ -1,0 +1,19 @@
+[Unit]
+Description=RAM Overlay
+DefaultDependencies=no
+Requires=local-fs.target
+After=local-fs.target cryptsetup.target
+Before=sysinit.target
+ConditionPathExists=!/etc/ramoverlay.skip
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal+console
+EnvironmentFile=-/etc/default/ramoverlay
+ExecStart=/usr/bin/ramoverlay start
+ExecStop=/usr/bin/ramoverlay stop
+
+[Install]
+WantedBy=sysinit.target
+
