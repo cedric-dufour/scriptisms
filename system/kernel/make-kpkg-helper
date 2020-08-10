@@ -62,11 +62,11 @@ while [ -n "${1}" ]; do
       ;;
 
     -P|--patches)
-      shift; MY_PATCHES="${1}"
+      shift; MY_PATCHES="${1%%/}"
       ;;
 
     -O|--overlay)
-      shift; MY_OVERLAY="${1}"
+      shift; MY_OVERLAY="${1%%/}"
       ;;
 
     -A|--apt)
@@ -219,7 +219,8 @@ if [ -n "${MY_PATCHES}" ]; then
   echo
   echo "INFO: Applying kernel patches (${MY_PATCHES}/*.patch)"
   [ "${MY_PATCHES:0:1}" != '/' ] && MY_PATCHES="${MY_PWD}/${MY_PATCHES}"
-  find "${MY_PATCHES}" -name '*.patch' | sort | while read patch; do
+  find "${MY_PATCHES}/" -name '*.patch' | sort | while read patch; do
+    echo "< ${patch}"
     patch -p1 < "${patch}"
   done
 fi
