@@ -3,6 +3,7 @@ set -e
 
 ## Environment/defaults
 : ${DISTRIBUTION:=$(lsb_release -sc)}
+: ${COMPONENTS:=main}
 : ${ARCHITECTURE:=$(dpkg --print-architecture)}
 : ${MIRRORSITE:=http://ftp.debian.org/debian}
 : ${USENETWORK:=no}
@@ -16,8 +17,8 @@ SYNOPSIS:
   Easily build Debian packages using PBuilder
 
 ACTIONS:
-  create, update
-    Create or update the PBuilder base environment (base.tgz)
+  create, update, login
+    Create, update or log into the PBuilder base environment (base.tgz)
 
   build <package.dsc>
     Build the given package using PBuilder
@@ -29,6 +30,10 @@ OPTIONS:
   -d, --distribution <distribution>
     Distribution code name
     (default: ${DISTRIBUTION})
+
+  -c, --components '<component>[ <component> ...]'
+    Space-separated list of components name
+    (default: ${COMPONENTS})
 
   -a, --architecture <architecture>
     Distribution code name
@@ -59,6 +64,10 @@ while [ -n "${1}" ]; do
     '-d'|'--distribution')
       [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
       shift; DISTRIBUTION="${1}"
+      ;;
+    '-c'|'--components')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      shift; COMPONENTS="${1}"
       ;;
     '-a'|'--architecture')
       [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
@@ -97,7 +106,7 @@ while [ -n "${1}" ]; do
   esac
   shift
 done
-[ -z "${NO_UPDATES}" ] && OTHERMIRROR="${OTHERMIRROR:+${OTHERMIRROR}|}deb ${MIRRORSITE} ${DISTRIBUTION}-updates main"
+[ -z "${NO_UPDATES}" ] && OTHERMIRROR="${OTHERMIRROR:+${OTHERMIRROR}|}deb ${MIRRORSITE} ${DISTRIBUTION}-updates ${COMPONENTS}"
 
 # Parameters [cont'd]
 : ${PBUILDER_ROOT:=$(pwd)}
@@ -135,6 +144,7 @@ case "${ACTION}" in
     trap "rm -f '${PBUILDER_CONFIG}'" EXIT
     cat > "${PBUILDER_CONFIG}" << EOF
 DISTRIBUTION="${DISTRIBUTION}"
+COMPONENTS="${COMPONENTS}"
 ARCHITECTURE="${ARCHITECTURE}"
 BASETGZ="${BASETGZ}"
 BUILDPLACE="${BUILDPLACE}"
