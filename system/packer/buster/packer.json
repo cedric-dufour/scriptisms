@@ -1,0 +1,55 @@
+{
+  "variables": {
+    "image_name": "buster",
+    "image_url": "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-10.5.0-amd64-netinst.iso",
+    "image_checksum": "sha256:93863e17ac24eeaa347dfb91dddac654f214c189e0379d7c28664a306e0301e7"
+  },
+  "builders": [
+    {
+      "type": "qemu",
+      "qemuargs": [
+        ["-cpu", "qemu64,rdrand=on"]
+      ],
+      "memory": 1024,
+      "vm_name": "{{user `image_name`}}.qcow2",
+      "iso_url": "{{user `image_url`}}",
+      "iso_checksum": "{{user `image_checksum`}}",
+      "output_directory": "{{template_dir}}/output",
+      "format": "qcow2",
+      "disk_image": false,
+      "disk_size": 5120,
+      "disk_compression": true,
+      "http_directory": "{{template_dir}}/htdocs",
+      "http_port_min": 8080,
+      "http_port_max": 8080,
+      "communicator": "ssh",
+      "ssh_username": "root",
+      "ssh_private_key_file": "{{template_dir}}/htdocs/id_ed25519",
+      "ssh_timeout": "5m",
+      "use_default_display": true,
+      "boot_wait": "5s",
+      "boot_command": [
+        "<esc><wait5>",
+        "expert<spacebar>ipv6.disable=1<spacebar>net.ifnames=0<spacebar>auto=true<spacebar>priority=critical<spacebar>url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/virtual-host.cfg<wait5>",
+        "<enter>"
+      ],
+      "shutdown_command": "/tmp/provision.sh --batch --section clean_shutdown"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "file",
+      "source": "{{template_dir}}/provision.sh",
+      "destination": "/tmp/"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "chmod u+x /tmp/provision.sh",
+        "/tmp/provision.sh --batch",
+        "/tmp/provision.sh --batch --section zero_freespace"
+      ]
+    }
+  ]
+}
+

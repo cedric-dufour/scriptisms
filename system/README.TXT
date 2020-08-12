@@ -61,6 +61,10 @@ openssl-easy
 ------------
 OpenSSL made easy (a command-line replacement for TinyCA)
 
+packer
+------
+Creating VM Images with HashiCorp Packer
+
 pbuilder-easy
 -------------
 Easily build Debian packages using PBuilder
