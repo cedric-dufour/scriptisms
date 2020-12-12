@@ -35,6 +35,11 @@ enable-wakeup
 Enable wakeup-from-suspend for the selected device (SysFS path) and all its
 parents chain.
 
+freedns-v2.*
+------------
+FreeDNS (https://freedns.afraid.org) dynamic DNS updater client (daemon)
+using the V2 interface (and randomized subdomain update token).
+
 huawei-wctl
 -----------
 Control Huawei E303s-2 (and compatible) 3G/UMTS USB dongle via its web API.
