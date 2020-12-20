@@ -36,7 +36,7 @@ logger = logging.getLogger("FreeDNSv2")
 # CONSTANTS
 # ------------------------------------------------------------------------------
 
-FREEDNS_V2_VERSION = "2020.12.12a"
+FREEDNS_V2_VERSION = "2020.12.20a"
 
 FREEDNS_V2_URL_IPV4 = "%{scheme}://sync.afraid.org/u/%{token}/"
 FREEDNS_V2_URL_IPV6 = "%{scheme}://v6.sync.afraid.org/u/%{token}/"
@@ -395,6 +395,12 @@ class FreeDNSv2:
         except Exception as e:
             logger.error(f"run: Failed to parse arguments; {str(e)}")
             return errno.EINVAL
+        self.__bDryRun = self.__oArguments.dry_run
+        self.__bDebug = self.__bDryRun or self.__oArguments.debug
+
+        # ... verbosity
+        if self.__bDebug:
+            logger.setLevel(logging.DEBUG)
 
         # ... configuration
         try:
@@ -405,13 +411,10 @@ class FreeDNSv2:
         if self.__dConfig["token"] is None:
             logger.error("run: Please specify the FreeDNS subdomain token")
             return errno.EINVAL
+        self.__bDebug = self.__bDebug or self.__dConfig["debug"]
+        self.__bQuiet = self.__oArguments.quiet or self.__dConfig["quiet"]
 
         # Verbosity
-        self.__bDryRun = self.__oArguments.dry_run
-        self.__bDebug = (
-            self.__bDryRun or self.__oArguments.debug or self.__dConfig["debug"]
-        )
-        self.__bQuiet = self.__oArguments.quiet or self.__dConfig["quiet"]
         if self.__bDebug:
             logger.setLevel(logging.DEBUG)
         elif self.__bQuiet:
