@@ -40,6 +40,11 @@ freedns-v2.*
 FreeDNS (https://freedns.afraid.org) dynamic DNS updater client (daemon)
 using the V2 interface (and randomized subdomain update token).
 
+huawei-hilink.*
+---------------
+Huawei Hilink devices control client, leveraging Adam Schubert's `huawei_lte_api`
+library (https://github.com/Salamek/huawei-lte-api)
+
 huawei-wctl
 -----------
 Control Huawei E303s-2 (and compatible) 3G/UMTS USB dongle via its web API.
