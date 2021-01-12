@@ -1,11 +1,11 @@
-Creating Debian/Buster VM Image with HashiCorp Packer
-=====================================================
+Creating Debian/Bullseye VM Image with HashiCorp Packer
+=======================================================
 (make sure to read the generic [README](../README.md) beforehand)
 
 Debian Source
 -------------
 
-This sample Debian/Buster Packer-ed VM image uses the `netinst` version of the CD Installer.
+This sample Debian/Bullseye Packer-ed VM image uses the `netinst` version of the CD Installer.
 
 To update the version being used, visit
 [https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/](https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/)
@@ -14,9 +14,9 @@ to see available versions and update the [packer.json](./packer.json) file accor
 ```json
 {
   "variables": {
-    "image_name": "buster",
-    "image_url": "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-10.7.0-amd64-netinst.iso",
-    "image_checksum": "sha256:b317d87b0a3d5b568f48a92dcabfc4bc51fe58d9f67ca13b013f1b8329d1306d"
+    "image_name": "bullseye",
+    "image_url": "https://cdimage.debian.org/cdimage/bullseye_di_alpha3/amd64/iso-cd/debian-bullseye-DI-alpha3-amd64-netinst.iso",
+    "image_checksum": "sha256:21e59ae4fb4ca262b184c199ca15a565ca2e17f4fb39faca9807677392852e95"
   }
 }
 ```
