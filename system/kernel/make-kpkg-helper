@@ -10,7 +10,7 @@ SYNOPSIS:
 
 OPTIONS:
   -R, --revision <string>
-    Revision number (default: $(date +'%Y%m%da~custom'))
+    Revision number (default: $(date +'0+custom%Y%m%da'))
 
   -C, --config <path-file>
     Path to kernel configuration file (default: ./config-<version>-<flavor>)
@@ -36,6 +36,9 @@ OPTIONS:
 
   -j, --concurrency <integer>
     Concurrency level (default: CPU cores quantity)
+
+  --use-make-kpkg
+    Use old 'make-kpkg' method (<-> 'kernel-package' package)
 EOF
 
 # Arguments
@@ -50,6 +53,7 @@ MY_BUILD='.'
 MY_NAME="$(getent passwd $(whoami) | cut -d: -f5)"
 MY_EMAIL="$(whoami)@$(hostname -f)"
 MY_CONCURRENCY=$(fgrep 'core id' /proc/cpuinfo | sort -u | wc -l)
+MY_USE_MAKE_KPKG=
 while [ -n "${1}" ]; do
   case "${1}" in
 
@@ -89,6 +93,10 @@ while [ -n "${1}" ]; do
       shift; MY_CONCURRENCY="${1}"
       ;;
 
+    --use-make-kpkg)
+      MY_USE_MAKE_KPKG='yes'
+      ;;
+
     -*)
       echo "ERROR: Invalid option (${1})" >&2
       exit 1
@@ -114,7 +122,15 @@ done
 [ -z "${MY_FLAVOR}" ] && echo 'ERROR: Missing <flavor> argument' >&2 && exit 1
 [[ ${MY_FLAVOR} =~ ^[-a-z0-9]{2,}$ ]]; [ $? -ne 0 ] && echo "ERROR: Invalid <flavor> argument (${MY_FLAVOR})" >&2 && exit 1
 # ... defaults
-[ -z "${MY_REVISION}" ] && MY_REVISION="$(date +'%Y%m%da~custom')"
+if [ -z "${MY_REVISION}" ]; then
+  if [ -n "${MY_USE_MAKE_KPKG}" ]; then
+    # make-kpkg
+    MY_REVISION="$(date +'%Y%m%da~custom')"
+  else
+    # linux-source
+    MY_REVISION="$(date +'0+custom%Y%m%da')"
+  fi
+fi
 [ -z "${MY_CONFIG}" ] && MY_CONFIG="./config-${MY_VERSION}-${MY_FLAVOR}"
 # ... checks (cont'd)
 [ ! -r "${MY_CONFIG}" ] && echo "ERROR: Missing/unreadable kernel configuration file (${MY_CONFIG})" >&2 && exit 1
@@ -162,12 +178,13 @@ echo "INFO: Copying kernel configuration file (${MY_CONFIG})"
 cp -Lv "${MY_CONFIG}" "${MY_SOURCE_DIR}/.config"
 
 # Copy overlay directory
-echo
-if [ -n "${MY_OVERLAY}" ]; then
-  echo "INFO: Copying packaging overlay directory (${MY_OVERLAY})"
-  cp -Lrpv "${MY_OVERLAY}" "${MY_SOURCE_DIR}/.overlay"
-  if [ ! -e "${MY_SOURCE_DIR}/.overlay/changelog" ]; then
-    cat << EOF > "${MY_SOURCE_DIR}/.overlay/changelog"
+if [ -n "${MY_USE_MAKE_KPKG}" ]; then
+  echo
+  if [ -n "${MY_OVERLAY}" ]; then
+    echo "INFO: Copying packaging overlay directory (${MY_OVERLAY})"
+    cp -Lrpv "${MY_OVERLAY}" "${MY_SOURCE_DIR}/.overlay"
+    if [ ! -e "${MY_SOURCE_DIR}/.overlay/changelog" ]; then
+      cat << EOF > "${MY_SOURCE_DIR}/.overlay/changelog"
 =ST-source-=V (=D) UNRELEASED; urgency=low
 
   * Custom kernel
@@ -178,12 +195,12 @@ if [ -n "${MY_OVERLAY}" ]; then
  -- ${MY_NAME} <${MY_EMAIL}>  $(date -R)
 
 EOF
-    zcat "${MY_SOURCE_LOG}" >> "${MY_SOURCE_DIR}/.overlay/changelog"
-  fi
-else
-  echo "INFO: Using default packaging overlay directory"
-  mkdir "${MY_SOURCE_OVL}" "${MY_SOURCE_DIR}/.overlay"
-  cat << EOF > "${MY_SOURCE_DIR}/.overlay/changelog"
+      zcat "${MY_SOURCE_LOG}" >> "${MY_SOURCE_DIR}/.overlay/changelog"
+    fi
+  else
+    echo "INFO: Using default packaging overlay directory"
+    mkdir "${MY_SOURCE_OVL}" "${MY_SOURCE_DIR}/.overlay"
+    cat << EOF > "${MY_SOURCE_DIR}/.overlay/changelog"
 =ST-source-=V (=D) UNRELEASED; urgency=low
 
   * Custom kernel
@@ -193,6 +210,7 @@ else
 
  -- ${MY_NAME} <${MY_EMAIL}>  $(date -R)
 EOF
+  fi
 fi
 
 # Switch to kernel directory
@@ -207,12 +225,23 @@ trap 'popd' EXIT
 echo
 echo 'INFO: Retrieving kernel version'
 echo 'INFO: > make kernelversion'
-sed -i 's/^\s*EXTRAVERSION\s*=.*$/EXTRAVERSION =/' Makefile
-MY_KERNELVERSION="$(make kernelversion)"
-echo "INFO: > export KERNELVERSION=${MY_KERNELVERSION}"
-export KERNELVERSION=${MY_KERNELVERSION}
-echo "INFO: > export KERNELFLAVOR=${MY_FLAVOR}"
-export KERNELFLAVOR=${MY_FLAVOR}
+if [ -n "${MY_USE_MAKE_KPKG}" ]; then
+  # make-kpkg
+  sed -i 's/^\s*EXTRAVERSION\s*=.*$/EXTRAVERSION =/' Makefile
+  MY_KERNELVERSION="$(make kernelversion)"
+  echo "INFO: > export KERNELVERSION=${MY_KERNELVERSION}"
+  export KERNELVERSION="${MY_KERNELVERSION}"
+  echo "INFO: > export KERNELFLAVOR=${MY_FLAVOR}"
+  export KERNELFLAVOR="${MY_FLAVOR}"
+else
+  # linux-source
+  sed -i "s/^\s*EXTRAVERSION\s*=.*$/EXTRAVERSION = -${MY_FLAVOR}/" Makefile
+  MY_KERNELVERSION="$(make kernelversion)"
+  echo "INFO: > export KERNELVERSION=${MY_KERNELVERSION}"
+  export KERNELVERSION="${MY_KERNELVERSION}"
+  echo "INFO: > export KDEB_PKGVERSION=${MY_KERNELVERSION%%-*}-${MY_REVISION}"
+  export KDEB_PKGVERSION="${MY_KERNELVERSION%%-*}-${MY_REVISION}"
+fi
 
 # Apply kernel patches
 if [ -n "${MY_PATCHES}" ]; then
@@ -229,7 +258,7 @@ fi
 echo
 echo 'INFO: Setting concurrency level'
 echo "INFO: > export CONCURRENCY_LEVEL=${MY_CONCURRENCY}"
-export CONCURRENCY_LEVEL=${MY_CONCURRENCY}
+export CONCURRENCY_LEVEL="${MY_CONCURRENCY}"
 
 # Make kernel configuration
 echo
@@ -240,13 +269,37 @@ make oldconfig
 # Clean-up kernel build tree
 echo
 echo 'INFO: Cleaning-up kernel build tree'
-echo 'INFO: > make-kpkg clean'
-make-kpkg clean
+if [ -n "${MY_USE_MAKE_KPKG}" ]; then
+  # make-kpkg
+  echo 'INFO: > make-kpkg clean'
+  make-kpkg clean
+else
+  # linux-source
+  echo 'INFO: > make clean'
+  make clean
+fi
+
+# Preparing environment
+if [ -z "${MY_USE_MAKE_KPKG}" ]; then
+  # linux-source
+  echo
+  echo 'INFO: Preparing environment'
+  echo "INFO: > export DEBFULLNAME='${MY_NAME}'"
+  export DEBFULLNAME="${MY_NAME}"
+  echo "INFO: > export DEBEMAIL='${MY_EMAIL}'"
+  export DEBEMAIL="${MY_EMAIL}"
+fi
 
 # Build and package kernel
 echo
 echo 'INFO: Building and packaging kernel'
-MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} --overlay-dir="$(pwd)/.overlay" kernel_image"
+if [ -n "${MY_USE_MAKE_KPKG}" ]; then
+  # make-kpkg
+  MY_CMD="fakeroot make-kpkg --initrd --append-to-version=-${MY_FLAVOR} --revision=${MY_REVISION} --overlay-dir="$(pwd)/.overlay" kernel_image"
+else
+  # linux-source
+  MY_CMD="make -j ${CONCURRENCY_LEVEL} bindeb-pkg"
+fi
 echo "INFO: > ${MY_CMD}"
 echo 'PRESS <RETURN> TO PROCESS, <CTRL+C> TO ABORT...'; read
 eval "${MY_CMD}"
@@ -256,6 +309,6 @@ echo
 echo 'INFO: Done'
 trap - EXIT
 popd
-ls -al "${MY_BUILD}"/linux-image-*.deb
+ls -al "${MY_BUILD}"/linux-{image,headers}-*.deb
 exit 0
 
