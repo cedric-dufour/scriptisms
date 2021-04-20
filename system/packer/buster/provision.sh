@@ -2,7 +2,7 @@
 # -*- mode:bash; tab-width:2; sh-basic-offset:2; intent-tabs-mode:nil; -*- ex: set tabstop=2 expandtab: 
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/packer/buster/provision.sh
 SCRIPT="${0##*/}"
-VERSION='2020.08.12a'
+VERSION='2021.04.20a'
 
 ## Usage
 function _USAGE {
@@ -129,7 +129,7 @@ done
 ## Sections
 
 # apt_update
-DONE_apt_update=
+DONE_apt_update="${PRESET_apt_update}"
 function _apt_update {
   [ -n "${DONE_apt_update}" ] && return
   echo '============================================================================'
@@ -140,7 +140,7 @@ function _apt_update {
 }
 
 # clean_packages
-DONE_clean_packages=
+DONE_clean_packages="${PRESET_clean_packages}"
 function _clean_packages {
   [ -n "${DONE_clean_packages}" ] && return
   echo '============================================================================'
@@ -154,7 +154,7 @@ function _clean_packages {
 }
 
 # clean_libraries
-DONE_clean_libraries=
+DONE_clean_libraries="${PRESET_clean_libraries}"
 function _clean_libraries {
   [ -n "${DONE_clean_libraries}" ] && return
   _apt_update
@@ -172,7 +172,7 @@ function _clean_libraries {
 }
 
 # clean_ghosts
-DONE_clean_ghosts=
+DONE_clean_ghosts="${PRESET_clean_ghosts}"
 function _clean_ghosts {
   [ -n "${DONE_clean_ghosts}" ] && return
   _apt_update
@@ -188,7 +188,7 @@ function _clean_ghosts {
 }
 
 # preconfig_udev_ifnames
-DONE_preconfig_udev_ifnames=
+DONE_preconfig_udev_ifnames="${PRESET_preconfig_udev_ifnames}"
 function _preconfig_udev_ifnames {
   [ -n "${DONE_preconfig_udev_ifnames}" ] && return
   echo '============================================================================'
@@ -207,7 +207,7 @@ EOF
 }
 
 # preconfig_initramfs
-DONE_preconfig_initramfs=
+DONE_preconfig_initramfs="${PRESET_preconfig_initramfs}"
 function _preconfig_initramfs {
   [ -n "${DONE_preconfig_initramfs}" ] && return
   echo '============================================================================'
@@ -224,7 +224,7 @@ EOF
 }
 
 # preconfig_grub
-DONE_preconfig_grub=
+DONE_preconfig_grub="${PRESET_preconfig_grub}"
 function _preconfig_grub {
   [ -n "${DONE_preconfig_grub}" ] && return
   echo '============================================================================'
@@ -248,7 +248,7 @@ EOF
 }
 
 # preconfig_fstab
-DONE_preconfig_fstab=
+DONE_preconfig_fstab="${PRESET_preconfig_fstab}"
 function _preconfig_fstab {
   [ -n "${DONE_preconfig_fstab}" ] && return
   echo '============================================================================'
@@ -309,7 +309,7 @@ EOF
 }
 
 # preconfig_hosts
-DONE_preconfig_hosts=
+DONE_preconfig_hosts="${PRESET_preconfig_hosts}"
 function _preconfig_hosts {
   [ -n "${DONE_preconfig_hosts}" ] && return
   echo '============================================================================'
@@ -333,7 +333,7 @@ EOF
 }
 
 # apt_dist_upgrade
-DONE_apt_dist_upgrade=
+DONE_apt_dist_upgrade="${PRESET_apt_dist_upgrade}"
 function _apt_dist_upgrade {
   [ -n "${DONE_apt_dist_upgrade}" ] && return
   _apt_update
@@ -346,7 +346,7 @@ function _apt_dist_upgrade {
 }
 
 # clean_apt
-DONE_clean_apt=
+DONE_clean_apt="${PRESET_clean_apt}"
 function _clean_apt {
   [ -n "${DONE_clean_apt}" ] && return
   echo '============================================================================'
@@ -357,7 +357,7 @@ function _clean_apt {
 }
 
 # clean_history
-DONE_clean_history=
+DONE_clean_history="${PRESET_clean_history}"
 function _clean_history {
   [ -n "${DONE_clean_history}" ] && return
   echo '============================================================================'
@@ -379,7 +379,7 @@ function _clean_history {
 }
 
 # clean_root_ssh
-DONE_clean_root_ssh=
+DONE_clean_root_ssh="${PRESET_clean_root_ssh}"
 function _clean_root_ssh {
   [ -n "${DONE_clean_root_ssh}" ] && return
   echo '============================================================================'
@@ -390,7 +390,7 @@ function _clean_root_ssh {
 }
 
 # clean_network
-DONE_clean_network=
+DONE_clean_network="${PRESET_clean_network}"
 function _clean_network {
   [ -n "${DONE_clean_network}" ] && return
   echo '============================================================================'
@@ -406,7 +406,7 @@ function _clean_network {
 }
 
 # clean_self
-DONE_clean_self=
+DONE_clean_self="${PRESET_clean_self}"
 function _clean_self {
   [ -n "${DONE_clean_self}" ] && return
   echo '============================================================================'
@@ -430,7 +430,7 @@ function _clean_shutdown {
 }
 
 # zero_freespace
-DONE_zero_freespace=
+DONE_zero_freespace="${PRESET_zero_freespace}"
 function _zero_freespace {
   [ -n "${DONE_zero_freespace}" ] && return
   echo '============================================================================'
