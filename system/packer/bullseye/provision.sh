@@ -74,6 +74,9 @@ SECTIONS:
   (clean_network)
     Shut all network interfaces down and clean DHCP leases
 
+  (clean_identity)
+    Reset all machine identities
+
   (clean_self)
     Remove this script
 
@@ -408,6 +411,19 @@ function _clean_network {
   DONE_clean_network='yes'
 }
 
+# clean_identity
+DONE_clean_identity="${PRESET_clean_identity}"
+function _clean_identity {
+  [ -n "${DONE_clean_identity}" ] && return
+  echo '============================================================================'
+  echo 'BEGIN{clean_identity}'
+  # reset machine-id
+  # REF: https://www.man7.org/linux/man-pages/man5/machine-id.5.html#FIRST_BOOT_SEMANTICS
+  echo 'uninitialized' > /etc/machine-id
+  echo 'END{clean_identity}'
+  DONE_clean_identity='yes'
+}
+
 # clean_self
 DONE_clean_self="${PRESET_clean_self}"
 function _clean_self {
@@ -425,6 +441,7 @@ function _clean_shutdown {
   _clean_history
   _clean_root_ssh
   _clean_network
+  _clean_identity
   _clean_self
   echo '============================================================================'
   echo 'BEGIN{clean_shutdown}'
@@ -520,6 +537,7 @@ for section in ${OPT_SECTIONS}; do
     'clean_history') _clean_history;;
     'clean_root_ssh') _clean_root_ssh;;
     'clean_network') _clean_network;;
+    'clean_identity') _clean_identity;;
     'clean_self') _clean_self;;
     'clean_shutdown') _clean_shutdown;;
     'zero_freespace') _zero_freespace;;
