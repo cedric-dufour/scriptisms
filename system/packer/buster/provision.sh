@@ -363,8 +363,11 @@ function _clean_history {
   echo '============================================================================'
   echo 'BEGIN{clean_history}'
   find /var/log -type f \( \
+    -name "debug" -o \
+    -name "messages" -o \
     -name "*log" -o \
     -name "*.gz" -o \
+    -name "*.xz" -o \
     -name "*[-_.][0-9]*" -o \
     -name "*.notice" -o \
     -name "*.info" -o \
@@ -372,7 +375,7 @@ function _clean_history {
     -name "*.err" -o \
     -name "*.crit" \
   \) -exec rm -fv {} \;
-  rm -rfv /var/log/messages /root/.bash_history
+  rm -rfv /root/.bash_history
   echo 'PLEASE CLEAR SHELL HISTORY MANUALLY (history -c)!'
   echo 'END{clean_history}'
   DONE_clean_history='yes'
