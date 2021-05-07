@@ -59,3 +59,8 @@ xps-id2pdf
 ----------
 Extract pages from the given XPS file matching the same tagged identifier to
 individual PDF documents.
+
+xctrl-easy
+----------
+A friendly wrapper around xdotool and wmctrl to manipulate the active window,
+to be mapped to your favorite key bindings.

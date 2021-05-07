@@ -1,0 +1,185 @@
+#!/bin/bash
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/xctrl-easy
+SCRIPT="${0##*/}"
+VERSION='1.0.20210507a'
+
+## Default
+eval $(xdotool getdisplaygeometry --shell)
+: "${XCTRL_EASY_WIDTH:=$(( WIDTH/2 ))}"
+: "${XCTRL_EASY_HEIGHT:=$(( HEIGHT/2 ))}"
+: "${XCTRL_EASY_STEP_X:=$(( WIDTH/10 ))}"
+: "${XCTRL_EASY_STEP_Y:=$(( HEIGHT/10 ))}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: ${SCRIPT} <command>
+
+SYNOPSIS:
+  A friendly wrapper around xdotool and wmctrl to manipulate the active window,
+  to be mapped to your favorite key bindings.
+
+COMMANDS:
+
+  size [<height:${XCTRL_EASY_HEIGHT}> [<width:${XCTRL_EASY_WIDTH}>]]
+  width-increase [<delta:${XCTRL_EASY_STEP_X}>]
+  width-decrease [<delta:${XCTRL_EASY_STEP_X}>]
+  height-increase [<delta:${XCTRL_EASY_STEP_Y}>]
+  height-decrease [<delta:${XCTRL_EASY_STEP_Y}>]
+  position-top [<margin:${XCTRL_EASY_STEP_Y}>]
+  position-right [<margin:${XCTRL_EASY_STEP_X}>]
+  position-bottom [<margin:${XCTRL_EASY_STEP_Y}>]
+  position-left [<margin:${XCTRL_EASY_STEP_X}>]
+  move-up [<delta:${XCTRL_EASY_STEP_Y}>]
+  move-right [<delta:${XCTRL_EASY_STEP_X}>]
+  move-down [<delta:${XCTRL_EASY_STEP_Y}>]
+  move-left [<delta:${XCTRL_EASY_STEP_X}>]
+  reset[-geometry]
+
+EOF
+}
+[ $# -lt 1 ] && __USAGE && exit 1
+
+# Arguments
+COMMAND="${1}"; shift
+
+
+## Main
+
+# Active window ID
+ACTIVE_ID="$(xdotool getactivewindow)"
+[ -z "${ACTIVE_ID}" ] && echo "ERROR[${SCRIPT}]: Failed to determine active window ID" >&2 && exit 1
+ACTIVE_IDx="$(printf '0x%08x' ${ACTIVE_ID})"
+
+# Active window size
+eval $(xdotool getwindowgeometry --shell "${ACTIVE_ID}")
+[ -z "${WIDTH}" -o -z "${HEIGHT}" ] && echo "ERROR[${SCRIPT}]: Failed to retrieve active window geometry (${ACTIVE_IDx})" >&2 && exit 1
+WINDOW_WIDTH="${WIDTH}"; unset WIDTH
+WINDOW_HEIGHT="${HEIGHT}"; unset HEIGHT
+WINDOW_X="${X}"; unset X
+WINDOW_Y="${Y}"; unset Y
+
+# Screen size and window borders
+XCTRL_GEOMETRY_CACHE="/tmp/${SCRIPT}@${USER}${DISPLAY}"
+XRANDR_OUTPUTS_NOW=($(xrandr --query | sed -nE 's/^(\S+)\s(primary|connected)\s.*$/\1/p'))
+while true; do
+  if [ ! -e "${XCTRL_GEOMETRY_CACHE}" ]; then
+    # xdotool getdisplaygeometry and getwindowgeometry don't account for window borders
+    # and scaled/virtual viewports
+
+    # Fully maximize the window
+    xdotool windowmove "${ACTIVE_ID}" 0 0  # Warning --sync will block if not move is needed (BUG?)
+    xdotool windowsize --sync "${ACTIVE_ID}" 100% 100%
+    eval $(xdotool getwindowgeometry --shell "${ACTIVE_ID}")
+    SCREEN_WIDTH="${WIDTH}"; unset WIDTH
+    SCREEN_HEIGHT="${HEIGHT}"; unset HEIGHT
+    BORDER_LEFT="${X}"; unset X
+    BORDER_TOP="${Y}"; unset Y
+
+    # Reset the window to its original size
+    xdotool windowsize "${ACTIVE_ID}" ${WINDOW_WIDTH} ${WINDOW_HEIGHT}
+    xdotool windowmove "${ACTIVE_ID}" $(( WINDOW_X - BORDER_LEFT )) $(( WINDOW_Y - BORDER_TOP ))
+
+    # Cache
+    UMASK_OLD="$(umask -p)"
+    umask 077
+    cat >"${XCTRL_GEOMETRY_CACHE}" <<EOF
+XRANDR_OUTPUTS='${XRANDR_OUTPUTS_NOW[*]}'
+SCREEN_WIDTH='${SCREEN_WIDTH}'
+SCREEN_HEIGHT='${SCREEN_HEIGHT}'
+BORDER_TOP='${BORDER_TOP}'
+BORDER_LEFT='${BORDER_LEFT}'
+BORDER_BOTTOM='${BORDER_LEFT}'
+BORDER_RIGHT='${BORDER_LEFT}'
+EOF
+    ${UMASK_OLD}
+  fi
+  eval $(sed -nE "s|^([_A-Z]+='[^']+')\$|\1|p" "${XCTRL_GEOMETRY_CACHE}")
+  if [ "${XRANDR_OUTPUTS}" != "${XRANDR_OUTPUTS_NOW[*]}" ]; then
+    rm -f "${XCTRL_GEOMETRY_CACHE}"  # Outputs changed; invalidate cached geometry
+  else
+    break
+  fi
+done
+
+# Command
+case "${COMMAND}" in
+
+  'size')
+    xdotool windowsize "${ACTIVE_ID}" "${2:-${XCTRL_EASY_WIDTH}}" "${1:-${XCTRL_EASY_HEIGHT}}"
+    ;;
+
+  'width-increase')
+    NEW_WIDTH=$(( WINDOW_WIDTH + ${1:-${XCTRL_EASY_STEP_X}} ))
+    MAX_WIDTH=$(( SCREEN_WIDTH - BORDER_LEFT - BORDER_RIGHT ))
+    [ ${NEW_WIDTH} -gt ${MAX_WIDTH} ] && NEW_WIDTH=${MAX_WIDTH}
+    xdotool windowsize "${ACTIVE_ID}" ${NEW_WIDTH} ${WINDOW_HEIGHT}
+    ;;
+
+  'width-decrease')
+    NEW_WIDTH=$(( WINDOW_WIDTH - ${1:-${XCTRL_EASY_STEP_X}} ))
+    [ ${NEW_WIDTH} -lt ${XCTRL_EASY_STEP_X} ] && NEW_WIDTH=${XCTRL_EASY_STEP_X}
+    xdotool windowsize "${ACTIVE_ID}" ${NEW_WIDTH} ${WINDOW_HEIGHT}
+    ;;
+
+  'height-increase')
+    NEW_HEIGHT=$(( WINDOW_HEIGHT + ${1:-${XCTRL_EASY_STEP_Y}} ))
+    MAX_HEIGHT=$(( SCREEN_HEIGHT - BORDER_TOP - BORDER_BOTTOM ))
+    [ ${NEW_HEIGHT} -gt ${MAX_HEIGHT} ] && NEW_HEIGHT=${MAX_HEIGHT}
+    xdotool windowsize "${ACTIVE_ID}" ${WINDOW_WIDTH} ${NEW_HEIGHT}
+    ;;
+
+  'height-decrease')
+    NEW_HEIGHT=$(( WINDOW_HEIGHT - ${1:-${XCTRL_EASY_STEP_Y}} ))
+    [ ${NEW_HEIGHT} -lt ${XCTRL_EASY_STEP_Y} ] && NEW_HEIGHT=${XCTRL_EASY_STEP_Y}
+    xdotool windowsize "${ACTIVE_ID}" ${WINDOW_WIDTH} ${NEW_HEIGHT}
+    ;;
+
+  'position-top')
+    xdotool windowmove "${ACTIVE_ID}" $(( WINDOW_X - BORDER_LEFT )) "${1:-${XCTRL_EASY_STEP_Y}}"
+    ;;
+
+  'position-right')
+    xdotool windowmove "${ACTIVE_ID}" $(( SCREEN_WIDTH - WINDOW_WIDTH - ${1:-${XCTRL_EASY_STEP_X}} )) $(( WINDOW_Y - BORDER_TOP ))
+    ;;
+
+  'position-bottom')
+    xdotool windowmove "${ACTIVE_ID}" $(( WINDOW_X - BORDER_LEFT )) $(( SCREEN_HEIGHT - WINDOW_HEIGHT - ${1:-${XCTRL_EASY_STEP_Y}} ))
+    ;;
+
+  'position-left')
+    xdotool windowmove "${ACTIVE_ID}" "${1:-${XCTRL_EASY_STEP_X}}" $(( WINDOW_Y - BORDER_TOP ))
+    ;;
+
+  'move-up')
+    NEW_Y=$(( WINDOW_Y - BORDER_TOP - ${1:-${XCTRL_EASY_STEP_Y}} ))
+    [ ${NEW_Y} -lt 0 ] && NEW_Y=0
+    xdotool windowmove "${ACTIVE_ID}" $(( WINDOW_X - BORDER_LEFT )) ${NEW_Y}
+    ;;
+
+  'move-right')
+    NEW_X=$(( WINDOW_X - BORDER_LEFT + ${1:-${XCTRL_EASY_STEP_X}} ))
+    MAX_X=$(( SCREEN_WIDTH - WINDOW_WIDTH - BORDER_LEFT ))
+    [ ${NEW_X} -gt ${MAX_X} ] && NEW_X=${MAX_X}
+    xdotool windowmove "${ACTIVE_ID}" ${NEW_X} $(( WINDOW_Y - BORDER_TOP ))
+    ;;
+
+  'move-down')
+    NEW_Y=$(( WINDOW_Y - BORDER_TOP + ${1:-${XCTRL_EASY_STEP_Y}} ))
+    MAX_Y=$(( SCREEN_HEIGHT - WINDOW_HEIGHT - BORDER_TOP ))
+    [ ${NEW_Y} -gt ${MAX_Y} ] && NEW_Y=${MAX_Y}
+    xdotool windowmove "${ACTIVE_ID}" $(( WINDOW_X - BORDER_LEFT )) ${NEW_Y}
+    ;;
+
+  'move-left')
+    NEW_X=$(( WINDOW_X - BORDER_LEFT - ${1:-${XCTRL_EASY_STEP_X}} ))
+    [ ${NEW_X} -lt 0 ] && NEW_X=0
+    xdotool windowmove "${ACTIVE_ID}" ${NEW_X} $(( WINDOW_Y - BORDER_TOP ))
+    ;;
+
+  'reset'|'reset-geometry')
+    rm -f "${XCTRL_GEOMETRY_CACHE}"
+    ;;
+
+esac
