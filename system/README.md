@@ -10,8 +10,8 @@ arubacx-backup
 Backup startup and running configuration, along events log, of ArubaOS-CX
 switches.
 
-asuswrt-*
----------
+asuswrt-\*
+----------
 Backup/restore configuration - NVRAM only - of devices running AsusWRT firmware.
 
 dircksum
@@ -35,13 +35,13 @@ enable-wakeup
 Enable wakeup-from-suspend for the selected device (SysFS path) and all its
 parents chain.
 
-freedns-v2.*
-------------
+freedns-v2.\*
+-------------
 FreeDNS (https://freedns.afraid.org) dynamic DNS updater client (daemon)
 using the V2 interface (and randomized subdomain update token).
 
-huawei-hilink.*
----------------
+huawei-hilink.\*
+----------------
 Huawei Hilink devices control client, leveraging Adam Schubert's `huawei_lte_api`
 library (https://github.com/Salamek/huawei-lte-api)
 

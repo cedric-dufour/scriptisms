@@ -20,4 +20,3 @@ mplayer-streamdump
 ------------------
 Dump the specified audio stream to (MP3) files, creating a new file each time
 the stream title changes.
-
