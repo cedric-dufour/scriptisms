@@ -378,7 +378,7 @@ function _clean_history {
     -name "*.err" -o \
     -name "*.crit" \
   \) -exec rm -fv {} \;
-  rm -rfv /root/.bash_history
+  rm -fv /root/.bash_history
   echo 'PLEASE CLEAR SHELL HISTORY MANUALLY (history -c)!'
   echo 'END{clean_history}'
   DONE_clean_history='yes'
@@ -406,7 +406,7 @@ function _clean_network {
     [ "${iface}" == 'lo' ] && continue
     ifdown ${iface}
   done
-  rm -rfv /var/lib/dhcp/dhclient*.leases
+  rm -fv /var/lib/dhcp/dhclient*.leases
   echo 'END{clean_network}'
   DONE_clean_network='yes'
 }
@@ -419,7 +419,10 @@ function _clean_identity {
   echo 'BEGIN{clean_identity}'
   # reset machine-id
   # REF: https://www.man7.org/linux/man-pages/man5/machine-id.5.html#FIRST_BOOT_SEMANTICS
-  echo 'uninitialized' > /etc/machine-id
+  echo 'uninitialized' | tee /etc/machine-id
+  # REF: https://wiki.debian.org/MachineId
+  rm -fv /var/lib/dbus/machine-id
+  ln -s /etc/machine-id /var/lib/dbus/machine-id
   echo 'END{clean_identity}'
   DONE_clean_identity='yes'
 }
@@ -430,7 +433,7 @@ function _clean_self {
   [ -n "${DONE_clean_self}" ] && return
   echo '============================================================================'
   echo 'BEGIN{clean_self}'
-  rm -rfv "${0}"
+  rm -fv "${0}"
   echo 'END{clean_self}'
   DONE_clean_self='yes'
 }
