@@ -1,14 +1,14 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/xctrl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20210507a'
+VERSION='1.0.20210517a'
 
 ## Default
 eval $(xdotool getdisplaygeometry --shell)
 : "${XCTRL_EASY_WIDTH:=$(( WIDTH/2 ))}"
 : "${XCTRL_EASY_HEIGHT:=$(( HEIGHT/2 ))}"
-: "${XCTRL_EASY_STEP_X:=$(( WIDTH/10 ))}"
-: "${XCTRL_EASY_STEP_Y:=$(( HEIGHT/10 ))}"
+: "${XCTRL_EASY_STEP_X:=$(( WIDTH/20 ))}"
+: "${XCTRL_EASY_STEP_Y:=$(( HEIGHT/20 ))}"
 
 
 ## Usage
