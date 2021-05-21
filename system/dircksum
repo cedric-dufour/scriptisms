@@ -1,8 +1,12 @@
 #!/bin/bash
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/dircksum
+SCRIPT="${0##*/}"
+VERSION='2.1.20210521a'
 
-# Usage
-[ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF >&2 && exit 3
-USAGE: ${0##*/} [<option> ...] <directory> [<directory> ...]
+## Usage
+__USAGE() {
+  cat << EOF
+USAGE: ${SCRIPT} [<option> ...] <directory> [<directory> ...]
 
 SYSNOPSIS:
   Recursively compute and save/verify the checksum for the given directory.
@@ -10,33 +14,39 @@ SYSNOPSIS:
   directory.
 
 OPTIONS:
+
   -V, --verbose
     Display computing progress (on 'stdout').
 
   -S, --silent
     Display only warnings and errors (on 'stderr').
 
-  -c, --create
+  -C, --create
     Create missing checksum files.
 
-  -v, --verify
-    Verify existing checksum files.
-
-  -d, --delete
+  -D, --delete
     Delete the checksum file from the given directory and all its parent arbo-
     rescence.
 
-  -dd, --delete-all
+  --delete-all
     Delete the checksum file from the given directory and both its parent and
     children arborescence.
 
+  -v, --verify, -c, --check
+    Verify existing checksum files.
+
   -p, --print
     Print computed checksum results to 'stdout'
-    (useful - along with 'diff' - to detect discrepancies location).
+
+  -d, --diff
+    Print the unified diff between the current checksum file and its computed results
+    (useful to investigate verification MISMATCH)
 
 AUTHOR:
   Cedric Dufour - http://cedric.dufour.name
 EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE >&2 && exit 3
 
 # Arguments
 EXIT=0
@@ -46,18 +56,24 @@ CREATE=
 VERIFY=
 DELETE=
 PRINT=
+DIFF=
 VERSION='2'
 
-# Checks
-[ -z "$(which cksum)" ] && echo 'ERROR: Missing checksumming binary (cksum)' >&2 && exit 2
 
-# Trap signals
-# ... SIGINT (CTRL-C)
-trap 'echo "WARNING: Caught SIGINT!" >&2; exit 1' INT
-# ... SIGTERM (kill)
-trap 'echo "WARNING: Caught SIGTERM!" >&2; exit 1' TERM
-# ... SIGUSR1, SIGUSR2
-trap 'echo "INFO: Computing checksum for directory (${DIRECTORY})..."' USR1 USR2
+## Checks
+[ -z "$(which cksum)" ] && echo "ERROR[${SCRIPT}]: Missing checksumming binary (cksum)" >&2 && exit 2
+
+
+## Trap signals
+
+# SIGINT (CTRL-C)
+trap 'echo "WARNING[${SCRIPT}]: Caught SIGINT!" >&2; exit 1' INT
+
+# SIGTERM (kill)
+trap 'echo "WARNING[${SCRIPT}]: Caught SIGTERM!" >&2; exit 1' TERM
+
+# SIGUSR1, SIGUSR2
+trap 'echo "INFO[${SCRIPT}]: Computing checksum for directory (${DIRECTORY})..."' USR1 USR2
 
 
 ## Functions
@@ -74,33 +90,33 @@ function _dircksum {
   local DEPTH="${2}"
 
   # Exclusions
-  [ "${DIRECTORY##*/}" == '.git' ] && echo "INFO: Ignoring '.git' directory (${DIRECTORY})" >&2 && return 0
+  [ "${DIRECTORY##*/}" == '.git' ] && echo "INFO[${SCRIPT}]: Ignoring '.git' directory (${DIRECTORY})" >&2 && return 0
 
   # Compute checksum
-  [ -n "${VERBOSE}" ] && echo "INFO: Computing checksum for directory (${DIRECTORY})..."
+  [ -n "${VERBOSE}" ] && echo "INFO[${SCRIPT}]: Computing checksum for directory (${DIRECTORY})..."
   local __dircksum; local __cksum=''; local __dirs=0; local __files=0; local __size=0; local __exit=0
   IFS=$'\n'
 
-  # ... recurse sub-directories
+  # (recurse sub-directories)
   local __subdir
   for __subdir in $(find "${DIRECTORY}/" -mindepth 1 -maxdepth 1 -type d | sort); do
     if [ -z "${VERIFY}" ] && [ -e "${__subdir}/.dircksum" ]; then
-      [ -z "${SILENT}" ] && echo "INFO: Using existing checksum (${__subdir})"
+      [ -z "${SILENT}" ] && echo "INFO[${SCRIPT}]: Using existing checksum (${__subdir})"
       continue
     fi
     _dircksum "${__subdir}" $(( ${DEPTH}+1 ))
     [ ${EXIT} -ne 0 ] && [ -z "${VERIFY}" ] && return ${EXIT}
   done
 
-  # ... necessary to loose CPU cycles?
+  # (necessary to loose CPU cycles?)
   if [ -z "${CREATE}" ] && [ -n "${VERIFY}" ]; then
     if [ ! -e "${DIRECTORY}/.dircksum" ] || [ ! -r "${DIRECTORY}/.dircksum" ]; then
-      echo "WARNING: Missing/unreadable checksum file; can not verify checksum (${DIRECTORY})" >&2
+      echo "WARNING[${SCRIPT}]: Missing/unreadable checksum file; can not verify checksum (${DIRECTORY})" >&2
       _exit 1; return ${EXIT}
     fi
   fi
 
-  # ... extract checksum from sub-directories 'dircksum' file
+  # (extract checksum from sub-directories 'dircksum' file)
   if [ "${VERSION}" == '1' ]; then
     # V1: Sort the checksums according to the sub-directories names.
     __dircksum=$( ( find "${DIRECTORY}/" -mindepth 1 -maxdepth 1 -type d | sort | sed 's/\/*$/\/.dircksum/' | xargs -d'\n' -r -n 1000 fgrep -h 'DIRCKSUM' 2>/dev/null ) | awk '{ if (NR==1) { CKSUM=$1; SIZE=$2; DIRS=$3+1; FILES=$4 } else { CKSUM=CKSUM":"$1; SIZE+=$2; DIRS+=$3+1; FILES+=$4 } }; END { if (NR>0) { printf "%s %.f %.f %.f\n",CKSUM,SIZE,DIRS,FILES } }'; exit ${PIPESTATUS[0]} ); __exit=$?
@@ -110,7 +126,7 @@ function _dircksum {
     __dircksum=$( ( find "${DIRECTORY}/" -mindepth 1 -maxdepth 1 -type d | sed 's/\/*$/\/.dircksum/' | xargs -d'\n' -r -n 1000 fgrep -h 'DIRCKSUM' 2>/dev/null | sort -k1,1 -n ) | awk '{ if (NR==1) { CKSUM=$1; SIZE=$2; DIRS=$3+1; FILES=$4 } else { CKSUM=CKSUM":"$1; SIZE+=$2; DIRS+=$3+1; FILES+=$4 } }; END { if (NR>0) { printf "%s %.f %.f %.f\n",CKSUM,SIZE,DIRS,FILES } }'; exit ${PIPESTATUS[0]} ); __exit=$?
   fi
   if [ ${__exit} -ne 0 ]; then
-    echo "ERROR: An error occured while reading the sub-directories checksum (${__exit})" >&2
+    echo "ERROR[${SCRIPT}]: An error occured while reading the sub-directories checksum (${__exit})" >&2
     if [ -z "${VERIFY}" ]; then
       _exit 2; return ${EXIT}
     fi
@@ -123,7 +139,7 @@ function _dircksum {
     __files=$(( ${__files} + ${__dircksum%% *} ))
   fi
 
-  # ... compute checksum for files in current directory
+  # (compute checksum for files in current directory)
   if [ "${VERSION}" == '1' ]; then
     # V1: Sort the checksums according to the files names.
     __filecksum="$( ( find "${DIRECTORY}/" -mindepth 1 -maxdepth 1 -type f -not -name '.dircksum' | sort | xargs -d'\n' -r -n 1000 cksum ) | sed 's|^\([^ ]*\) \([^ ]*\) \(.*\/\)\([^/]*\)$|\1 \2 \4|'; exit ${PIPESTATUS[0]} )"; __exit=$?
@@ -133,7 +149,7 @@ function _dircksum {
     __filecksum="$( ( find "${DIRECTORY}/" -mindepth 1 -maxdepth 1 -type f -not -name '.dircksum' | xargs -d'\n' -r -n 1000 cksum | sort -k1,1 -n ) | sed 's|^\([^ ]*\) \([^ ]*\) \(.*\/\)\([^/]*\)$|\1 \2 \4|'; exit ${PIPESTATUS[0]} )"; __exit=$?
   fi
   if [ ${__exit} -ne 0 ]; then
-    echo "ERROR: An error occured while performing the files checksum (${__exit})" >&2
+    echo "ERROR[${SCRIPT}]: An error occured while performing the files checksum (${__exit})" >&2
     if [ -z "${VERIFY}" ]; then
       _exit 2; return ${EXIT}
     fi
@@ -146,7 +162,7 @@ function _dircksum {
     __files=$(( ${__files} + ${__dircksum%% *} ))
   fi
 
-  # ... save checksum
+  # (save checksum)
   __cksum=$(echo "${__cksum}" | cksum | cut -d' ' -f1)
   if [ ! -e "${DIRECTORY}/.dircksum" ] && [ -n "${CREATE}" ]; then
      cat << EOF > "${DIRECTORY}/.dircksum"
@@ -155,15 +171,15 @@ ${__cksum} ${__size} ${__dirs} ${__files} $(date +'%Y%m%dT%H%M%S') # DIRCKSUM (V
 # CKSUM[cksum] SIZE[bytes] FILE[name]
 ${__filecksum}
 EOF
-    [ $? -ne 0 ] && echo "ERROR: Failed to save checksum file (${DIRECTORY}/.dircksum)" >&2 && _exit 2 && return ${EXIT}
-    [ -z "${SILENT}" ] && echo "INFO: Checksum saved (${DIRECTORY})"
+    [ $? -ne 0 ] && echo "ERROR[${SCRIPT}]: Failed to save checksum file (${DIRECTORY}/.dircksum)" >&2 && _exit 2 && return ${EXIT}
+    [ -z "${SILENT}" ] && echo "INFO[${SCRIPT}]: Checksum saved (${DIRECTORY})"
   fi
   if [ -e "${DIRECTORY}/.dircksum" ] && [ ! -r "${DIRECTORY}/.dircksum" ]; then
-    echo "WARNING: Unreadable checksum file (${DIRECTORY}/.dircksum)" >&2
+    echo "WARNING[${SCRIPT}]: Unreadable checksum file (${DIRECTORY}/.dircksum)" >&2
     _exit 1; return ${EXIT}
   fi
 
-  # ... print checksum
+  # (print checksum)
   if [ -n "${PRINT}" -a ${DEPTH} -eq 0 ]; then
     cat << EOF
 # CKSUM[cksum] SIZE[bytes] DIRS[count] FILES[count] DATE[iso]
@@ -173,7 +189,23 @@ ${__filecksum}
 EOF
   fi
 
-  # ... verify checksum
+  # (diff checksum)
+  if [ -n "${DIFF}" -a ${DEPTH} -eq 0 ]; then
+    if [ ! -r "${DIRECTORY}/.dircksum" ]; then
+      echo "WARNING[${SCRIPT}: Missing/unreadable checksum file (${DIRECTORY}/.dircksum)" >&2
+    else
+      echo "--- ${DIRECTORY}/.dircksum"
+      echo "+++ [computed]"
+      cat << EOF | diff -uN "${DIRECTORY}/.dircksum" -
+# CKSUM[cksum] SIZE[bytes] DIRS[count] FILES[count] DATE[iso]
+${__cksum} ${__size} ${__dirs} ${__files} $(date +'%Y%m%dT%H%M%S') # DIRCKSUM (V:${VERSION})
+# CKSUM[cksum] SIZE[bytes] FILE[name]
+${__filecksum}
+EOF
+    fi
+  fi
+
+  # (verify checksum)
   if [ -n "${VERIFY}" ]; then
     __dircksum=$(fgrep -h 'DIRCKSUM' "${DIRECTORY}/.dircksum")
     local __cksum_check=${__dircksum%% *}; __dircksum=${__dircksum#* }
@@ -182,9 +214,9 @@ EOF
     local __files_check=${__dircksum%% *}
     if [ "${__cksum_check}" != "${__cksum}" -o "${__size_check}" != "${__size}" -o "${__dirs_check}" != "${__dirs}" -o "${__files_check}" != "${__files}" ]; then
       #echo "DEBUG: ${__cksum} ${__size} ${__dirs} ${__files} <-> ${__cksum_check} ${__size_check} ${__dirs_check} ${__files_check}" >&2
-      echo "ERROR: Checksum MISMATCH (${DIRECTORY})" >&2 && _exit 2; return ${EXIT}
+      echo "ERROR[${SCRIPT}]: Checksum MISMATCH (${DIRECTORY})" >&2 && _exit 2; return ${EXIT}
     else
-      [ -z "${SILENT}" ] && echo "INFO: Checksum OK (${DIRECTORY})"
+      [ -z "${SILENT}" ] && echo "INFO[${SCRIPT}]: Checksum OK (${DIRECTORY})"
     fi
   fi
 
@@ -201,14 +233,14 @@ function _delete {
   # Crawl down
   if [ "${DELETE}" == 'all' ]; then
     find "${DIRECTORY}/" -mindepth 2 -name .dircksum -delete
-    [ $? -ne 0 ] && echo "ERROR: Failed to delete checksum files from sub-directories (${DIRECTORY}/.../.dircksum)" >&2 && _exit 2 && return ${EXIT}
+    [ $? -ne 0 ] && echo "ERROR[${SCRIPT}]: Failed to delete checksum files from sub-directories (${DIRECTORY}/.../.dircksum)" >&2 && _exit 2 && return ${EXIT}
   fi
 
   # Delete checksum
   if [ -e "${DIRECTORY}/.dircksum" ]; then
     rm -f "${DIRECTORY}/.dircksum"
-    [ $? -ne 0 ] && echo "ERROR: Failed to delete checksum file (${DIRECTORY}/.dircksum)" >&2 && _exit 2 && return ${EXIT}
-    [ -z "${SILENT}" ] && echo "INFO: Checksum deleted (${DIRECTORY})"
+    [ $? -ne 0 ] && echo "ERROR[${SCRIPT}]: Failed to delete checksum file (${DIRECTORY}/.dircksum)" >&2 && _exit 2 && return ${EXIT}
+    [ -z "${SILENT}" ] && echo "INFO[${SCRIPT}]: Checksum deleted (${DIRECTORY})"
   fi
 
   # Crawl up
@@ -227,38 +259,44 @@ while [ -n "${1}" ]; do
       SILENT='yes'
       VERBOSE=
       ;;
-    '-c'|'--create')
+    '-C'|'--create')
       CREATE='yes'
       DELETE=
       ;;
-    '-v'|'--verify')
-      VERIFY='yes'
-      DELETE=
-      ;;
-    '-d'|'--delete')
+    '-D'|'--delete')
       DELETE='yes'
       CREATE=
       VERIFY=
       ;;
-    '-dd'|'--delete-all')
+    '--delete-all')
       DELETE='all'
       CREATE=
       VERIFY=
       ;;
+    '-v'|'--verify'|'-c'|'--check')
+      VERIFY='yes'
+      DELETE=
+      ;;
     '-p'|'--print')
-      PRINT='yes'
       SILENT='yes'
+      PRINT='yes'
+      DIFF=
+      ;;
+    '-d'|'--diff')
+      SILENT='yes'
+      DIFF='yes'
+      PRINT=
       ;;
     '-1')
       VERSION='1'
       ;;
     *)
       if [ "${1:0:1}" == '-' ]; then
-        echo "WARNING: Invalid option (${1})" >&2
+        echo "WARNING[${SCRIPT}]: Invalid option (${1})" >&2
       else
         DIRECTORY="${1%%/}"
-        [ -z "${DIRECTORY}" ] && echo 'WARNING: Please specify a directory' >&2 && shift && continue
-        [ ! -d "${DIRECTORY}" ] && echo "WARNING: Missing/invalid directory (${DIRECTORY})" >&2 && shift && continue
+        [ -z "${DIRECTORY}" ] && echo "WARNING[${SCRIPT}]: Please specify a directory" >&2 && shift && continue
+        [ ! -d "${DIRECTORY}" ] && echo "WARNING[${SCRIPT}]: Missing/invalid directory (${DIRECTORY})" >&2 && shift && continue
         if [ -n "${DELETE}" ]; then
           pushd "${DIRECTORY}" >/dev/null
           DIRECTORY="$(pwd)"
@@ -275,6 +313,6 @@ while [ -n "${1}" ]; do
 done
 
 # Done
-[ ${EXIT} -ne 0 ] && echo "WARNING: Non-zero exit code (${EXIT})" >&2
+[ ${EXIT} -ne 0 ] && echo "WARNING[${SCRIPT}]: Non-zero exit code (${EXIT})" >&2
 exit ${EXIT}
 
