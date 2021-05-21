@@ -2,7 +2,7 @@
 # -*- mode:bash; tab-width:2; sh-basic-offset:2; intent-tabs-mode:nil; -*- ex: set tabstop=2 expandtab: 
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/packer/buster/provision.sh
 SCRIPT="${0##*/}"
-VERSION='2021.04.20a'
+VERSION='2021.05.19a'
 
 ## Usage
 function _USAGE {
@@ -197,13 +197,14 @@ function _preconfig_udev_ifnames {
   echo '============================================================================'
   echo 'BEGIN{preconfig_udev_ifnames}'
   cat > /etc/udev/rules.d/80-net-setup-link.rules << EOF
+## File provisioned by Packer
+#  (run 'update-initramfs -u -k all' to enforce changes)
+
 # Disable consistent network device naming (stick to "eth<N>")
-# (run 'update-initramfs -u' to enforce changes)
 
 # Device-specific naming
 # (Run 'udevadm info -a -p /sys/class/net/eth<N>' to display attributes)
 #SUBSYSTEM=="net", ACTION=="add", DRIVERS=="?*", KERNEL=="eth*", ATTR{address}=="<MAC-address>", ATTR{dev_id}=="0x0", ATTR{type}=="1", NAME="eth<N>"
-
 EOF
   echo 'END{preconfig_udev_ifnames}'
   DONE_preconfig_udev_ifnames='yes'
@@ -216,12 +217,13 @@ function _preconfig_initramfs {
   echo '============================================================================'
   echo 'BEGIN{preconfig_initramfs}'
   cat > /etc/initramfs-tools/conf.d/resume << EOF
-# Disable resume (from hibernation/swap)
-# (run 'update-initramfs -u' to enforce changes)
-RESUME=none
+## File provisioned by Packer
+#  (run 'update-initramfs -u -k all' to enforce changes)
 
+# Disable resume (from hibernation/swap)
+RESUME=none
 EOF
-  update-initramfs -u
+  update-initramfs -u -k all
   echo 'END{preconfig_initramfs}'
   DONE_preconfig_initramfs='yes'
 }
@@ -233,8 +235,10 @@ function _preconfig_grub {
   echo '============================================================================'
   echo 'BEGIN{preconfig_grub}'
   cat > /etc/default/grub << EOF
+## File provisioned by Packer
+#  (run 'update-grub' to enforce changes)
+
 # Bootloader settings
-# (run 'update-grub' to enforce changes)
 GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1"
 GRUB_DISABLE_SUBMENU=y
@@ -243,7 +247,6 @@ GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=\`lsb_release -i -s 2> /dev/null || echo Debian\`
 GRUB_CMDLINE_LINUX_DEFAULT="quiet"
 GRUB_CMDLINE_LINUX="elevator=noop spinlock=unfair clocksource=hpet console=ttyS0"
-
 EOF
   update-grub
   echo 'END{preconfig_grub}'
@@ -257,7 +260,8 @@ function _preconfig_fstab {
   echo '============================================================================'
   echo 'BEGIN{preconfig_fstab}'
   cat > /etc/fstab << EOF
-# <file system> <mount point> <type> <options> <dump> <pass>
+## File provisioned by Packer
+#  <file system> <mount point> <type> <options> <dump> <pass>
 
 # System
 EOF
@@ -306,7 +310,6 @@ EOF
     fstype="${device_mountpoint_fstype}"
     echo "${device} ${mountpoint} ${fstype} defaults 0 2" >> /etc/fstab
   done
-  echo >> /etc/fstab
   echo 'END{preconfig_fstab}'
   DONE_preconfig_fstab='yes'
 }
@@ -320,6 +323,8 @@ function _preconfig_hosts {
   local hostname_fqdn="$(hostname -f)"
   local hostname_short="$(hostname -s)"
   cat > /etc/hosts << EOF
+## File provisioned by Packer
+
 # IPv4
 127.0.0.1 localhost
 127.0.1.1 ${hostname_fqdn} ${hostname_short} lanhost
@@ -329,7 +334,6 @@ function _preconfig_hosts {
 ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 #IPv6: ${hostname_fqdn} ${hostname_short} ip6-lanhost
-
 EOF
   echo 'END{preconfig_hosts}'
   DONE_preconfig_hosts='yes'
@@ -547,4 +551,3 @@ for section in ${OPT_SECTIONS}; do
     *) echo "ERROR: Invalid section (${section})" >&2 && exit 1;;
   esac
 done
-
