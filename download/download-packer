@@ -1,0 +1,47 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
+
+## Defaults
+: "${DOWNLOAD_INSTALL_BIN_DIR:=${HOME}/bin}"
+: "${DOWNLOAD_INSTALL_LINK_DIR:=${HOME}/bin}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <version>
+
+SYNOPSIS:
+  Download and install (symlink) the given Packer version from
+    https://releases.hashicorp.com/packer/...
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VERSION="${1}"
+
+
+## Parameters
+DOWNLOAD_URL="https://releases.hashicorp.com/packer/${VERSION}/packer_${VERSION}_linux_amd64.zip"
+DOWNLOAD_INSTALL_BIN="${DOWNLOAD_INSTALL_BIN_DIR}/packer-${VERSION}"
+DOWNLOAD_INSTALL_LINK="${DOWNLOAD_INSTALL_LINK_DIR}/packer"
+
+
+## Download
+DOWNLOAD_TMP="$(mktemp --suffix=.zip)"
+trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+wget -q -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+echo "INFO[${SCRIPT}]: Installing ${DOWNLOAD_INSTALL_LINK} -> ${DOWNLOAD_INSTALL_BIN} ..."
+unzip -p "${DOWNLOAD_TMP}" packer > "${DOWNLOAD_INSTALL_BIN}"
+chmod a+rx "${DOWNLOAD_INSTALL_BIN}"
+rm -f "${DOWNLOAD_INSTALL_LINK}"
+ln -rs "${DOWNLOAD_INSTALL_BIN}" "${DOWNLOAD_INSTALL_LINK}"
+
+echo "INFO[${SCRIPT}]: Done!"
+packer version | head -n 1

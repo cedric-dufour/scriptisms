@@ -13,4 +13,5 @@ Collections
 
  - `system`: utilities for Linux systems administration and daily use
  - `multimedia`: utilities for multimedia processing
+ - `download`: because packaging had its time and supply-chain attacks are nice
  - `misc`: uncategorized stuff

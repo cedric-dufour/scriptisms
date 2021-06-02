@@ -1,0 +1,47 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
+
+## Defaults
+: "${DOWNLOAD_INSTALL_BIN_DIR:=${HOME}/bin}"
+: "${DOWNLOAD_INSTALL_LINK_DIR:=${HOME}/bin}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <version>
+
+SYNOPSIS:
+  Download and install (symlink) the given Packer Exoscale Builder version from
+    https://github.com/exoscale/packer-builder-exoscale/releases/...
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VERSION="${1}"
+
+
+## Parameters
+DOWNLOAD_URL="https://github.com/exoscale/packer-builder-exoscale/releases/download/v${VERSION}/packer-builder-exoscale_${VERSION}_linux_amd64.tar.gz"
+DOWNLOAD_INSTALL_BIN="${DOWNLOAD_INSTALL_BIN_DIR}/packer-builder-exoscale-${VERSION}"
+DOWNLOAD_INSTALL_LINK="${HOME}/.packer.d/plugins/packer-builder-exoscale"
+
+
+## Download
+DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+wget -q -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+echo "INFO[${SCRIPT}]: Installing ${DOWNLOAD_INSTALL_LINK} -> ${DOWNLOAD_INSTALL_BIN} ..."
+tar -Oxaf "${DOWNLOAD_TMP}" packer-builder-exoscale > "${DOWNLOAD_INSTALL_BIN}"
+chmod a+rx "${DOWNLOAD_INSTALL_BIN}"
+rm -f "${DOWNLOAD_INSTALL_LINK}"
+ln -rs "${DOWNLOAD_INSTALL_BIN}" "${DOWNLOAD_INSTALL_LINK}"
+
+echo "INFO[${SCRIPT}]: Done!"
+ls -l "${DOWNLOAD_INSTALL_LINK}"
