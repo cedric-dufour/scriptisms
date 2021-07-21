@@ -1,0 +1,37 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <version>
+
+SYNOPSIS:
+  Download and install (symlink) the given GitHub CLI version from
+    https://github.com/cli/cli/releases
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VERSION="${1}"
+
+
+## Parameters
+DOWNLOAD_URL="https://github.com/cli/cli/releases/download/v${VERSION}/gh_${VERSION}_linux_amd64.deb"
+
+
+## Download
+DOWNLOAD_TMP="$(mktemp --suffix=.deb)"
+trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+wget -q -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+echo "INFO[${SCRIPT}]: Installing ..."
+sudo dpkg -i "${DOWNLOAD_TMP}"
+
+echo "INFO[${SCRIPT}]: Done!"
+gh version | head -n 1
