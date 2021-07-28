@@ -9,15 +9,12 @@ This sample Debian/Buster Packer-ed VM image uses the `netinst` version of the C
 
 To update the version being used, visit
 [https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/](https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/)
-to see available versions and update the [packer.json](./packer.json) file accordingly:
+to see available versions and update the [build.pkr.hcl](./build.pkr.hcl) file accordingly:
 
-```json
-{
-  "variables": {
-    "image_name": "buster",
-    "image_url": "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-10.7.0-amd64-netinst.iso",
-    "image_checksum": "sha256:b317d87b0a3d5b568f48a92dcabfc4bc51fe58d9f67ca13b013f1b8329d1306d"
-  }
+```hcl
+source "qemu" "buster" {
+  iso_url      = "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-10.10.0-amd64-netinst.iso"
+  iso_checksum = "sha256:c433254a7c5b5b9e6a05f9e1379a0bd6ab3323f89b56537b684b6d1bd1f8b6ad"
 }
 ```
 

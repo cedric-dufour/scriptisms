@@ -9,15 +9,12 @@ This sample Debian/Bullseye Packer-ed VM image uses the `netinst` version of the
 
 To update the version being used, visit
 [https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/](https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/)
-to see available versions and update the [packer.json](./packer.json) file accordingly:
+to see available versions and update the [build.pkr.hcl](./build.pkr.hcl) file accordingly:
 
-```json
-{
-  "variables": {
-    "image_name": "bullseye",
-    "image_url": "https://cdimage.debian.org/cdimage/bullseye_di_alpha3/amd64/iso-cd/debian-bullseye-DI-alpha3-amd64-netinst.iso",
-    "image_checksum": "sha256:21e59ae4fb4ca262b184c199ca15a565ca2e17f4fb39faca9807677392852e95"
-  }
+```hcl
+source "qemu" "bullseye" {
+  iso_url      = "https://cdimage.debian.org/cdimage/bullseye_di_rc2/amd64/iso-cd/debian-bullseye-DI-rc2-amd64-netinst.iso"
+  iso_checksum = "sha256:6d2ec6529bfe4fd1cf65748f8b58d81085b3ae30883954227fb08d57bb44cfb9"
 }
 ```
 

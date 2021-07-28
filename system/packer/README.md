@@ -7,12 +7,12 @@ VM images using [HashiCorp Packer][packer], along [Debian preseeding][preseed].
 [packer]: https://www.packer.io/ "Packer: Build Automated Machine Images"
 [preseed]: https://www.debian.org/releases/stable/amd64/apb.en.html "Debian: Automating the installation using preseeding"
 
-In order to build a given image - e.g. `buster` - switch to the ad-hoc directory
+In order to build a given image - e.g. `bullseye` - switch to the ad-hoc directory
 and launch `packer`:
 
 ```bash
-$ cd buster
-$ packer build packer.json
+$ cd bullseye
+$ packer build .
 ```
 
 How it Works
@@ -33,8 +33,8 @@ Debugging
 In order to debug the creation process, start Packer in `debug` mode:
 
 ```bash
-$ cd buster
-$ packer build -debug packer.json
+$ cd bullseye
+$ packer build -debug .
 ```
 
 Press `<enter>` for each proposed step until you reach the `boot command` step:
