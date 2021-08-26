@@ -31,6 +31,11 @@ COMMANDS:
   position-right [<margin:${XCTRL_EASY_STEP_X}>]
   position-bottom [<margin:${XCTRL_EASY_STEP_Y}>]
   position-left [<margin:${XCTRL_EASY_STEP_X}>]
+  position-center
+  position-center-top [<margin:${XCTRL_EASY_STEP_Y}>]
+  position-center-right [<margin:${XCTRL_EASY_STEP_X}>]
+  position-center-bottom [<margin:${XCTRL_EASY_STEP_Y}>]
+  position-center-left [<margin:${XCTRL_EASY_STEP_X}>]
   move-up [<delta:${XCTRL_EASY_STEP_Y}>]
   move-right [<delta:${XCTRL_EASY_STEP_X}>]
   move-down [<delta:${XCTRL_EASY_STEP_Y}>]
@@ -69,8 +74,11 @@ while true; do
     # and scaled/virtual viewports
 
     # Fully maximize the window
-    xdotool windowmove "${ACTIVE_ID}" 0 0  # Warning --sync will block if not move is needed (BUG?)
+    # WARNING: --sync is blokcing if no move is actually needed (BUG ?)
+    xdotool windowmove "${ACTIVE_ID}" 0 0
     xdotool windowsize --sync "${ACTIVE_ID}" 100% 100%
+    xdotool windowmove "${ACTIVE_ID}" 0 0
+    sleep 0.1
     eval $(xdotool getwindowgeometry --shell "${ACTIVE_ID}")
     SCREEN_WIDTH="${WIDTH}"; unset WIDTH
     SCREEN_HEIGHT="${HEIGHT}"; unset HEIGHT
@@ -150,6 +158,26 @@ case "${COMMAND}" in
 
   'position-left')
     xdotool windowmove "${ACTIVE_ID}" "${1:-${XCTRL_EASY_STEP_X}}" $(( WINDOW_Y - BORDER_TOP ))
+    ;;
+
+  'position-center')
+    xdotool windowmove "${ACTIVE_ID}" $(( SCREEN_WIDTH/2 - WINDOW_WIDTH/2 - BORDER_LEFT )) $(( SCREEN_HEIGHT/2 - WINDOW_HEIGHT/2 - BORDER_TOP ))
+    ;;
+
+  'position-center-top')
+    xdotool windowmove "${ACTIVE_ID}" $(( SCREEN_WIDTH/2 - WINDOW_WIDTH/2 - BORDER_LEFT )) "${1:-${XCTRL_EASY_STEP_Y}}"
+    ;;
+
+  'position-center-right')
+    xdotool windowmove "${ACTIVE_ID}" $(( SCREEN_WIDTH - WINDOW_WIDTH - ${1:-${XCTRL_EASY_STEP_X}} )) $(( SCREEN_HEIGHT/2 - WINDOW_HEIGHT/2 - BORDER_TOP ))
+    ;;
+
+  'position-center-bottom')
+    xdotool windowmove "${ACTIVE_ID}" $(( SCREEN_WIDTH/2 - WINDOW_WIDTH/2 - BORDER_LEFT )) $(( SCREEN_HEIGHT - WINDOW_HEIGHT - ${1:-${XCTRL_EASY_STEP_Y}} ))
+    ;;
+
+  'position-center-left')
+    xdotool windowmove "${ACTIVE_ID}" "${1:-${XCTRL_EASY_STEP_X}}" $(( SCREEN_HEIGHT/2 - WINDOW_HEIGHT/2 - BORDER_TOP ))
     ;;
 
   'move-up')
