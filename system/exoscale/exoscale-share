@@ -17,7 +17,7 @@ SYNOPSIS:
 
 COMMANDS:
 
-  list, ls, lsf
+  list, ls, lsf, lsu
     List shared files (incl. timestamp/key prefix)
 
   up(load), clip(board), edit
@@ -101,6 +101,11 @@ case "${COMMAND}" in
 
   'lsf')
     rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
+    ;;
+
+  'lsu')
+    rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
+      | sed "s|^|https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/|"
     ;;
 
   'upload'|'up')
