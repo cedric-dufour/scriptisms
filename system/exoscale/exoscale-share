@@ -4,7 +4,6 @@ SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
 
 ## Default
 : "${EXOSCALE_SHARE_PROFILE:=sos-ch-dk-2}"
-: "${EXOSCALE_SHARE_ENVIRONMENT:=${EXOSCALE_SHARE_PROFILE}:share@exoscale}"
 : "${EXOSCALE_SHARE_BUCKET:=$(hostname -d | tr '.' '\n' | tac | tr '\n' '.')exo.share}"
 
 
@@ -97,11 +96,11 @@ __random() {
 case "${COMMAND}" in
 
   'list'|'ls')
-    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone ls "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
+    rclone ls "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
     ;;
 
   'lsf')
-    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
+    rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
     ;;
 
   'upload'|'up')
@@ -113,7 +112,7 @@ case "${COMMAND}" in
       else
         filename="${filename}-$(basename "${file}")"
       fi
-      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone copyto --s3-acl public-read "${file}" "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || continue
+      rclone copyto --s3-acl public-read "${file}" "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || continue
       echo "INFO[${SCRIPT}]: File uploaded (${file})" >&2
       echo "https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/${filename}"
     done
@@ -126,7 +125,7 @@ case "${COMMAND}" in
     else
       filename="${filename}-clipboard.txt"
     fi
-    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone rcat --s3-acl public-read "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || exit $?
+    rclone rcat --s3-acl public-read "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || exit $?
     echo "INFO[${SCRIPT}]: File uploaded (clipboard)" >&2
     echo "https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/${filename}"
     ;;
@@ -142,30 +141,30 @@ case "${COMMAND}" in
     trap "rm -f '${file}'" EXIT
     "${EDITOR:-vi}" "${file}" 1>&2
     test -s "${file}" || exit 0
-    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone copyto --s3-acl public-read "${file}" "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || exit $?
+    rclone copyto --s3-acl public-read "${file}" "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || exit $?
     echo "INFO[${SCRIPT}]: File uploaded (edited)" >&2
     echo "https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/${filename}"
     ;;
 
   'cat')
     for file in "${@}"; do
-      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone cat "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${file}"
+      rclone cat "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${file}"
     done
     ;;
 
   'remove'|'rm')
     for file in "${@}"; do
-      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${file}"
+      rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${file}"
     done
     ;;
 
   'remove-all'|'rma')
     for file in "${@}"; do
       while read -r _file; do
-        "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${_file}" || continue
+        rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${_file}" || continue
       echo "INFO[${SCRIPT}]: File deleted (${_file})" >&2
       done < <(
-        "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
+        rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
           | grep -E "^[0-9]{8}(T[0-9]{6})?-[a-zA-Z0-9]{16}-${file}\$"
       )
     done
@@ -177,10 +176,10 @@ case "${COMMAND}" in
       timestamp="$(echo "${_file}" | sed -E 's|^([0-9]{4})([0-9]{2})([0-9]{2})-.*$|\1-\2\-\3T23:59:59|;s|^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})-.*$|\1-\2\-\3T\4:\5:\6|')"
       epoch="$(date --date "${timestamp}" +'%s')"
       [ $(( epoch_now - epoch )) -lt "${TTL}" ] && continue
-      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${_file}" || continue
+      rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${_file}" || continue
       echo "INFO[${SCRIPT}]: File deleted (${_file})" >&2
     done < <(
-      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
+      rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
         | grep -E '^[0-9]{8}(T[0-9]{6})?-[a-zA-Z0-9]{16}-'
     )
     ;;
