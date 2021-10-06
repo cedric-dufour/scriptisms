@@ -35,6 +35,10 @@ enable-wakeup
 Enable wakeup-from-suspend for the selected device (SysFS path) and all its
 parents chain.
 
+exoscale [directory]
+--------------------
+A bunch of scripts to work with [Exoscale](https://www.exoscale.com)
+
 freedns-v2.\*
 -------------
 FreeDNS (https://freedns.afraid.org) dynamic DNS updater client (daemon)

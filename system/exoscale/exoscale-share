@@ -1,0 +1,191 @@
+#!/bin/bash
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
+
+## Default
+: "${EXOSCALE_SHARE_PROFILE:=sos-ch-dk-2}"
+: "${EXOSCALE_SHARE_ENVIRONMENT:=${EXOSCALE_SHARE_PROFILE}:share@exoscale}"
+: "${EXOSCALE_SHARE_BUCKET:=$(hostname -d | tr '.' '\n' | tac | tr '\n' '.')exo.share}"
+
+
+## Usage
+__USAGE() {
+  cat >&2 <<EOF
+USAGE: ${SCRIPT} <command> [<options>] <file> [...]
+
+SYNOPSIS:
+  Share the given file(s) via Exoscale SOS
+
+COMMANDS:
+
+  list, ls, lsf
+    List shared files (incl. timestamp/key prefix)
+
+  up(load), clip(board), edit
+    Upload (share) the given local files (stdin, edited)
+
+  cat
+    Download the given shared files (to stdout)
+
+  remove, rm
+    Remove the given shared files
+
+  remove-all, rma
+    Remove the given files (specified by their local name)
+
+  clean
+    Remove all shared files older than TTL (see --ttl option)
+
+OPTIONS:
+
+  --rename, -r <filename>
+    Rename the shared (uploaded) file (suffix)
+
+  --timeofday, -t
+    Include time-of-day (H:M:S) in uploaded file timestamp
+
+  --ttl <seconds>
+    Shared files Time-to-Live (default: 86400)
+
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+COMMAND="${1}"; shift
+TIMESTAMP="$(date +'%Y%m%d')"
+FILENAME=
+TTL=86400
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    '--rename'|'-r')
+      [ -z "${2}" ] && echo "ERROR[${SCRIPT}]: Missing option parameter (${1})" >&2 && exit 1
+      FILENAME="${2}"; shift
+      ;;
+
+    '--timeofday'|'-t')
+      TIMESTAMP="$(date +'%Y%m%dT%H%M%S')"
+      ;;
+
+    '--ttl')
+      [ -z "${2}" ] && echo "ERROR[${SCRIPT}]: Missing option parameter (${1})" >&2 && exit 1
+      TTL="${2}"; shift
+      ;;
+
+    *-) echo "ERROR[${SCRIPT}]: Invalid option (${1})" >&2; exit 1;;
+
+    *) break;;
+
+  esac
+  shift
+done
+
+
+## Helpers
+
+__random() {
+  local random
+  while [ -z "${random}" ] || [[ ${random} =~ [^a-zA-Z0-9] ]]; do
+    random="$(openssl rand -base64 12)"
+  done
+  echo "${random}"
+}
+
+
+## Main
+case "${COMMAND}" in
+
+  'list'|'ls')
+    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone ls "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
+    ;;
+
+  'lsf')
+    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/"
+    ;;
+
+  'upload'|'up')
+    for file in "${@}"; do
+      [ ! -r "${file}" ] && echo "WARNING[${SCRIPT}]: Invalid/unreadable file (${file})" >&2 && continue
+      filename="${TIMESTAMP}-$(__random)"
+      if [ -n "${FILENAME}" ]; then
+        filename="${filename}-${FILENAME}"
+      else
+        filename="${filename}-$(basename "${file}")"
+      fi
+      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone copyto --s3-acl public-read "${file}" "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || continue
+      echo "INFO[${SCRIPT}]: File uploaded (${file})" >&2
+      echo "https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/${filename}"
+    done
+    ;;
+
+  'clipboard'|'clip')
+    filename="${TIMESTAMP}-$(__random)"
+    if [ -n "${FILENAME}" ]; then
+      filename="${filename}-${FILENAME}"
+    else
+      filename="${filename}-clipboard.txt"
+    fi
+    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone rcat --s3-acl public-read "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || exit $?
+    echo "INFO[${SCRIPT}]: File uploaded (clipboard)" >&2
+    echo "https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/${filename}"
+    ;;
+
+  'edit')
+    filename="${TIMESTAMP}-$(__random)"
+    if [ -n "${FILENAME}" ]; then
+      filename="${filename}-${FILENAME}"
+    else
+      filename="${filename}-clipboard.txt"
+    fi
+    file="$(mktemp --suffix=.txt)"
+    trap "rm -f '${file}'" EXIT
+    "${EDITOR:-vi}" "${file}" 1>&2
+    test -s "${file}" || exit 0
+    "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone copyto --s3-acl public-read "${file}" "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${filename}" || exit $?
+    echo "INFO[${SCRIPT}]: File uploaded (edited)" >&2
+    echo "https://${EXOSCALE_SHARE_PROFILE}.exo.io/${EXOSCALE_SHARE_BUCKET}/${filename}"
+    ;;
+
+  'cat')
+    for file in "${@}"; do
+      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone cat "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${file}"
+    done
+    ;;
+
+  'remove'|'rm')
+    for file in "${@}"; do
+      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${file}"
+    done
+    ;;
+
+  'remove-all'|'rma')
+    for file in "${@}"; do
+      while read -r _file; do
+        "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${_file}" || continue
+      echo "INFO[${SCRIPT}]: File deleted (${_file})" >&2
+      done < <(
+        "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
+          | grep -E "^[0-9]{8}(T[0-9]{6})?-[a-zA-Z0-9]{16}-${file}\$"
+      )
+    done
+    ;;
+
+  'clean')
+    epoch_now="$(date +'%s')"
+    while read -r _file; do
+      timestamp="$(echo "${_file}" | sed -E 's|^([0-9]{4})([0-9]{2})([0-9]{2})-.*$|\1-\2\-\3T23:59:59|;s|^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})-.*$|\1-\2\-\3T\4:\5:\6|')"
+      epoch="$(date --date "${timestamp}" +'%s')"
+      [ $(( epoch_now - epoch )) -lt "${TTL}" ] && continue
+      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone deletefile "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/${_file}" || continue
+      echo "INFO[${SCRIPT}]: File deleted (${_file})" >&2
+    done < <(
+      "${SCRIPT_DIR}/exoscale-environment" "${EXOSCALE_SHARE_ENVIRONMENT}" rclone lsf "${EXOSCALE_SHARE_PROFILE}://${EXOSCALE_SHARE_BUCKET}/" \
+        | grep -E '^[0-9]{8}(T[0-9]{6})?-[a-zA-Z0-9]{16}-'
+    )
+    ;;
+
+  *) echo "ERROR[${SCRIPT}]: Invalid command (${COMMAND})" >&2; exit 1;;
+
+esac
+exit 0

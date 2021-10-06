@@ -1,0 +1,64 @@
+#!/bin/bash
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
+
+## Usage
+__USAGE() {
+  cat >&2 <<EOF
+USAGE: ${SCRIPT} <credentials>[@<realm>=exoscale] <command> [...]
+
+SYNOPSIS:
+  Populate the current process with EXOSCALE_*, CLOUDSTACK_* and AWS_*
+  environment variables, fetched from the FreeDesktop Secret Service
+  via DBus (e.g. using KeepassXC as backend).
+  The given realm/credentials must match an existing key/value in
+  an entry's attributes.
+
+REFs:
+  - https://specifications.freedesktop.org/secret-service/latest/
+  - https://gitlab.gnome.org/GNOME/libsecret
+  - https://avaldes.co/2020/01/28/secret-service-keepassxc.html
+EOF
+}
+[ $# -lt 2 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VALUE_KEY="${1}"; shift
+
+# Split
+VALUE="${VALUE_KEY%%@*}"
+KEY="${VALUE_KEY##*@}"
+[ "${KEY}" == "${VALUE}" ] && KEY='exoscale'  # no '@...'
+
+
+## Helper
+
+# Secret (<-> DBus)
+_S() {
+  local key="${1}"; shift
+  local value="${1}"; shift
+  local attribute="${1}"; shift
+  secret-tool search "${key}" "${value}" 2>&1 | sed -nE "s|^(attribute\\.)?${attribute}\\s*=\\s*(.*)\$|\\2|p"
+}
+
+
+## Environment
+
+# Exoscale-native
+export EXOSCALE_API_ENDPOINT="$(_S "${KEY}" "${VALUE}" 'URL')"
+export EXOSCALE_API_KEY="$(_S "${KEY}" "${VALUE}" 'UserName')"
+export EXOSCALE_API_SECRET="$(_S "${KEY}" "${VALUE}" 'secret')"
+
+# CS library and the likes
+export CLOUDSTACK_ENDPOINT="${EXOSCALE_API_ENDPOINT}"
+export CLOUDSTACK_KEY="${EXOSCALE_API_KEY}"
+export CLOUDSTACK_SECRET="${EXOSCALE_API_SECRET}"
+export CLOUDSTACK_VERIFY="/etc/ssl/certs/ca-certificates.crt"
+
+# AWS tools and the likes
+export AWS_ACCESS_KEY_ID="${EXOSCALE_API_KEY}"
+export AWS_SECRET_ACCESS_KEY="${EXOSCALE_API_SECRET}"
+
+
+## Exec
+exec "${@}"
