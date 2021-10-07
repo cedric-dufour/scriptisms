@@ -1,0 +1,22 @@
+## Exoscale Rclone Backup configuration
+
+# Backup name
+#EXOSCALE_BACKUP_NAME="$(hostname -s)"
+
+# Timestamp format
+#EXOSCALE_BACKUP_TIMESTAMP_FORMAT='%Y%m%d'
+
+# Encryption key (public/private)
+#EXOSCALE_BACKUP_ENCRYPT_KEY_PUBLIC='/etc/exoscale/rclone/backup-pub.pem'
+#EXOSCALE_BACKUP_ENCRYPT_KEY_PRIVATE='/etc/exoscale/rclone/backup-key.pem'
+
+# Rclone configuration (file/profile)
+#EXOSCALE_BACKUP_RCLONE_CONFIG='/etc/exoscale/rclone/backup.conf'
+#EXOSCALE_BACKUP_RCLONE_PROFILE='sos-ch-dk-2'
+
+# Paths
+#EXOSCALE_BACKUP_REMOTE_PATH="$(hostname -d | tr '.' '\n' | tac | tr '\n' '.')exo.backup"
+#EXOSCALE_BACKUP_SOURCE_PATH='/var/backups'
+
+# Retention
+#EXOSCALE_BACKUP_RETENTION_KEEP=0
