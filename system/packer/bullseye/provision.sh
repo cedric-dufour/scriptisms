@@ -246,7 +246,7 @@ GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=\`lsb_release -i -s 2> /dev/null || echo Debian\`
 GRUB_CMDLINE_LINUX_DEFAULT="quiet"
-GRUB_CMDLINE_LINUX="elevator=noop spinlock=unfair clocksource=hpet console=ttyS0"
+GRUB_CMDLINE_LINUX="spinlock=unfair clocksource=hpet console=ttyS0"
 EOF
   update-grub
   echo 'END{preconfig_grub}'
@@ -302,7 +302,7 @@ EOF
 # Data
 # (add additional non-system partitions below)
 # - local: /dev/<dev> /local/data ext4 defaults 0 2
-# - NFS: <server>:<export> /remote/data nfs tcp,vers=3,rw,hard,intr 0 0
+# - NFS: <server>:<export> /remote/data nfs tcp,vers=3,rw,hard 0 0
 EOF
   local device_mountpoint_fstype; for device_mountpoint_fstype in $(grep -E '\s/local(\s|/)' /proc/mounts | awk '{print $1":"$3":"$5}'); do
     device="${device_mountpoint_fstype##:*}"; device_mountpoint_fstype="${device_mountpoint_fstype%*:}"
