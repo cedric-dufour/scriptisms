@@ -35,6 +35,10 @@ enable-wakeup
 Enable wakeup-from-suspend for the selected device (SysFS path) and all its
 parents chain.
 
+encrypt-data
+------------
+Assymetrically encrypt (decrypt) data.
+
 exoscale [directory]
 --------------------
 A bunch of scripts to work with [Exoscale](https://www.exoscale.com)

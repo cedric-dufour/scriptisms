@@ -1,0 +1,110 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
+trap "echo 'ERROR[${SCRIPT}]: Internal error' >&2" ERR
+
+## Usage
+__USAGE() {
+  cat >&2 <<EOF
+USAGE: ${SCRIPT} [<options>]
+
+SYNOPSIS:
+  Assymetrically encrypt (decrypt) the given data, with the given public (private) key.
+
+OPTIONS:
+
+  --decrypt, -d
+    Decrypt data (instead of encrypt)
+
+  --key, -k <key.pem>
+    Public key (private key for decrypt)
+
+  --input, -i <file>
+    Input file (default: '-'/stdin; actual file required for decrypt)
+
+  --output, -o <file>
+    Output file (default: '-'/stdout; actual file required for encrypt)
+
+ASYMMETRIC KEY:
+
+  Generate with:
+    read -rs PASSPHRASE; export PASSPHRASE
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 \
+    | openssl pkcs8 -topk8 -iter 100000 -passout env:PASSPHRASE -out key.pem
+    openssl pkey -passin env:PASSPHRASE -in key.pem -pubout > pub.pem
+
+EOF
+}
+
+# Arguments
+DECRYPT=
+AKEY=
+INPUT='-'
+OUTPUT='-'
+__OPTION() {
+  [ -z "${2}" ] && echo "ERROR[${SCRIPT}]: Missing option parameter (${1})" >&2 && exit 1
+  return 0
+}
+while [ -n "${1}" ]; do
+  case "${1}" in
+    '-h'|'--help'|'help') __USAGE && exit 1;;
+    '--decrypt'|'-d') DECRYPT='yes';;
+    '--key'|'-k') __OPTION "${@}"; AKEY="${2}"; shift;;
+    '--input'|'-i') __OPTION "${@}"; INPUT="${2}"; shift;;
+    '--output'|'-o') __OPTION "${@}"; OUTPUT="${2}"; shift;;
+    -*) echo "ERROR[${SCRIPT}]: Invalid option (${1})" >&2 && exit 1;;
+    *) echo "WARNING[${SCRIPT}]: invalid argument (${1})" >&2
+  esac
+  shift
+done
+
+
+## Checks
+
+# Asymmetric key (PEM file)
+if [ -z "${AKEY}" ] || [ ! -r "${AKEY}" ]; then
+  echo "ERROR[${SCRIPT}]: Invalid/unreadable key (PEM) file (${AKEY:-n/a})" >&2 && exit 1
+fi
+if [ -z "${DECRYPT}" ]; then
+  if [ "${OUTPUT}" == '-' ]; then
+    echo "ERROR[${SCRIPT}]: Output (--output) must be an actual file (name)" >&2 && exit 1
+  fi
+  OUTPUT_DIR="$(dirname "${OUTPUT}")"
+  if [ ! -d "${OUTPUT_DIR}" ] || [ ! -w "${OUTPUT_DIR}" ]; then
+    echo "ERROR[${SCRIPT}]: Invalid/unwritable output directory (${OUTPUT_DIR})" >&2 && exit 1
+  fi
+else
+  if [ "${INPUT}" == '-' ]; then
+    echo "ERROR[${SCRIPT}]: Input (--input) must be an actual file (name)" >&2 && exit 1
+  fi
+  if [ ! -r "${INPUT}" ]; then
+    echo "ERROR[${SCRIPT}]: Invalid/unreadable data (${INPUT})" >&2 && exit 1
+  fi
+  if [ ! -r "${INPUT}.key" ]; then
+    echo "ERROR[${SCRIPT}]: Invalid/unreadable data key (${INPUT}.key)" >&2 && exit 1
+  fi
+fi
+
+
+## Main
+
+# Symmetric key
+if [ -z "${DECRYPT}" ]; then
+  export SKEY="$(openssl rand -base64 24)"
+  echo "${SKEY}" | openssl pkeyutl -encrypt -pubin -inkey "${AKEY}" | base64 \
+  > "${OUTPUT}.key"
+else
+  export SKEY="$(base64 -d "${INPUT}.key" | openssl pkeyutl -decrypt -inkey "${AKEY}")"
+fi
+
+# Encryption/decryption
+if [ -z "${DECRYPT}" ]; then
+  cat "${INPUT}" | openssl enc -aes-256-ctr -e -pbkdf2 -iter 100000 -pass env:SKEY -out "${OUTPUT}"
+else
+  openssl enc -aes-256-ctr -d -pbkdf2 -iter 100000 -pass env:SKEY -in "${INPUT}" | cat "${OUTPUT}"
+fi
+
+
+## Done
+exit 0
