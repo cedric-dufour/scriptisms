@@ -101,7 +101,7 @@ fi
 # Encryption/decryption
 if [ -z "${DECRYPT}" ]; then
   cat "${INPUT}" | openssl enc -aes-256-ctr -e -pbkdf2 -iter 100000 -pass env:SKEY -out "${OUTPUT}"
-  sha256sum "${OUTPUT}" > "${OUTPUT}.sha256sum"
+  sha256sum "${OUTPUT}" | sed 's| .*/| |' > "${OUTPUT}.sha256sum"
 else
   openssl enc -aes-256-ctr -d -pbkdf2 -iter 100000 -pass env:SKEY -in "${INPUT}" | cat "${OUTPUT}"
 fi
