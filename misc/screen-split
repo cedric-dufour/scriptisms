@@ -1,12 +1,17 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/screen-split
 SCRIPT="${0##*/}"
-VERSION='1.0.20200210a'
+VERSION='1.0.20211103a'
 
 
 ## Helpers
 function _ERROR {
   echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+  return 0
+}
+
+function _WARNING {
+  echo "WARNING[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
   return 0
 }
 
@@ -24,7 +29,7 @@ OPTIONS:
   -Z, --zoom <float>
     Zoom factor (default: 1.0)
 
-  -A, --above
+  -P, --position
     Position secondary screen above primary (default: right-of)
 
 EOF
@@ -46,6 +51,11 @@ while [ -n "${1}" ]; do
       OPT_ZOOM="${2}"
       OPTS[${#OPTS[*]}]="${1}"; OPTS[${#OPTS[*]}]="${2}"; shift
       ;;
+    '-P'|'--position')
+      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
+      OPT_POSITION="${2}"
+      OPTS[${#OPTS[*]}]="${1}"
+      ;;
     '-A'|'--above')
       OPT_POSITION='above'
       OPTS[${#OPTS[*]}]="${1}"
@@ -66,34 +76,52 @@ done
 
 
 ## XRandR
+for attempt in 1 2; do
+  # Query
+  XRANDR_DATA="$(
+    xrandr --query \
+    | grep -E -A 1 '\sconnected\s(\S+\s)?[0-9]+x[0-9]+\+[0-9]+\+[0-9]+\s' \
+    | awk '{if($0=="--") getline; f=$0; getline; print f,$0}'
+  )"
+  [ -z "${XRANDR_DATA}" ] && _ERROR "Failed to query XRandR" && exit 1
 
-# Query
-XRANDR_DATA="$(xrandr --query)"
-[ -z "${XRANDR_DATA}" ] && _ERROR "Failed to query XRandR" && exit 1
+  # Primary display
+  read PRI_NAME PRI_X_VIRT PRI_Y_VIRT PRI_X_OFF PRI_Y_OFF PRI_X_PHYS PRI_Y_PHYS PRI_X_RES PRI_Y_RES < \
+  <(
+    echo "${XRANDR_DATA}" \
+    | grep '\sprimary\s' \
+    | head -n 1 \
+    | sed -nE 's|^(\S+) .* ([0-9]+x[0-9]+\+[0-9]+\+[0-9]+) .* ([0-9]+mm x [0-9]+mm)( +panning +[0-9]+x[0-9]+\+[0-9]*\+[0-9]+)? *([0-9]+x[0-9]+).*$|\1 \2 \3 \5|;s|[+xm ]+| |gp'
+  )
+  [ -z "${PRI_NAME}" ] && _ERROR "Failed to detect primary output" && exit 1
 
-# Primary display
-read PRI_NAME PRI_X_VIRT PRI_Y_VIRT PRI_X_OFF PRI_Y_OFF PRI_X_PHYS PRI_Y_PHYS PRI_X_RES PRI_Y_RES < \
-<(
-  echo "${XRANDR_DATA}" \
-  | grep -A 1 '\sprimary\s' \
-  | awk '{if($0=="--") getline; f=$0; getline; print f,$0}' \
-  | head -n 1 \
-  | sed -nE 's|^(\S+) .* ([0-9]+x[0-9]+\+[0-9]+\+[0-9]+) .* ([0-9]+mm x [0-9]+mm)( +panning +[0-9]+x[0-9]+\+[0-9]*\+[0-9]+)? *([0-9]+x[0-9]+).*$|\1 \2 \3 \5|;s|[+xm ]+| |gp'
-)
-[ -z "${PRI_NAME}" ] && _ERROR "Failed to detect primary output" && exit 1
-
-# Secondary
-read SEC_NAME SEC_X_VIRT SEC_Y_VIRT SEC_X_OFF SEC_Y_OFF SEC_X_PHYS SEC_Y_PHYS SEC_X_RES SEC_Y_RES < \
-<(
-  echo "${XRANDR_DATA}" \
-  | grep -A 1 '\sconnected\s' \
-  | awk '{if($0=="--") getline; f=$0; getline; print f,$0}' \
-  | grep -v '\sprimary\s' \
-  | head -n 1 \
-  | sed -nE 's|^(\S+) .* ([0-9]+x[0-9]+\+[0-9]+\+[0-9]+) .* ([0-9]+mm x [0-9]+mm)( +panning +[0-9]+x[0-9]+\+[0-9]*\+[0-9]+)? *([0-9]+x[0-9]+).*$|\1 \2 \3 \5|;s|[+xm ]+| |gp'
-)
-[ -z "${SEC_NAME}" ] && _ERROR "Failed to detect secondary output" && exit 1
-
+  # Secondary
+  read SEC_NAME SEC_X_VIRT SEC_Y_VIRT SEC_X_OFF SEC_Y_OFF SEC_X_PHYS SEC_Y_PHYS SEC_X_RES SEC_Y_RES < \
+  <(
+    echo "${XRANDR_DATA}" \
+    | grep -v '\sprimary\s' \
+    | head -n 1 \
+    | sed -nE 's|^(\S+) .* ([0-9]+x[0-9]+\+[0-9]+\+[0-9]+) .* ([0-9]+mm x [0-9]+mm)( +panning +[0-9]+x[0-9]+\+[0-9]*\+[0-9]+)? *([0-9]+x[0-9]+).*$|\1 \2 \3 \5|;s|[+xm ]+| |gp'
+  )
+  if [ -z "${SEC_NAME}" ]; then
+    if [ ${attempt} -eq 1 ]; then
+      _WARNING "Failed to detect secondary output; resetting..."
+      for output in $(
+        xrandr --query \
+        | grep '\sconnected\s' \
+        | grep -v '\sprimary\s' \
+        | awk '{print $1}'
+      ); do
+        xrandr --output "${output}" --auto
+      done
+      sleep 3
+    else
+      _ERROR "Failed to detect secondary output" && exit 1
+    fi
+  else
+    break
+  fi
+done
 
 ## Action
 case "${ARG_ACTION}" in
@@ -107,7 +135,7 @@ case "${ARG_ACTION}" in
     xrandr --output ${SEC_NAME} --same-as ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
 
     # Conky
-    pkill -HUP conky
+    pkill -USR1 conky
     ;;
 
   'on')
@@ -115,17 +143,25 @@ case "${ARG_ACTION}" in
     SCALE="$(echo "scale=2; ${SEC_Y_PHYS}/${PRI_Y_PHYS} * ${PRI_Y_RES}/${SEC_Y_RES} / ${OPT_ZOOM}" | bc)"
 
     # XRandR
-    if [ "${OPT_POSITION}" == 'right-of' ]; then
-      xrandr --output ${PRI_NAME} --panning 0x0+0+0
-      xrandr --output ${SEC_NAME} --right-of ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
-    else
-      PRI_Y_OFF="$(echo "scale=0; ${SEC_Y_RES}*${SCALE}" | bc)"
-      xrandr --output ${SEC_NAME} --above ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
-      xrandr --output ${PRI_NAME} --panning ${PRI_X_RES}x${PRI_Y_RES}+0+${PRI_Y_OFF}
-    fi
+    case "${OPT_POSITION}" in
+      'above')
+        PRI_Y_OFF="$(echo "scale=0; ${SEC_Y_RES}*${SCALE}" | bc)"
+        xrandr --output ${SEC_NAME} --above ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
+        xrandr --output ${PRI_NAME} --panning ${PRI_X_RES}x${PRI_Y_RES}+0+${PRI_Y_OFF}
+        ;;
+      'left-of')
+        PRI_X_OFF="$(echo "scale=0; ${SEC_X_RES}*${SCALE}" | bc)"
+        xrandr --output ${SEC_NAME} --left ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
+        xrandr --output ${PRI_NAME} --panning ${PRI_X_RES}x${PRI_Y_RES}+${PRI_X_OFF}+0
+        ;;
+      *)
+        xrandr --output ${PRI_NAME} --panning 0x0+0+0
+        xrandr --output ${SEC_NAME} --${OPT_POSITION} ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
+        ;;
+    esac
 
     # Conky
-    pkill -HUP conky
+    pkill -USR1 conky
     ;;
 
   'toggle')
