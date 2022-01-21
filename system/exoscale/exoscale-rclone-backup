@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e -o pipefail
 SCRIPT="${0##*/}"
+# shellcheck disable=SC2034
 SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
 trap 'echo "ERROR[${SCRIPT}]: Internal error (${EXOSCALE_BACKUP_fullname:-n/a})" >&2' ERR
 
@@ -66,7 +67,8 @@ OPTIONS:
     If lower than zero, no cleanup is performed
 
   -e, --environment-file
-    Override environment variables with content of environment file (default: undefined)
+    Load options from environment file and EXO_BACKUP_* variables (default: none)
+    WARNING: Order in respect with other options matters!
 
 EOF
 }
@@ -105,7 +107,9 @@ while [ -n "${1}" ]; do
     '-k'|'--keep')
       __OPTION "${@}"; EXOSCALE_BACKUP_RETENTION_KEEP="${2}"; shift;;
     '-e'|'--environment-file')
-      __OPTION "${@}"; EXOSCALE_BACKUP_environment_file="${2}"; shift;;
+      # shellcheck source=exoscale-rclone-backup.default
+      source <(sed -nE "s/^\s*(EXOSCALE_BACKUP[_A-Z]*=([0-9]*|'[^']*'))\s*(#.*)?\$/\1/p" "${2}")
+      shift;;
     -*)
       echo "ERROR[${SCRIPT}]: Invalid option (${1})" >&2 && exit 1;;
     *)
@@ -118,12 +122,6 @@ while [ -n "${1}" ]; do
   esac
   shift
 done
-
-# (environment)
-if [ -n "${EXOSCALE_BACKUP_environment_file}" ]; then
-  # shellcheck source=exoscale-rclone-backup.default
-  source <(sed -nE "s/^\s*(EXOSCALE_BACKUP[_A-Z]*=([0-9]*|'[^']*'))\s*(#.*)?\$/\1/p" "${EXOSCALE_BACKUP_environment_file}")
-fi
 
 # (context)
 SCRIPT="${SCRIPT}(${EXOSCALE_BACKUP_NAME})"
@@ -168,6 +166,7 @@ fi
 
 # Configuration
 RCLONE_CONFIG="$(mktemp --suffix='.rclone.conf')"
+# shellcheck disable=SC2064
 trap "rm -f '${RCLONE_CONFIG}'" EXIT
 cat "${EXOSCALE_BACKUP_RCLONE_CONFIG}" > "${RCLONE_CONFIG}"
 export RCLONE_CONFIG
