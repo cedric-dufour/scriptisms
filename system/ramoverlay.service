@@ -5,6 +5,7 @@ Requires=local-fs.target
 After=local-fs.target cryptsetup.target
 Before=sysinit.target
 ConditionPathExists=!/etc/ramoverlay.skip
+ConditionPathExists=!/etc/no-ramoverlay
 
 [Service]
 Type=oneshot
