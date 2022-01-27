@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/xctrl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20210517a'
+VERSION='1.0.20220127a'
 
 ## Default
 eval $(xdotool getdisplaygeometry --shell)
@@ -123,12 +123,18 @@ case "${COMMAND}" in
     MAX_WIDTH=$(( SCREEN_WIDTH - BORDER_LEFT - BORDER_RIGHT ))
     [ ${NEW_WIDTH} -gt ${MAX_WIDTH} ] && NEW_WIDTH=${MAX_WIDTH}
     xdotool windowsize "${ACTIVE_ID}" ${NEW_WIDTH} ${WINDOW_HEIGHT}
+    if [ "${NEW_WIDTH}" != "${WINDOW_WIDTH}" ]; then
+      "${0}" move-left "$(( (NEW_WIDTH - WINDOW_WIDTH) / 2 ))"
+    fi
     ;;
 
   'width-decrease')
     NEW_WIDTH=$(( WINDOW_WIDTH - ${1:-${XCTRL_EASY_STEP_X}} ))
     [ ${NEW_WIDTH} -lt ${XCTRL_EASY_STEP_X} ] && NEW_WIDTH=${XCTRL_EASY_STEP_X}
     xdotool windowsize "${ACTIVE_ID}" ${NEW_WIDTH} ${WINDOW_HEIGHT}
+    if [ "${NEW_WIDTH}" != "${WINDOW_WIDTH}" ]; then
+      "${0}" move-right "$(( (WINDOW_WIDTH - NEW_WIDTH) / 2 ))"
+    fi
     ;;
 
   'height-increase')
@@ -136,12 +142,18 @@ case "${COMMAND}" in
     MAX_HEIGHT=$(( SCREEN_HEIGHT - BORDER_TOP - BORDER_BOTTOM ))
     [ ${NEW_HEIGHT} -gt ${MAX_HEIGHT} ] && NEW_HEIGHT=${MAX_HEIGHT}
     xdotool windowsize "${ACTIVE_ID}" ${WINDOW_WIDTH} ${NEW_HEIGHT}
+    if [ "${NEW_HEIGHT}" != "${WINDOW_HEIGHT}" ]; then
+      "${0}" move-up "$(( (NEW_HEIGHT - WINDOW_HEIGHT) / 2 ))"
+    fi
     ;;
 
   'height-decrease')
     NEW_HEIGHT=$(( WINDOW_HEIGHT - ${1:-${XCTRL_EASY_STEP_Y}} ))
     [ ${NEW_HEIGHT} -lt ${XCTRL_EASY_STEP_Y} ] && NEW_HEIGHT=${XCTRL_EASY_STEP_Y}
     xdotool windowsize "${ACTIVE_ID}" ${WINDOW_WIDTH} ${NEW_HEIGHT}
+    if [ "${NEW_HEIGHT}" != "${WINDOW_HEIGHT}" ]; then
+      "${0}" move-down "$(( (WINDOW_HEIGHT - NEW_HEIGHT) / 2 ))"
+    fi
     ;;
 
   'position-top')
