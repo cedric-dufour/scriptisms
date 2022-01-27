@@ -1,0 +1,90 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
+
+## Defaults
+: "${DOWNLOAD_INSTALL_OPT_DIR:=${HOME}/opt}"
+: "${DOWNLOAD_INSTALL_LINK_DIR:=${HOME}/bin}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <version>
+
+SYNOPSIS:
+  Download and install (symlink) the given Go version from
+    https://go.dev/dl/
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VERSION="${1}"
+
+
+## Parameters
+DOWNLOAD_URL="https://go.dev/dl/go${VERSION}.linux-amd64.tar.gz"
+DOWNLOAD_INSTALL_DIR="${DOWNLOAD_INSTALL_OPT_DIR}/go/${VERSION}"
+
+
+## Download
+if [ ! -e "${DOWNLOAD_INSTALL_DIR}" ]; then
+  DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+  trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+  echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+  wget -q --show-progress -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+  echo "INFO[${SCRIPT}]: Installing Go ${VERSION} -> ${DOWNLOAD_INSTALL_DIR} ..."
+  mkdir -p "${DOWNLOAD_INSTALL_DIR%/*}"
+  tar -C "${DOWNLOAD_INSTALL_DIR%/*}" -xaf "${DOWNLOAD_TMP}"
+  mv "${DOWNLOAD_INSTALL_DIR%/*}/go" "${DOWNLOAD_INSTALL_DIR}"
+  chmod a+rx "${DOWNLOAD_INSTALL_DIR}/bin/go"*
+fi
+
+
+## Install (sort of)
+echo "INFO[${SCRIPT}]: Installing go-${VERSION} wrappers -> ${DOWNLOAD_INSTALL_LINK_DIR} ..."
+
+# Go binaries
+for bin in go gofmt; do
+  bin_link="${DOWNLOAD_INSTALL_LINK_DIR}/${bin}-${VERSION}"
+  cat > "${bin_link}" <<EOF
+GOROOT='${DOWNLOAD_INSTALL_DIR}'; export GOROOT
+exec '${DOWNLOAD_INSTALL_DIR}/bin/${bin}' "\${@}"
+EOF
+  chmod a+rx "${bin_link}"
+done
+
+# virtualenv-like (de-)activate
+cat > "${DOWNLOAD_INSTALL_DIR}/bin/activate" <<EOF
+if [ "\${BASH_SOURCE-}" = "\${0}" ]; then
+  echo "You must source this script: \\\$ source \${0}" >&2
+  exit 33
+fi
+deactivate() {
+  PATH="\${_OLD_VIRTUAL_PATH}"; export PATH
+  if [ -n "\${_OLD_VIRTUAL_GOROOT}" ]; then
+    GOROOT="\${_OLD_VIRTUAL_GOROOT}"; export GOROOT
+  else
+    unset GOROOT
+  fi
+  PS1="\${_OLD_VIRTUAL_PS1}"; export PS1
+  unset -f deactivate
+  hash -r 2>/dev/null
+}
+_OLD_VIRTUAL_PATH="\${PATH}"
+_OLD_VIRTUAL_GOROOT="\${GOROOT}"
+_OLD_VIRTUAL_PS1="\${PS1-}"
+GOROOT='${DOWNLOAD_INSTALL_DIR}'; export GOROOT
+PATH="\${GOROOT}/bin:\${PATH}"; export PATH
+PS1="\$(echo "\${PS1}" | sed 's|\*|* [go-${VERSION}]|;t;s|/|[go-${VERSION}] /|')"; export PS1
+hash -r 2>/dev/null
+EOF
+
+
+## Done
+echo "INFO[${SCRIPT}]: Done!"
+go-${VERSION} version | head -n 1
