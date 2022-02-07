@@ -79,7 +79,7 @@ _OLD_VIRTUAL_PATH="\${PATH}"
 _OLD_VIRTUAL_GOROOT="\${GOROOT}"
 _OLD_VIRTUAL_PS1="\${PS1-}"
 GOROOT='${DOWNLOAD_INSTALL_DIR}'; export GOROOT
-PATH="\${GOROOT}/bin:\${PATH}"; export PATH
+PATH="\$("\${GOROOT}/bin/go" env GOPATH)/bin:\${GOROOT}/bin:\${PATH}"; export PATH
 PS1="\$(echo "\${PS1}" | sed 's|\*|* [go-${VERSION}]|;t;s|/|[go-${VERSION}] /|')"; export PS1
 hash -r 2>/dev/null
 EOF
