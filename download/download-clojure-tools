@@ -1,0 +1,91 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
+
+## Defaults
+: "${DOWNLOAD_INSTALL_OPT_DIR:=${HOME}/opt}"
+: "${DOWNLOAD_INSTALL_LINK_DIR:=${HOME}/bin}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <version>
+
+SYNOPSIS:
+  Download and install (symlink) the given Clojure Tools version from
+    https://clojure.org/releases/tools
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VERSION="${1}"
+
+
+## Parameters
+DOWNLOAD_URL="https://download.clojure.org/install/clojure-tools-${VERSION}.tar.gz"
+DOWNLOAD_INSTALL_DIR="${DOWNLOAD_INSTALL_OPT_DIR}/clojure-tools/${VERSION}"
+
+
+## Download
+if [ ! -e "${DOWNLOAD_INSTALL_DIR}" ]; then
+  DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+  trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+  echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+  wget -q --show-progress -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+  echo "INFO[${SCRIPT}]: Installing Clojure Tools ${VERSION} -> ${DOWNLOAD_INSTALL_DIR} ..."
+  mkdir -p "${DOWNLOAD_INSTALL_DIR%/*}"
+  tar -C "${DOWNLOAD_INSTALL_DIR%/*}" -xaf "${DOWNLOAD_TMP}"
+  mv "${DOWNLOAD_INSTALL_DIR%/*}/clojure-tools" "${DOWNLOAD_INSTALL_DIR}"
+  # (why the f*** not tarball the proper directory structure in the first place?!...)
+  mkdir -p "${DOWNLOAD_INSTALL_DIR}/libexec"
+  mv "${DOWNLOAD_INSTALL_DIR}/"*.jar "${DOWNLOAD_INSTALL_DIR}/libexec/".
+  mkdir -p "${DOWNLOAD_INSTALL_DIR}/man"
+  mv "${DOWNLOAD_INSTALL_DIR}/"*.1 "${DOWNLOAD_INSTALL_DIR}/man/".
+  mkdir -p "${DOWNLOAD_INSTALL_DIR}/bin"
+  mv "${DOWNLOAD_INSTALL_DIR}/"{clj,clojure} "${DOWNLOAD_INSTALL_DIR}/bin/".
+  # (finalize)
+  sed -i "s|PREFIX|${DOWNLOAD_INSTALL_DIR}|g;s|BINDIR|${DOWNLOAD_INSTALL_DIR}/bin|g" "${DOWNLOAD_INSTALL_DIR}/bin/"{clj,clojure}
+  chmod a+rx "${DOWNLOAD_INSTALL_DIR}/bin/"*
+fi
+
+
+## Install (sort of)
+echo "INFO[${SCRIPT}]: Installing clojure-tools-${VERSION} wrappers -> ${DOWNLOAD_INSTALL_LINK_DIR} ..."
+
+# Clojure binaries
+for bin in clj clojure; do
+  bin_link="${DOWNLOAD_INSTALL_LINK_DIR}/${bin}-${VERSION}"
+  cat > "${bin_link}" <<EOF
+exec '${DOWNLOAD_INSTALL_DIR}/bin/${bin}' "\${@}"
+EOF
+  chmod a+rx "${bin_link}"
+done
+
+# virtualenv-like (de-)activate
+cat > "${DOWNLOAD_INSTALL_DIR}/bin/activate" <<EOF
+if [ "\${BASH_SOURCE-}" = "\${0}" ]; then
+  echo "You must source this script: \\\$ source \${0}" >&2
+  exit 33
+fi
+deactivate() {
+  PATH="\${_OLD_VIRTUAL_PATH}"; export PATH
+  PS1="\${_OLD_VIRTUAL_PS1}"; export PS1
+  unset -f deactivate
+  hash -r 2>/dev/null
+}
+_OLD_VIRTUAL_PATH="\${PATH}"
+_OLD_VIRTUAL_PS1="\${PS1-}"
+PATH="${DOWNLOAD_INSTALL_DIR}/bin:\${PATH}"; export PATH
+PS1="\$(echo "\${PS1}" | sed 's|\*|* [clojure-tools-${VERSION}]|;t;s|/|[clojure-tools-${VERSION}] /|')"; export PS1
+hash -r 2>/dev/null
+EOF
+
+
+## Done
+echo "INFO[${SCRIPT}]: Done!"
+clojure-${VERSION} --version | head -n 1
