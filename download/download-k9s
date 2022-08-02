@@ -1,0 +1,47 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
+
+## Defaults
+: "${DOWNLOAD_INSTALL_BIN_DIR:=${HOME}/bin}"
+: "${DOWNLOAD_INSTALL_LINK_DIR:=${HOME}/bin}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <version>
+
+SYNOPSIS:
+  Download and install (symlink) the given K9s version from
+    https://github.com/derailed/k9s/releases
+EOF
+}
+[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+
+# Arguments
+VERSION="${1}"
+
+
+## Parameters
+DOWNLOAD_URL="https://github.com/derailed/k9s/releases/download/v${VERSION}/k9s_Linux_x86_64.tar.gz"
+DOWNLOAD_INSTALL_BIN="${DOWNLOAD_INSTALL_BIN_DIR}/k9s-${VERSION}"
+DOWNLOAD_INSTALL_LINK="${DOWNLOAD_INSTALL_LINK_DIR}/k9s"
+
+
+## Download
+DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+wget -q -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+echo "INFO[${SCRIPT}]: Installing ${DOWNLOAD_INSTALL_LINK} -> ${DOWNLOAD_INSTALL_BIN} ..."
+tar -O -xaf "${DOWNLOAD_TMP}" k9s > "${DOWNLOAD_INSTALL_BIN}"
+chmod a+rx "${DOWNLOAD_INSTALL_BIN}"
+rm -f "${DOWNLOAD_INSTALL_LINK}"
+ln -rs "${DOWNLOAD_INSTALL_BIN}" "${DOWNLOAD_INSTALL_LINK}"
+
+echo "INFO[${SCRIPT}]: Done!"
+k9s version --short | head -n 1
