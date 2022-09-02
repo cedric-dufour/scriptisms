@@ -51,6 +51,10 @@ screen-split
 ------------
 Easily toggle split (dual) screen output.
 
+ssh-fido2-attestation.py
+------------------------
+Verify the attestation of FIDO2-backed SSH credentials.
+
 xps-index
 ---------
 Extract strings from given XPS file, located within given bounding frame.
