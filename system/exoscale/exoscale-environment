@@ -48,6 +48,7 @@ _S() {
 export EXOSCALE_API_ENDPOINT="$(_S "${KEY}" "${VALUE}" 'URL')"
 export EXOSCALE_API_KEY="$(_S "${KEY}" "${VALUE}" 'UserName')"
 export EXOSCALE_API_SECRET="$(_S "${KEY}" "${VALUE}" 'secret')"
+[ -z "${EXOSCALE_API_KEY}" -o -z "${EXOSCALE_API_SECRET}" ] && echo "WARNING[${SCRIPT}]: Missing/empty EXOSCALE_API_KEY/EXOSCALE_API_SECRET" >&2
 
 # CS library and the likes
 export CLOUDSTACK_ENDPOINT="${EXOSCALE_API_ENDPOINT}"
