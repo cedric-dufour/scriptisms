@@ -7,14 +7,15 @@
 
 # Standard
 import argparse
-import base64
+from base64 import b64decode
 import errno
-import hashlib
-import io
+from hashlib import sha256
+from inspect import getdoc
+from io import BytesIO
 import logging
 import os
 import sys
-import uuid
+from uuid import UUID
 
 # Non-standard
 # (python3-cryptography)
@@ -95,7 +96,7 @@ class SSH_FIDO2_Attestation_PublicKey:
             with open(path, "rb") as public_key_file:
                 # Base64 data
                 public_key_base64 = public_key_file.read().decode().split(" ")[1]
-                public_key_reader = io.BytesIO(base64.b64decode(public_key_base64))
+                public_key_reader = BytesIO(b64decode(public_key_base64))
 
                 # Key type
                 data_length = int.from_bytes(public_key_reader.read(4), "big")
@@ -348,14 +349,14 @@ class SSH_FIDO2_Attestation:
         user_verified: bool,
     ):
         """
-        Verify the SSH FIDO2 authenticator data match expectations
+        Verify the SSH FIDO2 authenticator data
         """
 
         # Application (aka. Relaying Party [RP])
         logger.debug(
             "SSH_FIDO2_Attestation:verifyAuthenticatorData: Verifying application"
         )
-        want_rp_id_hash = hashlib.sha256(application.encode()).digest()
+        want_rp_id_hash = sha256(application.encode()).digest()
         if want_rp_id_hash != self.authenticator_data.rp_id_hash:
             raise SSH_FIDO2_Attestation_Exception(
                 f"SSH_FIDO2_Attestation:verifyAuthenticatorData: Application mismatch (expected: {application})"
@@ -430,7 +431,7 @@ class SSH_FIDO2_Attestation:
         """
 
         # REF: https://support.yubico.com/hc/en-us/articles/360016648959-YubiKey-Hardware-FIDO2-AAGUIDs
-        aaguid = uuid.UUID(bytes=self.authenticator_data.credential_data.aaguid)
+        aaguid = UUID(bytes=self.authenticator_data.credential_data.aaguid)
         authenticator = x509.load_der_x509_certificate(
             self.RAW.attestation_certificate
         ).subject.rfc4514_string()
@@ -446,7 +447,41 @@ class SSH_FIDO2_Attestation:
 
 class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
     """
-    Command-line client
+    SSH FIDO2 attestation (verifier) command-line client
+
+    Example usage:
+
+    # Random challenge (ideally issued by server)
+    dd \\
+      bs=1 count=32 \\
+      if=/dev/random \\
+      of=id_ed25519_sk.challenge
+
+    # Create SSH key
+    ssh-keygen \\
+      -t ed25519-sk \\
+      -O resident \\
+      -O verify-required \\
+      -O application=ssh:bastion \\
+      -O challenge=id_ed25519_sk.challenge \\
+      -O write-attestation=id_ed25519_sk.attestation \\
+      -N '' \\
+      -f id_ed25519_sk
+
+    # Verify SSH key/attestation
+    ssh-fido2-attestation \\
+      id_ed25519_sk.pub \\
+      id_ed25519_sk.challenge \\
+      id_ed25519_sk.attestation \\
+      -a ssh:bastion \\
+      -A YubicoCAs.pem \\
+      --summary
+    # [[output]]
+    #Authenticator: CN=Yubico U2F EE Serial 1449538429,OU=Authenticator Attestation,O=Yubico AB,C=SE (AAGUID: ee882879-721c-4913-9775-3dfcce97072a)
+    #Vendor: CN=Yubico U2F Root CA Serial 457200631
+    #Application: ssh:bastion
+    #User presence (touch): True
+    #User verification (PIN): True
     """
 
     # ------------------------------------------------------------------------------
@@ -472,7 +507,11 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
         """
 
         # Create argument parser
-        self.__argumentParser = argparse.ArgumentParser(sys.argv[0].split(os.sep)[-1])
+        self.__argumentParser = argparse.ArgumentParser(
+            prog=sys.argv[0].split(os.sep)[-1],
+            epilog=getdoc(self),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
 
         # (public key)
         self.__argumentParser.add_argument(
@@ -559,6 +598,7 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
     # METHODS
     # ------------------------------------------------------------------------------
 
+    #
     # Helpers
     #
 
