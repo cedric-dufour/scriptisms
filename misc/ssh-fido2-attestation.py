@@ -14,14 +14,20 @@ import io
 import logging
 import os
 import sys
+import uuid
 
 # Non-standard
 # (python3-cryptography)
 from cryptography import x509
+from cryptography.hazmat.primitives.serialization import Encoding
 # (python3-fido2)
 from fido2 import cbor, cose
 from fido2.ctap2 import AuthenticatorData
-from fido2.attestation import PackedAttestation
+from fido2.attestation import (
+    InvalidSignature,
+    PackedAttestation,
+    verify_x509_chain,
+)
 
 
 ## Logging
@@ -83,7 +89,7 @@ class SSH_FIDO2_Attestation_PublicKey:
 
         try:
             logger.debug(
-                f"SSH_FIDO2_Attestation_PublicKey:loadFromFile: Loading/parsing attestation from file ({path}) ..."
+                f"SSH_FIDO2_Attestation_PublicKey:loadFromFile: Loading/parsing attestation from file ({path})"
             )
             with open(path, "rb") as public_key_file:
                 # Base64 data
@@ -195,9 +201,10 @@ class SSH_FIDO2_Attestation:
         Load/parse the raw SSH FIDO2 attestation data from the given file path
         """
 
+        # REF: https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.u2f
         try:
             logger.debug(
-                f"SSH_FIDO2_Attestation:loadFromFile: Loading/parsing attestation from file ({path}) ..."
+                f"SSH_FIDO2_Attestation:loadFromFile: Loading/parsing attestation from file ({path})"
             )
             with open(path, "rb") as attestation_file:
                 # Magic ID
@@ -258,7 +265,7 @@ class SSH_FIDO2_Attestation:
 
         try:
             logger.debug(
-                "SSH_FIDO2_Attestation:_decodeFromRaw: Decoding raw attestation data ..."
+                "SSH_FIDO2_Attestation:_decodeFromRaw: Decoding raw attestation data"
             )
 
             # Magic ID
@@ -282,50 +289,18 @@ class SSH_FIDO2_Attestation:
         self.magic = magic
         self.authenticator_data = authenticator_data
 
-    def verify(
+    def verifyAttestation(
         self,
-        application: str,
         challenge: bytes,
-        public_key: SSH_FIDO2_Attestation_PublicKey,
-        user_present: bool,
-        user_verified: bool,
+        authorities: list,
     ):
         """
-        Verify the SSH FIDO2 attestation data match expectations
+        Verify the SSH FIDO2 attestation
         """
-
-        # Application (aka. Relaying Party [RP])
-        logger.debug("SSH_FIDO2_Attestation:verify: Verifying application ...")
-        want_rp_id_hash = hashlib.sha256(application.encode()).digest()
-        if want_rp_id_hash != self.authenticator_data.rp_id_hash:
-            raise SSH_FIDO2_Attestation_Exception(
-                f"SSH_FIDO2_Attestation:verify: Application mismatch (expected: {application})"
-            )
-
-        # Flags
-        logger.debug("SSH_FIDO2_Attestation:verify: Verifying flags ...")
-
-        # (attested)
-        if not self.authenticator_data.is_attested():
-            raise SSH_FIDO2_Attestation_Exception(
-                "SSH_FIDO2_Attestation:verify: Authenticator does not attest credential data"
-            )
-
-        # (user present)
-        if user_present and not self.authenticator_data.is_user_present():
-            raise SSH_FIDO2_Attestation_Exception(
-                "SSH_FIDO2_Attestation:verify: Authenticator does not require user presence (touch)"
-            )
-
-        # (user verified, aka. PIN)
-        if user_verified and not self.authenticator_data.is_user_verified():
-            raise SSH_FIDO2_Attestation_Exception(
-                "SSH_FIDO2_Attestation:verify: Authenticator does not require user verification (PIN)"
-            )
 
         # Signature
         logger.debug(
-            "SSH_FIDO2_Attestation:verify: Verifying attestation signature ..."
+            "SSH_FIDO2_Attestation:verifyAttestation: Verifying attestation signature"
         )
         attestation = PackedAttestation()
         statement = {
@@ -339,55 +314,127 @@ class SSH_FIDO2_Attestation:
             self.authenticator_data,
             client_data_hash,
         )
+
+        # Authority
+        if authorities is not None:
+            logger.debug(
+                "SSH_FIDO2_Attestation:verifyAttestation: Verifying attestation authority"
+            )
+            if len(authorities) == 0:
+                raise SSH_FIDO2_Attestation_Exception(
+                    f"SSH_FIDO2_Attestation:verifyAttestation: Empty authorities list"
+                )
+            authority_verified = False
+            for authority in authorities:
+                try:
+                    verify_x509_chain(attestation_result.trust_path + [authority])
+                    authority_verified = True
+                    break
+                except InvalidSignature:
+                    continue
+            if not authority_verified:
+                raise SSH_FIDO2_Attestation_Exception(
+                    f"SSH_FIDO2_Attestation:verifyAttestation: No authority matches the attestation's"
+                )
+
+        # Done
         self.attestation_result = attestation_result
+
+    def verifyAuthenticatorData(
+        self,
+        application: str,
+        user_present: bool,
+        user_verified: bool,
+    ):
+        """
+        Verify the SSH FIDO2 authenticator data match expectations
+        """
+
+        # Application (aka. Relaying Party [RP])
+        logger.debug("SSH_FIDO2_Attestation:verifyAuthenticatorData: Verifying application")
+        want_rp_id_hash = hashlib.sha256(application.encode()).digest()
+        if want_rp_id_hash != self.authenticator_data.rp_id_hash:
+            raise SSH_FIDO2_Attestation_Exception(
+                f"SSH_FIDO2_Attestation:verifyAuthenticatorData: Application mismatch (expected: {application})"
+            )
+
+        # Flags
+        logger.debug("SSH_FIDO2_Attestation:verifyAuthenticatorData: Verifying flags")
+
+        # (attested)
+        if not self.authenticator_data.is_attested():
+            raise SSH_FIDO2_Attestation_Exception(
+                "SSH_FIDO2_Attestation:verifyAuthenticatorData: Authenticator does not attest credential data"
+            )
+
+        # (user present)
+        if user_present and not self.authenticator_data.is_user_present():
+            raise SSH_FIDO2_Attestation_Exception(
+                "SSH_FIDO2_Attestation:verifyAuthenticatorData: Authenticator does not require user presence (touch)"
+            )
+
+        # (user verified, aka. PIN)
+        if user_verified and not self.authenticator_data.is_user_verified():
+            raise SSH_FIDO2_Attestation_Exception(
+                "SSH_FIDO2_Attestation:verifyAuthenticatorData: Authenticator does not require user verification (PIN)"
+            )
+
+    def verifyCredentialData(
+        self,
+        public_key: SSH_FIDO2_Attestation_PublicKey,
+    ):
+        """
+        Verify the SSH FIDO2 attested credential data (public key)
+        """
 
         # Public key
         logger.debug(
-            "SSH_FIDO2_Attestation:verify: Verifying credential data (public key) ..."
+            "SSH_FIDO2_Attestation:verifyCredentialData: Verifying credential data (public key)"
         )
-        if public_key is not None:
-            algorithm = self.authenticator_data.credential_data.public_key[3]
-            if algorithm == cose.EdDSA.ALGORITHM:
+        algorithm = self.authenticator_data.credential_data.public_key[3]
+        if algorithm == cose.EdDSA.ALGORITHM:
 
-                if (
-                    public_key.type not in ("sk-ssh-ed25519@openssh.com")
-                    or self.authenticator_data.credential_data.public_key[-2]
-                    != public_key.components["key"]
-                ):
-                    raise SSH_FIDO2_Attestation_Exception(
-                        "SSH_FIDO2_Attestation:verify: Public key mismatch (EdDSA)"
-                    )
-
-            elif algorithm == cose.ES256.ALGORITHM:
-
-                if (
-                    public_key.type not in ("sk-ecdsa-sha2-nistp256@openssh.com")
-                    or self.authenticator_data.credential_data.public_key[-2]
-                    != public_key.components["key_x"]
-                    or self.authenticator_data.credential_data.public_key[-3]
-                    != public_key.components["key_y"]
-                ):
-                    raise SSH_FIDO2_Attestation_Exception(
-                        "SSH_FIDO2_Attestation:verify: Public key mismatch (ES256)"
-                    )
-
-            else:
+            if (
+                public_key.type not in ("sk-ssh-ed25519@openssh.com")
+                or self.authenticator_data.credential_data.public_key[-2]
+                != public_key.components["key"]
+            ):
                 raise SSH_FIDO2_Attestation_Exception(
-                    f"SSH_FIDO2_Attestation:verify: Unsupported public key algorithm ({algorithm})"
+                    "SSH_FIDO2_Attestation:verifyCredentialData: Public key mismatch (EdDSA)"
                 )
+
+        elif algorithm == cose.ES256.ALGORITHM:
+
+            if (
+                public_key.type not in ("sk-ecdsa-sha2-nistp256@openssh.com")
+                or self.authenticator_data.credential_data.public_key[-2]
+                != public_key.components["key_x"]
+                or self.authenticator_data.credential_data.public_key[-3]
+                != public_key.components["key_y"]
+            ):
+                raise SSH_FIDO2_Attestation_Exception(
+                    "SSH_FIDO2_Attestation:verifyCredentialData: Public key mismatch (ES256)"
+                )
+
+        else:
+            raise SSH_FIDO2_Attestation_Exception(
+                f"SSH_FIDO2_Attestation:verifyCredentialData: Unsupported public key algorithm ({algorithm})"
+            )
 
     def summary(self, application: str):
         """
         Print a summary of the SSH FIDO2 attestation data
         """
 
+        # REF: https://support.yubico.com/hc/en-us/articles/360016648959-YubiKey-Hardware-FIDO2-AAGUIDs
+        aaguid = uuid.UUID(bytes=self.authenticator_data.credential_data.aaguid)
         authenticator = x509.load_der_x509_certificate(
             self.RAW.attestation_certificate
         ).subject.rfc4514_string()
         vendor = x509.load_der_x509_certificate(
             self.RAW.attestation_certificate
         ).issuer.rfc4514_string()
-        print(f"Authenticator: {authenticator}")
+        print(f"Authenticator: {authenticator} (AAGUID: {aaguid})")
         print(f"Vendor: {vendor}")
         print(f"Application: {application}")
         print(f"User presence (touch): {self.authenticator_data.is_user_present()}")
@@ -454,6 +501,15 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
             help="Application (default: 'ssh:')",
         )
 
+        # (authorities)
+        self.__argumentParser.add_argument(
+            "-A",
+            "--authorities",
+            type=str,
+            default=None,
+            help="Authorities (PEM) bundle file (default: none)",
+        )
+
         # (no user presence)
         self.__argumentParser.add_argument(
             "--no-user-present",
@@ -498,6 +554,47 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
     # METHODS
     # ------------------------------------------------------------------------------
 
+    # Helpers
+    #
+
+    def __loadChallengeFromFile(self, path:str):
+        try:
+            with open(path, "rb") as challenge_file:
+                return challenge_file.read(32)
+        except Exception as e:
+            raise SSH_FIDO2_Attestation_Exception(
+                f"SSH_FIDO2_Attestation:__loadChallengeFromFile: Failed to load challenge data ({path}); {str(e)}"
+            )
+
+    def __loadAuthoritiesFromFile(self, path:str):
+        authorities = []
+        try:
+            with open(self.__arguments.authorities, "r") as authorities_file:
+                pem = None
+                for line in authorities_file:
+                    if "-----BEGIN CERTIFICATE-----" in line:
+                        pem = line
+                    elif "-----END CERTIFICATE-----" in line:
+                        if pem is None:
+                            raise RuntimeError("Invalid PEM data")
+                        pem += line
+                        cert = x509.load_pem_x509_certificate(pem.encode())
+                        authorities.append(cert.public_bytes(Encoding.DER))
+                        pem = None
+                    else:
+                        if pem is not None:
+                            pem += line
+        except Exception as e:
+            raise SSH_FIDO2_Attestation_Exception(
+                f"SSH_FIDO2_Attestation:__loadAuthoritiesFromFile: Failed to load authorities certificates ({self.__arguments.authorities}); {str(e)}"
+            )
+
+        return authorities
+
+    #
+    # Entrypoint
+    #
+
     def execute(self):
         # Initialize
 
@@ -518,26 +615,24 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
         public_key.loadFromFile(self.__arguments.public_key)
 
         # Load challenge data
-        challenge = None
-        try:
-            with open(self.__arguments.challenge, "rb") as challenge_file:
-                challenge = challenge_file.read(32)
-        except Exception as e:
-            raise SSH_FIDO2_Attestation_Exception(
-                f"SSH_FIDO2_Attestation:execute: Failed to load challenge data ({self.__arguments.challenge}); {str(e)}"
-            )
+        challenge = self.__loadChallengeFromFile(self.__arguments.challenge)
 
         # Load attestation data
         self.loadFromFile(self.__arguments.attestation)
 
+        # Load authorities
+        authorities = None
+        if self.__arguments.authorities is not None:
+            authorities = self.__loadAuthoritiesFromFile(self.__arguments.authorities)
+
         # Verify attestation data
-        self.verify(
+        self.verifyAttestation(challenge, authorities)
+        self.verifyAuthenticatorData(
             self.__arguments.application,
-            challenge,
-            public_key,
             not self.__arguments.no_user_present,
             not self.__arguments.no_user_verified,
         )
+        self.verifyCredentialData(public_key)
 
         # Summary (?)
         if self.__arguments.summary:
@@ -557,7 +652,7 @@ if __name__ == "__main__":
         logger.setLevel(logging.INFO)
         sys.exit(SSH_FIDO2_Attestation_CLI().execute())
     except SSH_FIDO2_Attestation_Exception as e:
-        logger.error(f"Failed to execute command; {str(e)}")
+        logger.error(f"{str(e)}")
         sys.exit(errno.EINVAL)
     except KeyboardInterrupt:
         sys.exit(-2)
