@@ -370,7 +370,7 @@ class SSH_FIDO2_Attestation:
                 "SSH_FIDO2_Attestation:verifyAuthenticatorData: Authenticator does not attest credential data"
             )
 
-        # (user present)
+        # (user present, aka. touch)
         if user_present and not self.authenticator_data.is_user_present():
             raise SSH_FIDO2_Attestation_Exception(
                 "SSH_FIDO2_Attestation:verifyAuthenticatorData: Authenticator does not require user presence (touch)"
@@ -518,7 +518,7 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
             "--no-user-present",
             action="store_true",
             default=False,
-            help="Do not require user presence (UP)",
+            help="Do not require user presence (UP), aka. touch",
         )
 
         # (no user verified)
@@ -591,7 +591,7 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
                             pem += line
         except Exception as e:
             raise SSH_FIDO2_Attestation_Exception(
-                f"SSH_FIDO2_Attestation:__loadAuthoritiesFromFile: Failed to load authorities certificates ({self.__arguments.authorities}); {str(e)}"
+                f"SSH_FIDO2_Attestation:__loadAuthoritiesFromFile: Failed to load authorities certificates ({path}); {str(e)}"
             )
 
         return authorities
