@@ -20,6 +20,7 @@ import uuid
 # (python3-cryptography)
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
+
 # (python3-fido2)
 from fido2 import cbor, cose
 from fido2.ctap2 import AuthenticatorData
@@ -38,7 +39,7 @@ logger = logging.getLogger("ssh-fido2-attestation")
 # CONSTANTS
 # ------------------------------------------------------------------------------
 
-SSH_FIDO2_ATTESTATION_VERSION = "0.0.20220902"
+SSH_FIDO2_ATTESTATION_VERSION = "0.0.20220905"
 
 
 # ------------------------------------------------------------------------------
@@ -322,7 +323,7 @@ class SSH_FIDO2_Attestation:
             )
             if len(authorities) == 0:
                 raise SSH_FIDO2_Attestation_Exception(
-                    f"SSH_FIDO2_Attestation:verifyAttestation: Empty authorities list"
+                    "SSH_FIDO2_Attestation:verifyAttestation: Empty authorities list"
                 )
             authority_verified = False
             for authority in authorities:
@@ -334,7 +335,7 @@ class SSH_FIDO2_Attestation:
                     continue
             if not authority_verified:
                 raise SSH_FIDO2_Attestation_Exception(
-                    f"SSH_FIDO2_Attestation:verifyAttestation: No authority matches the attestation's"
+                    "SSH_FIDO2_Attestation:verifyAttestation: No authority matches the attestation's"
                 )
 
         # Done
@@ -351,7 +352,9 @@ class SSH_FIDO2_Attestation:
         """
 
         # Application (aka. Relaying Party [RP])
-        logger.debug("SSH_FIDO2_Attestation:verifyAuthenticatorData: Verifying application")
+        logger.debug(
+            "SSH_FIDO2_Attestation:verifyAuthenticatorData: Verifying application"
+        )
         want_rp_id_hash = hashlib.sha256(application.encode()).digest()
         if want_rp_id_hash != self.authenticator_data.rp_id_hash:
             raise SSH_FIDO2_Attestation_Exception(
@@ -547,7 +550,9 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
             "-v",
             "--version",
             action="version",
-            version=(f"ssh-fido2-attestation - {SSH_FIDO2_ATTESTATION_VERSION} - http://cedric.dufour.name\n"),
+            version=(
+                f"ssh-fido2-attestation - {SSH_FIDO2_ATTESTATION_VERSION} - http://cedric.dufour.name\n"
+            ),
         )
 
     # ------------------------------------------------------------------------------
@@ -557,7 +562,7 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
     # Helpers
     #
 
-    def __loadChallengeFromFile(self, path:str):
+    def __loadChallengeFromFile(self, path: str):
         try:
             with open(path, "rb") as challenge_file:
                 return challenge_file.read(32)
@@ -566,7 +571,7 @@ class SSH_FIDO2_Attestation_CLI(SSH_FIDO2_Attestation):
                 f"SSH_FIDO2_Attestation:__loadChallengeFromFile: Failed to load challenge data ({path}); {str(e)}"
             )
 
-    def __loadAuthoritiesFromFile(self, path:str):
+    def __loadAuthoritiesFromFile(self, path: str):
         authorities = []
         try:
             with open(self.__arguments.authorities, "r") as authorities_file:
