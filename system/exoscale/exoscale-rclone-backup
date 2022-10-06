@@ -1,7 +1,7 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 set -e -o pipefail
 SCRIPT="${0##*/}"
-# shellcheck disable=SC2034
 SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
 trap 'echo "ERROR[${SCRIPT}]: Internal error (${EXOSCALE_BACKUP_fullname:-n/a})" >&2' ERR
 

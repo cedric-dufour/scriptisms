@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 set -e -o pipefail
 SCRIPT="${0##*/}"
 SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
@@ -18,7 +19,7 @@ SYNOPSIS:
     https://go.dev/dl/
 EOF
 }
-[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+{ [ $# -lt 1 ] || [ "${1##*-}" == 'help' ]; } && __USAGE && exit 1
 
 # Arguments
 VERSION="${1}"
@@ -32,6 +33,7 @@ DOWNLOAD_INSTALL_DIR="${DOWNLOAD_INSTALL_OPT_DIR}/go/${VERSION}"
 ## Download
 if [ ! -e "${DOWNLOAD_INSTALL_DIR}" ]; then
   DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+  # shellcheck disable=SC2064
   trap "rm -f '${DOWNLOAD_TMP}'" EXIT
 
   echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
@@ -87,4 +89,4 @@ EOF
 
 ## Done
 echo "INFO[${SCRIPT}]: Done!"
-go-${VERSION} version | head -n 1
+"go-${VERSION}" version | head -n 1

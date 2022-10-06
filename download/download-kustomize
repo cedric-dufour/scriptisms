@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 set -e -o pipefail
 SCRIPT="${0##*/}"
 SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
@@ -15,10 +16,10 @@ USAGE: "${SCRIPT} <version>
 
 SYNOPSIS:
   Download and install (symlink) the given Kustomize version from
-    https://github.com/kubernetes-sigs/kustomize/releases
+    https://github.com/kubernetes-sigs/kustomize/releases/
 EOF
 }
-[ $# -lt 1 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+{ [ $# -lt 1 ] || [ "${1##*-}" == 'help' ]; } && __USAGE && exit 1
 
 # Arguments
 VERSION="${1}"
@@ -32,6 +33,7 @@ DOWNLOAD_INSTALL_LINK="${DOWNLOAD_INSTALL_LINK_DIR}/kustomize"
 
 ## Download
 DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+# shellcheck disable=SC2064
 trap "rm -f '${DOWNLOAD_TMP}'" EXIT
 
 echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."

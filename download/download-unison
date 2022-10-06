@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 set -e -o pipefail
 SCRIPT="${0##*/}"
 SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
@@ -15,10 +16,10 @@ USAGE: "${SCRIPT} <version> <version:ocaml>
 
 SYNOPSIS:
   Download and install (symlink) the given Unison version from
-    https://github.com/bcpierce00/unison/releases
+    https://github.com/bcpierce00/unison/releases/
 EOF
 }
-[ $# -lt 2 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+{ [ $# -lt 2 ] || [ "${1##*-}" == 'help' ]; } && __USAGE && exit 1
 
 # Arguments
 VERSION="${1}"
@@ -33,6 +34,7 @@ DOWNLOAD_INSTALL_LINK="${DOWNLOAD_INSTALL_LINK_DIR}/unison"
 
 ## Download
 DOWNLOAD_TMP="$(mktemp --suffix=.tar.gz)"
+# shellcheck disable=SC2064
 trap "rm -f '${DOWNLOAD_TMP}'" EXIT
 
 echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."

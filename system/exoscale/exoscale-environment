@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 SCRIPT="${0##*/}"
 SCRIPT_DIR="$(dirname "$(readlink -e "${0}")")"
 
@@ -20,7 +21,7 @@ REFs:
   - https://avaldes.co/2020/01/28/secret-service-keepassxc.html
 EOF
 }
-[ $# -lt 2 -o "${1##*-}" == 'help' ] && __USAGE && exit 1
+{ [ $# -lt 2 ] || [ "${1##*-}" == 'help' ]; } && __USAGE && exit 1
 
 # Arguments
 VALUE_KEY="${1}"; shift
@@ -45,10 +46,10 @@ _S() {
 ## Environment
 
 # Exoscale-native
-export EXOSCALE_API_ENDPOINT="$(_S "${KEY}" "${VALUE}" 'URL')"
-export EXOSCALE_API_KEY="$(_S "${KEY}" "${VALUE}" 'UserName')"
-export EXOSCALE_API_SECRET="$(_S "${KEY}" "${VALUE}" 'secret')"
-[ -z "${EXOSCALE_API_KEY}" -o -z "${EXOSCALE_API_SECRET}" ] && echo "WARNING[${SCRIPT}]: Missing/empty EXOSCALE_API_KEY/EXOSCALE_API_SECRET" >&2
+EXOSCALE_API_ENDPOINT="$(_S "${KEY}" "${VALUE}" 'URL')"; export EXOSCALE_API_ENDPOINT
+EXOSCALE_API_KEY="$(_S "${KEY}" "${VALUE}" 'UserName')"; export EXOSCALE_API_KEY
+EXOSCALE_API_SECRET="$(_S "${KEY}" "${VALUE}" 'secret')"; export EXOSCALE_API_SECRET
+{ [ -z "${EXOSCALE_API_KEY}" ] || [ -z "${EXOSCALE_API_SECRET}" ]; } && echo "WARNING[${SCRIPT}]: Missing/empty EXOSCALE_API_KEY/EXOSCALE_API_SECRET" >&2
 
 # CS library and the likes
 export CLOUDSTACK_ENDPOINT="${EXOSCALE_API_ENDPOINT}"
