@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/openssl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20221006a'
+VERSION='1.0.20221006b'
 umask 077
 shopt -s extglob
 
@@ -71,6 +71,9 @@ if [ ${BASH_LINENO[0]} -ne 0 ]; then
   esac
   return 0
 fi
+
+## OpenSSL variant/version
+read -r OPENSSL_VARIANT OPENSSL_VERSION _ < <(openssl version)
 
 
 ## Usage
@@ -238,7 +241,7 @@ while [ -n "${1}" ]; do
       ;;
 
     'version'|'+version'|'--version')
-      echo "${SCRIPT} ${VERSION}" && exit 0
+      echo "${SCRIPT} ${VERSION} (${OPENSSL_VARIANT} ${OPENSSL_VERSION})" && exit 0
       ;;
 
     'help'|'+help'|'--help')
@@ -363,6 +366,20 @@ function _openssl_conf_quirks() {
   [ -z "${OPENSSL_DN_ORGANIZATIONALUNIT}" ] && sed -i'' -e 's/^\(\(organizationalUnitName\|OU\)[^a-z]*ENV::OPENSSL_DN_ORGANIZATIONALUNIT\)/#\1/i' "${TMP_CONF}"
   [ -z "${OPENSSL_DN_TITLE}" ] && sed -i'' -e 's/^\(title[^a-z]*ENV::OPENSSL_DN_TITLE\)/#\1/i' "${TMP_CONF}"
   [ -z "${OPENSSL_EXT_SAN}" ] && sed -i'' -e 's/^\(subjectAltName[^a-z]*ENV::OPENSSL_EXT_SAN\)/#\1/i;s/,[^a-z]*ENV::OPENSSL_EXT_SAN[^,a-z]*//ig' "${TMP_CONF}"
+
+  # LibreSSL does not use environment for ENV::** variables
+  if [ "${OPENSSL_VARIANT}" == 'LibreSSL' ]; then
+    for openssl_env in \
+      OPENSSL_DN_COMMONNAME \
+      OPENSSL_DN_EMAILADDRESS \
+      OPENSSL_DN_ORGANIZATIONALUNIT \
+      OPENSSL_DN_TITLE \
+      OPENSSL_EXT_SAN \
+    ; do
+      [ -n "${!openssl_env}" ] && sed -i'' -e "s|\\\${ENV::${openssl_env}}|\"${!openssl_env}\"|ig" "${TMP_CONF}"
+    done
+  fi
+
   export OPENSSL_CONF="${TMP_CONF}"
 }
 
