@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/openssl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20221006b'
+VERSION='1.0.20221010a'
 umask 077
 shopt -s extglob
 
@@ -396,7 +396,7 @@ function _file_key() {
   else
     FILE_KEY="${OPENSSL_DIR_KEYS}/${OPT_ID}-key-${DFLT_DATE}.pem"
     if [ ! -e "${FILE_KEY}" ]; then
-      FILE_KEY="$(find "${OPENSSL_DIR_KEYS}" -type f -regex ".*/${OPT_ID//./\\.}-key-[0-9]+\.pem" | sort -V | tail -n -1)"
+      FILE_KEY="$(find "${OPENSSL_DIR_KEYS}" -type f -regex ".*/${OPT_ID//./\\.}-key-[0-9][0-9]*\.pem" | sort -V | tail -n -1)"
       [ -n "${FILE_KEY}" ] && _NOTICE "Unmatched/unspecified private key date; picked latest available date ($(_file_date "${FILE_KEY}"))" >&2
     fi
   fi
@@ -411,7 +411,7 @@ function _file_pub() {
   else
     FILE_PUB="${OPENSSL_DIR_PUBS}/${OPT_ID}-pub-${DFLT_DATE}.pem"
     if [ ! -e "${FILE_PUB}" ]; then
-      FILE_PUB="$(find "${OPENSSL_DIR_PUBS}" -type f -regex ".*/${OPT_ID//./\\.}-pub-[0-9]+\.pem" | sort -V | tail -n -1)"
+      FILE_PUB="$(find "${OPENSSL_DIR_PUBS}" -type f -regex ".*/${OPT_ID//./\\.}-pub-[0-9][0-9]*\.pem" | sort -V | tail -n -1)"
       [ -n "${FILE_PUB}" ] && _NOTICE "Unmatched/unspecified public key date; picked latest available date ($(_file_date "${FILE_PUB}"))" >&2
     fi
   fi
@@ -426,7 +426,7 @@ function _file_req() {
   else
     FILE_REQ="${OPENSSL_DIR_REQS}/${OPT_ID}-req-${DFLT_DATE}.pem"
     if [ ! -e "${FILE_REQ}" ]; then
-      FILE_REQ="$(find "${OPENSSL_DIR_REQS}" -type f -regex ".*/${OPT_ID//./\\.}-req-[0-9]+\.pem" | sort -V | tail -n -1)"
+      FILE_REQ="$(find "${OPENSSL_DIR_REQS}" -type f -regex ".*/${OPT_ID//./\\.}-req-[0-9][0-9]*\.pem" | sort -V | tail -n -1)"
       [ -n "${FILE_REQ}" ] && _NOTICE "Unmatched/unspecified CSR date; picked latest available date ($(_file_date "${FILE_REQ}"))" >&2
     fi
   fi
@@ -441,7 +441,7 @@ function _file_cert() {
   else
     FILE_CERT="${OPENSSL_DIR_CERTS}/${OPT_ID}-cert-${DFLT_DATE}.pem"
     if [ ! -e "${FILE_CERT}" ]; then
-      FILE_CERT="$(find "${OPENSSL_DIR_CERTS}" -type l -regex ".*/${OPT_ID//./\\.}-cert-[0-9]+\.pem" | sort -V | tail -n -1)"
+      FILE_CERT="$(find "${OPENSSL_DIR_CERTS}" -type l -regex ".*/${OPT_ID//./\\.}-cert-[0-9][0-9]*\.pem" | sort -V | tail -n -1)"
       [ -n "${FILE_CERT}" ] && _NOTICE "Unmatched/unspecified certificate date; picked latest available date ($(_file_date "${FILE_CERT}"))" >&2
     fi
   fi
@@ -455,7 +455,7 @@ function _file_crl() {
   else
     FILE_CRL="${OPENSSL_DIR_CRLS}/crl-${DFLT_DATE}.pem"
     if [ ! -e "${FILE_CRL}" ]; then
-      FILE_CRL="$(find "${OPENSSL_DIR_CRLS}" -type f -regex ".*/crl-[0-9]+\.pem" | sort -V | tail -n -1)"
+      FILE_CRL="$(find "${OPENSSL_DIR_CRLS}" -type f -regex ".*/crl-[0-9][0-9]*\.pem" | sort -V | tail -n -1)"
       [ -n "${FILE_CRL}" ] && _NOTICE "Unmatched/unspecified CRL date; picked latest available date ($(_file_date "${FILE_CRL}"))" >&2
     fi
   fi
