@@ -1,4 +1,5 @@
 #!/bin/bash
+SCRIPT="${0##*/}"
 
 # Command-line
 [ $# -lt 1 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
@@ -39,6 +40,9 @@ OPTIONS:
   -O, --chown-dir <chown-stanza>
       Destination directories owner
 
+  -f, --flags
+      Flags to pass to the underlying markdown processor
+
   --force
       (Re-)generate the *.html file even if it already exists
       (do NOT use this option with multiple "threads")
@@ -59,6 +63,7 @@ CHOWN_DIR=
 FORCE=
 SRC_DIR=
 DST_DIR=
+FLAGS=
 while [ -n "${1}" ]; do
   case "${1}" in
     '-c'|'--copy')  
@@ -90,6 +95,10 @@ while [ -n "${1}" ]; do
       [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1   
       shift; CHOWN_DIR="${1}"
       ;;
+    '-f'|'--flags')
+      [ -z "${2}" ] && echo "ERROR: Missing option argument (${1})" >&2 && exit 1
+      shift; FLAGS="${1}"
+      ;;
     '--force')  
       FORCE='yes'
       ;;
@@ -104,25 +113,25 @@ while [ -n "${1}" ]; do
 done
 
 # Check dependencies (and format support)
-[ -z "$(which markdown)" ] && echo "ERROR[$$]: 'markdown' cannot be found" >&2 && exit 1
+[ -z "$(which markdown)" ] && echo "ERROR[${SCRIPT}($$)]: 'markdown' cannot be found" >&2 && exit 1
 
 # Check directories and files
 SRC_DIR=${SRC_DIR%%/}
 DST_DIR=${DST_DIR%%/}
 [ -n "${INPLACE}" -a -z "${DST_DIR}" ] && DST_DIR="${SRC_DIR}"
-[ -n "${TEMPLATE}" -a ! -r "${TEMPLATE}" ] && echo "ERROR[$$]: Invalid/unreadable template file (${TEMPLATE})" >&2 && exit 1
-[ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid/missing source directory (${SRC_DIR})" >&2 && exit 1
-[ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unreadable source directory (${SRC_DIR})" >&2 && exit 1
-[ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid/missing destination directory (${DST_DIR})" >&2 && exit 1
-[ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unwritable destination directory (${DST_DIR})" >&2 && exit 1
+[ -n "${TEMPLATE}" -a ! -r "${TEMPLATE}" ] && echo "ERROR[${SCRIPT}($$)]: Invalid/unreadable template file (${TEMPLATE})" >&2 && exit 1
+[ ! -d "${SRC_DIR}" ] && echo "ERROR[${SCRIPT}($$)]: Invalid/missing source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -r "${SRC_DIR}" ] && echo "ERROR[${SCRIPT}($$)]: Unreadable source directory (${SRC_DIR})" >&2 && exit 1
+[ ! -d "${DST_DIR}" ] && echo "ERROR[${SCRIPT}($$)]: Invalid/missing destination directory (${DST_DIR})" >&2 && exit 1
+[ ! -w "${DST_DIR}" ] && echo "ERROR[${SCRIPT}($$)]: Unwritable destination directory (${DST_DIR})" >&2 && exit 1
 
 # Lock function
 DST_LOCK="${DST_DIR}/.${0##*/}.lock"
 function atomic_begin {
   n=100; while true; do # loop for ~5 seconds (100 x 0.05 seconds in average)
     n=$(( ${n}-1 ))
-    [ ${n} -le 0 ] && echo "ERROR[$$]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
-    [ $(( ${n} % 10 )) -eq 0 ] && echo "WARNING[$$]: Waiting for lock (${DST_LOCK})" >&2
+    [ ${n} -le 0 ] && echo "ERROR[${SCRIPT}($$)]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
+    [ $(( ${n} % 10 )) -eq 0 ] && echo "WARNING[${SCRIPT}($$)]: Waiting for lock (${DST_LOCK})" >&2
     if ( set -o noclobber; echo -n > "${DST_LOCK}" ) 2>/dev/null; then
       break
     fi
@@ -134,10 +143,10 @@ function atomic_end {
 }
 
 # Trap signals
-trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}" "${p_dst_copy}"; exit 2' INT TERM
+trap 'echo "INTERRUPT[${SCRIPT}($$)]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}" "${p_dst_copy}"; exit 2' INT TERM
 
 # Loop through files
-echo "INFO[$$]: Looking for files to synchronize..."
+echo "INFO[${SCRIPT}($$)]: Looking for files to synchronize..."
 IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' ${NOSUB:+-maxdepth 1} \( -type f -o -type l \) -not -path '*/.git/*' ${INPLACE:+-name '*.md'}" | sort); do
   # Compute source parameters
   d_src="$(dirname ${p_src})"
@@ -167,8 +176,8 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' ${NOSUB:+-maxdepth 1} \( -type
     [ -n "${CHMOD_DIR}" ] && chmod ${CHMOD_DIR} "${d_dst}"
     [ -n "${CHOWN_DIR}" ] && chown ${CHOWN_DIR} "${d_dst}"
   fi
-  [ ! -d "${d_dst}" ] && echo "WARNING[$$]: Failed to create destination directory (${d_dst}); skipping..." >&2 && atomic_end && continue
-  [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}): skipping..." >&2 && atomic_end && continue
+  [ ! -d "${d_dst}" ] && echo "WARNING[${SCRIPT}($$)]: Failed to create destination directory (${d_dst}); skipping..." >&2 && atomic_end && continue
+  [ ! -w "${d_dst}" ] && echo "WARNING[${SCRIPT}($$)]: Unable to write to destination directory (${d_dst}): skipping..." >&2 && atomic_end && continue
   touch "${p_dst}"
   atomic_end
 
@@ -182,7 +191,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' ${NOSUB:+-maxdepth 1} \( -type
   fi
 
   # Synchronize
-  echo "INFO[$$]: ${p_src} -> ${p_dst}"
+  echo "INFO[${SCRIPT}($$)]: ${p_src} -> ${p_dst}"
   # ... markdown
   if [ "${p_src##*.}" == 'md' ]; then
     if [ -z "${TEMPLATE}" ]; then
@@ -191,7 +200,7 @@ IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' ${NOSUB:+-maxdepth 1} \( -type
 <HTML>
 <BODY>
 EOF
-      markdown "${p_src}" \
+      markdown ${FLAGS:+-f"${FLAGS}"} "${p_src}" \
       | sed 's,href="\([^:"]*/[^"]*\|[^/"]*\).md",href="\1.html",gi' \
       >> "${p_dst}"
       cat >> "${p_dst}" << EOF
@@ -199,7 +208,7 @@ EOF
 </HTML>
 EOF
     else
-      markdown "${p_src}" \
+      markdown ${FLAGS:+-f"${FLAGS}"} "${p_src}" \
       | sed -e '/%{markdown}/ {r /dev/stdin
 ; d}' "${TEMPLATE}" \
       | sed 's,href="\([^:"]*/[^"]*\|[^/"]*\).md",href="\1.html",gi' \
@@ -213,6 +222,6 @@ EOF
 done
 
 # Done
-echo "INFO[$$]: Done"
+echo "INFO[${SCRIPT}($$)]: Done"
 exit 0
 
