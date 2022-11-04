@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/openssl-easy
 SCRIPT="${0##*/}"
-VERSION='1.0.20221028a'
+VERSION='1.0.20221104a'
 umask 077
 shopt -s extglob
 
@@ -77,6 +77,15 @@ fi
 
 ## OpenSSL variant/version
 read -r OPENSSL_VARIANT OPENSSL_VERSION _ < <(openssl version)
+
+
+## Binaries
+SED='sed'
+AWK='awk'
+
+# For Mac OS
+gsed --version &>/dev/null && SED='gsed'
+gawk --version &>/dev/null && AWK='gawk'
 
 
 ## Usage
@@ -372,11 +381,11 @@ function _openssl_conf_quirks() {
   # shellcheck disable=SC2064
   trap "rm -f '${TMP_CONF}'" EXIT
   cat "${OPENSSL_CONF}" > "${TMP_CONF}"
-  [ -z "${OPENSSL_DN_COMMONNAME}" ] && sed -i'' -e 's/^\(\(commonName\|CN\)[^a-z]*ENV::OPENSSL_DN_COMMONNAME\)/#\1/i' "${TMP_CONF}"
-  [ -z "${OPENSSL_DN_EMAILADDRESS}" ] && sed -i'' -e 's/^\(emailAddress[^a-z]*ENV::OPENSSL_DN_EMAILADDRESS\)/#\1/i' "${TMP_CONF}"
-  [ -z "${OPENSSL_DN_ORGANIZATIONALUNIT}" ] && sed -i'' -e 's/^\(\(organizationalUnitName\|OU\)[^a-z]*ENV::OPENSSL_DN_ORGANIZATIONALUNIT\)/#\1/i' "${TMP_CONF}"
-  [ -z "${OPENSSL_DN_TITLE}" ] && sed -i'' -e 's/^\(title[^a-z]*ENV::OPENSSL_DN_TITLE\)/#\1/i' "${TMP_CONF}"
-  [ -z "${OPENSSL_EXT_SAN}" ] && sed -i'' -e 's/^\(subjectAltName[^a-z]*ENV::OPENSSL_EXT_SAN\)/#\1/i;s/,[^a-z]*ENV::OPENSSL_EXT_SAN[^,a-z]*//ig' "${TMP_CONF}"
+  [ -z "${OPENSSL_DN_COMMONNAME}" ] && "${SED}" -i'' -e 's/^\(\(commonName\|CN\)[^a-z]*ENV::OPENSSL_DN_COMMONNAME\)/#\1/i' "${TMP_CONF}"
+  [ -z "${OPENSSL_DN_EMAILADDRESS}" ] && "${SED}" -i'' -e 's/^\(emailAddress[^a-z]*ENV::OPENSSL_DN_EMAILADDRESS\)/#\1/i' "${TMP_CONF}"
+  [ -z "${OPENSSL_DN_ORGANIZATIONALUNIT}" ] && "${SED}" -i'' -e 's/^\(\(organizationalUnitName\|OU\)[^a-z]*ENV::OPENSSL_DN_ORGANIZATIONALUNIT\)/#\1/i' "${TMP_CONF}"
+  [ -z "${OPENSSL_DN_TITLE}" ] && "${SED}" -i'' -e 's/^\(title[^a-z]*ENV::OPENSSL_DN_TITLE\)/#\1/i' "${TMP_CONF}"
+  [ -z "${OPENSSL_EXT_SAN}" ] && "${SED}" -i'' -e 's/^\(subjectAltName[^a-z]*ENV::OPENSSL_EXT_SAN\)/#\1/i;s/,[^a-z]*ENV::OPENSSL_EXT_SAN[^,a-z]*//ig' "${TMP_CONF}"
 
   # LibreSSL does not use environment for ENV::** variables
   if [ "${OPENSSL_VARIANT}" == 'LibreSSL' ]; then
@@ -387,7 +396,7 @@ function _openssl_conf_quirks() {
       OPENSSL_DN_TITLE \
       OPENSSL_EXT_SAN \
     ; do
-      [ -n "${!openssl_env}" ] && sed -i'' -e "s|\\\${ENV::${openssl_env}}|\"${!openssl_env}\"|ig" "${TMP_CONF}"
+      [ -n "${!openssl_env}" ] && "${SED}" -i'' -e "s|\\\${ENV::${openssl_env}}|\"${!openssl_env}\"|ig" "${TMP_CONF}"
     done
   fi
 
@@ -1218,9 +1227,9 @@ EOF
       [ ! -s "${FILE_CERT}" ] && rm -f "${FILE_CERT}" && _ERROR "Certificate creation failed" && exit 1
 
       # Database (self-signed)
-      serial="$(openssl x509 -noout -serial -in "${FILE_CERT}" | sed -e 's|^[^=]*=||')"
-      subject="$(openssl x509 -noout -subject -in "${FILE_CERT}" | sed -e 's|[=,] *\([^ ]*\) *= *|/\1=|g;s|^[^/]*||')"
-      date="$(date --utc --date "$(openssl x509 -noout -enddate -in "${FILE_CERT}" | sed -e 's|^[^=]*=||')" +'%y%m%d%H%M%SZ')"
+      serial="$(openssl x509 -noout -serial -in "${FILE_CERT}" | "${SED}" -e 's|^[^=]*=||')"
+      subject="$(openssl x509 -noout -subject -in "${FILE_CERT}" | "${SED}" -e 's|[=,] *\([^ ]*\) *= *|/\1=|g;s|^[^/]*||')"
+      date="$(date --utc --date "$(openssl x509 -noout -enddate -in "${FILE_CERT}" | "${SED}" -e 's|^[^=]*=||')" +'%y%m%d%H%M%SZ')"
       entry="V\t${date}\t\t${serial}\t${FILE_CERT##*/}\t${subject}"
       if ! echo -e "${entry}" >> "${OPENSSL_FILE_DATABASE}"; then
         _ERROR "Failed to add certificate to database (${OPENSSL_FILE_DATABASE})" && echo -e "${entry}" && exit 1
@@ -1265,7 +1274,7 @@ EOF
       ln -s -r "${FILE_SERIAL}" "${FILE_CERT}"
 
       # Database (quirk)
-      if ! sed -i'' -e "s|\t${CA_SERIAL}\tunknown|\t${CA_SERIAL}\t${FILE_CERT##*/}|" "${OPENSSL_FILE_CA_DATABASE}"; then
+      if ! "${SED}" -i'' -e "s|\t${CA_SERIAL}\tunknown|\t${CA_SERIAL}\t${FILE_CERT##*/}|" "${OPENSSL_FILE_CA_DATABASE}"; then
         _ERROR "Failed to update the certificates database (${OPENSSL_FILE_CA_DATABASE})" && exit 1
       fi
 
@@ -1294,9 +1303,9 @@ EOF
     [ -n "${OPT_VERBOSE}" ] && OPENSSL_CONF=/dev/null openssl x509 -noout -text -in "${FILE_CERT}"
 
     # Database
-    serial="$(openssl x509 -noout -serial -in "${FILE_CERT}" | sed -e 's|^[^=]*=||')"
-    subject="$(openssl x509 -noout -subject -in "${FILE_CERT}" | sed -e 's|[=,] *\([^ ]*\) *= *|/\1=|g;s|^[^/]*||')"
-    date="$(date --utc --date "$(openssl x509 -noout -enddate -in "${FILE_CERT}" | sed -e 's|^[^=]*=||')" +'%y%m%d%H%M%SZ')"
+    serial="$(openssl x509 -noout -serial -in "${FILE_CERT}" | "${SED}" -e 's|^[^=]*=||')"
+    subject="$(openssl x509 -noout -subject -in "${FILE_CERT}" | "${SED}" -e 's|[=,] *\([^ ]*\) *= *|/\1=|g;s|^[^/]*||')"
+    date="$(date --utc --date "$(openssl x509 -noout -enddate -in "${FILE_CERT}" | "${SED}" -e 's|^[^=]*=||')" +'%y%m%d%H%M%SZ')"
     entry="V\t${date}\t\t${serial}\t${FILE_CERT##*/}\t${subject}"
     [[ "${OPT_OPENSSL}" == *'-selfsign'* ]] && FILE_DATABASE="${OPENSSL_FILE_DATABASE}" || FILE_DATABASE="${OPENSSL_FILE_CA_DATABASE}"
     if ! echo -e "${entry}" >> "${FILE_DATABASE}"; then
@@ -1386,9 +1395,9 @@ EOF
     [[ "${OPT_OPENSSL}" == *'-selfsign'* ]] && FILE_DATABASE="${OPENSSL_FILE_DATABASE}" || FILE_DATABASE="${OPENSSL_FILE_CA_DATABASE}"
     [ -z "${OPT_DATE}" ] && OPT_DATE="${DFLT_DATE}"
     [ -z "${OPT_LIST_VALID}" ] && [ -z "${OPT_LIST_EXPIRED}" ] && [ -z "${OPT_LIST_REVOKED}" ] && OPT_LIST_VALID='yes'
-    [ -n "${OPT_LIST_VALID}" ] && awk -F$'\t' "{if(\$1==\"V\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tVALID\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k2 -k1
-    [ -n "${OPT_LIST_EXPIRED}" ] && awk -F$'\t' "{if((\$1==\"V\"||\$1==\"E\") &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tEXPIRED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
-    [ -n "${OPT_LIST_REVOKED}" ] && awk -F$'\t' "{if(\$1==\"R\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\" && \"20\"\$3<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tREVOKED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$3,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
+    [ -n "${OPT_LIST_VALID}" ] && "${AWK}" -F$'\t' "{if(\$1==\"V\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tVALID\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k2 -k1
+    [ -n "${OPT_LIST_EXPIRED}" ] && "${AWK}" -F$'\t' "{if((\$1==\"V\"||\$1==\"E\") &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tEXPIRED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$2,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
+    [ -n "${OPT_LIST_REVOKED}" ] && "${AWK}" -F$'\t' "{if(\$1==\"R\" &&${OPT_ID:+ \$5~\"^${OPT_ID}-cert\" &&} \"20\"\$2>\"${OPT_DATE}235959Z\" && \"20\"\$3<=\"${OPT_DATE}235959Z\"){split(\$5, FILE, \"-cert-\"); sub(/.pem$/, \"\", FILE[2]); printf(\"%s\\t%s\\t%s\\t%s\\tREVOKED\\t20%s\\t%s\\n\",FILE[1],FILE[2],\$6,\$4,\$3,\$5)}}" "${FILE_DATABASE}" | sort -k6 -k1
     ;;
 
 
