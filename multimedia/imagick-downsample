@@ -1,8 +1,10 @@
 #!/bin/bash
+SCRIPT="${0##*/}"
 
-# Command-line
-[ $# -lt 2 -o "${1##*-}" == 'help' ] && cat << EOF && exit 1
-USAGE: ${0##*/} [<option> ...] <source-dir> <destination-dir>
+## Usage
+__USAGE() {
+  cat >&2 <<EOF
+USAGE: ${SCRIPT} [<option> ...] <source-dir/file> <destination-dir/file>
 
 SYNOPSIS:
   Downsample or transcode (to JPEG format) all image files found in the source
@@ -18,20 +20,33 @@ OPTIONS:
 AUTHOR:
   Cedric Dufour - http://cedric.dufour.name
 EOF
+}
+[ $# -lt 2 ] && __USAGE && exit 1
 
 # Arguments
 SIZE_GAUGE=1024
 JPEG_QUALITY=80
+__OPTION() {
+  [ -z "${2}" ] && echo "ERROR[${SCRIPT}]: Missing option parameter (${1})" >&2 && exit 1
+  return 0
+}
 while [ -n "${1}" ]; do
   case "${1}" in
-    '-g'|'--gauge')  
-      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--gauge)' >&2 && exit 1; SIZE_GAUGE="${1}";;
+    '-h'|'--help'|'help')
+      __USAGE; exit 1;;
+    '-g'|'--gauge')
+      __OPTION "${@}"; SIZE_GAUGE="${2}"; shift;;
     '-q'|'--quality')
-      shift; [ -z "${1}" ] && echo 'ERROR: Missing option value (--quality)' >&2 && exit 1; JPEG_QUALITY="${1}";;
+      __OPTION "${@}"; JPEG_QUALITY="${2}"; shift;;
+    -*)
+        echo "ERROR[${SCRIPT}]: Invalid option (${1})" >&2; exit 1;;
     *)
-      if [ -z "${SRC_DIR}" ]; then SRC_DIR="${1}"
-      elif [ -z "${DST_DIR}" ]; then DST_DIR="${1}"
-      else echo 'ERROR: Invalid (extra) argument' >&2 && exit 1
+      if [ -z "${SRC}" ]; then
+        SRC="${1}"
+      elif [ -z "${DST}" ]; then
+        DST="${1}"
+      else
+        echo "ERROR[${SCRIPT}]: Invalid argument (${1})" >&2; exit 1
       fi
       ;;
   esac
@@ -42,68 +57,95 @@ done
 [ -z "$(which convert)" ] && echo "ERROR[$$]: 'convert' cannot be found" >&2 && exit 1
 
 # Check directories and files
-SRC_DIR=${SRC_DIR%%/}
-DST_DIR=${DST_DIR%%/}
-[ ! -d "${SRC_DIR}" ] && echo "ERROR[$$]: Invalid source directory (${SRC_DIR})" >&2 && exit 1
-[ ! -r "${SRC_DIR}" ] && echo "ERROR[$$]: Unable to read from source directory (${SRC_DIR})" >&2 && exit 1
-[ ! -d "${DST_DIR}" ] && echo "ERROR[$$]: Invalid destination directory (${DST_DIR})" >&2 && exit 1
-[ ! -w "${DST_DIR}" ] && echo "ERROR[$$]: Unable to write to destination directory (${DST_DIR})" >&2 && exit 1
+if [ ! -f "${SRC}" ]; then
+  SRC=${SRC%%/}
+  DST=${DST%%/}
+  [ ! -d "${SRC}" ] && echo "ERROR[${SCRIPT}($$)]: Invalid source directory (${SRC})" >&2 && exit 1
+  [ ! -r "${SRC}" ] && echo "ERROR[${SCRIPT}($$)]: Unable to read from source directory (${SRC})" >&2 && exit 1
+  [ ! -d "${DST}" ] && echo "ERROR[${SCRIPT}($$)]: Invalid destination directory (${DST})" >&2 && exit 1
+  [ ! -w "${DST}" ] && echo "ERROR[${SCRIPT}($$)]: Unable to write to destination directory (${DST})" >&2 && exit 1
+fi
 
-# Lock function
-DST_LOCK="${DST_DIR}/.lock"
-function atomic_begin {
+
+## Helper functions
+
+# Lock
+DST_LOCK="${DST}/.lock"
+__atomic_begin() {
   n=100; while true; do # loop for ~5 seconds (100 x 0.05 seconds in average)
-    n=$(( ${n}-1 ))
-    [ ${n} -le 0 ] && echo "ERROR[$$]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
-    [ $(( ${n} % 10 )) -eq 0 ] && echo "WARNING[$$]: Waiting for lock (${DST_LOCK})" >&2
+    n=$(( n-1 ))
+    [ ${n} -le 0 ] && echo "ERROR[${SCRIPT}($$)]: Failed to acquire lock (${DST_LOCK})" >&2 && exit 1
+    [ $(( n % 10 )) -eq 0 ] && echo "WARNING[${SCRIPT}($$)]: Waiting for lock (${DST_LOCK})" >&2
     if ( set -o noclobber; echo -n > "${DST_LOCK}" ) 2>/dev/null; then
       break
     fi
-    sleep 0.0$(( ${RANDOM} % 10 ))
+    sleep 0.0$(( RANDOM % 10 ))
   done
 }
-function atomic_end {
+__atomic_end() {
   rm -f "${DST_LOCK}"
 }
 
-# Trap signals
-trap 'echo "INTERRUPT[$$]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}"; exit 2' INT TERM
-
-# Loop through image files
-echo "INFO[$$]: Looking for files to transcode..."
-IFS=$'\n'; for p_src in $(eval "find '${SRC_DIR}' \( -type f -o -type l \) \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.tif' -o -iname '*.tiff'  \)" | sort); do
-  # Compute source parameters
-  d_src="$(dirname ${p_src})"
-  [ -e "${d_src}/.nodownsample" ] && continue
-  e_src="${p_src##*.}"
-
-  # Compute destination parameters
-  p_dst="${p_src%.*}.jpg"
-  p_dst="${DST_DIR}/${p_dst#${SRC_DIR}/}"
-  d_dst="$(dirname ${p_dst})"
-  f_dst="$(basename ${p_dst})"
-
-  # Check/create destination directory
-  [ ! -d "${d_dst}" ] && mkdir -p "${d_dst}"
-  [ ! -d "${d_dst}" ] && echo "WARNING[$$]: Failed to create destination directory (${d_dst}); skipping..." >&2 && continue
-  [ ! -w "${d_dst}" ] && echo "WARNING[$$]: Unable to write to destination directory (${d_dst}): skipping..." >&2 && continue
-
-  # Check destination file
-  atomic_begin
-  [ -e "${p_dst}" ] && atomic_end && continue
-  touch "${p_dst}"
-  atomic_end
+# Transcode
+__transcode() {
+  p_src="${1}"
+  p_dst="${2}"
 
   # Transcoding
-  echo "INFO[$$]: Transcoding ${p_src} -> ${p_dst}"
+  echo "INFO[${SCRIPT}($$)]: Transcoding ${p_src} -> ${p_dst}"
 
   # Downsample/transcode image file
   eval "convert \"${p_src}\" -resize '${SIZE_GAUGE}x${SIZE_GAUGE}>' -quality ${JPEG_QUALITY} +profile '*' \"${p_dst}\""
-  [ $? -ne 0 ] && echo "WARNING[$$]: An error occured while transcoding (${p_aux} -> ${p_dst}); skipping..." >&2 && continue
-   
-done
+}
+
+
+## Main
+
+# Trap signals
+trap 'echo "INTERRUPT[${SCRIPT}($$)]: Cleaning and aborting" >&2; rm -f "${DST_LOCK}" "${p_dst}"; exit 2' INT TERM
+
+# Loop through image files
+if [ -f "${SRC}" ]; then
+  p_src="${SRC}"
+  p_dst="${DST%.*}.jpg"
+
+  # Transcoding
+  if ! __transcode "${p_src}" "${p_dst}"; then
+    echo "ERROR[${SCRIPT}($$)]: An error occured while transcoding (${p_src} -> ${p_dst}); skipping..." >&2
+    exit 1
+  fi
+else
+  echo "INFO[${SCRIPT}($$)]: Looking for files to transcode..."
+  IFS=$'\n'
+  for p_src in $(eval "find '${SRC}' \( -type f -o -type l \) \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.tif' -o -iname '*.tiff'  \)" | sort); do
+    # Compute source parameters
+    d_src="$(dirname "${p_src}")"
+    [ -e "${d_src}/.nodownsample" ] && continue
+
+    # Compute destination parameters
+    p_dst="${p_src%.*}.jpg"
+    p_dst="${DST}/${p_dst#${SRC}/}"
+    d_dst="$(dirname "${p_dst}")"
+
+    # Check/create destination directory
+    [ ! -d "${d_dst}" ] && mkdir -p "${d_dst}"
+    [ ! -d "${d_dst}" ] && echo "WARNING[${SCRIPT}($$)]: Failed to create destination directory (${d_dst}); skipping..." >&2 && continue
+    [ ! -w "${d_dst}" ] && echo "WARNING[${SCRIPT}($$)]: Unable to write to destination directory (${d_dst}): skipping..." >&2 && continue
+
+    # Check destination file
+    __atomic_begin
+    [ -e "${p_dst}" ] && __atomic_end && continue
+    touch "${p_dst}"
+    __atomic_end
+
+    # Transcoding
+    if ! __transcode "${p_src}" "${p_dst}"; then
+      echo "WARNING[${SCRIPT}($$)]: An error occured while transcoding (${p_src} -> ${p_dst}); skipping..." >&2
+      continue
+    fi
+  done
+fi
 
 # Done
-echo "INFO[$$]: Done"
+echo "INFO[${SCRIPT}($$)]: Done"
 exit 0
-
