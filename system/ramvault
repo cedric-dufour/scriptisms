@@ -1,11 +1,14 @@
 #!/bin/bash
 # -*- mode:bash; tab-width:2; sh-basic-offset:2; intent-tabs-mode:nil; -*- ex: set tabstop=2 expandtab: 
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/ramvault
+set -e -o pipefail
 SCRIPT="${0##*/}"
-VERSION='1.0.20200802a'
+VERSION='1.0.20230327a'
+trap 'echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}]: Internal error (${OPT_IMAGE:-n/a})" >&2' ERR
+
 
 ## Usage
-function _USAGE {
+__USAGE() {
   cat >&2 << EOF
 USAGE: ${SCRIPT} [<options>] {start|stop}
 
@@ -28,6 +31,8 @@ OPTIONS:
     Use LUKS to encrypt the underlying device
     WARNING: anyone able to read the kernel memory will be able
     to recover the encryption key from it!
+    NOTE: The actual TMPFS size will be 2MiB larger to accomodate
+          LUKS metadata and keyslots
 
 WARNING:
   The security of the RAM vault depends entirely on how the kernel allocates
@@ -38,20 +43,21 @@ WARNING:
   to disk, all swap partitions are disabled before the RAM vault is started.
 EOF
 }
-[ $# -lt 1 ] && _USAGE && exit 1
+[ $# -lt 1 ] && __USAGE && exit 1
 
 
 ## Logging
-function _INFO {
+__INFO() {
   [ -n "${OPT_VERBOSE}" ] && echo "INFO[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}"
   return 0
 }
-function _WARNING {
+__WARNING() {
   echo "WARNING[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
   return 0
 }
-function _ERROR {
+__ERROR() {
   echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+  [ -n "${2}" ] && exit "${2}"
   return 0
 }
 
@@ -63,25 +69,26 @@ OPT_UID='root'
 OPT_ENCRYPT=
 OPT_VERBOSE="${VERBOSE}"
 ARG_ACTION=
+__OPTION() {
+  [ -z "${2}" ] && __ERROR "Missing option argument (${1})" 1
+  return 0
+}
 while [ -n "${1}" ]; do
   case "${1}" in
     '-h'|'--help'|'help')
-       _USAGE && exit 0
+       __USAGE; exit 0
        ;;
     '-v'|'--version'|'version')
-      echo "${SCRIPT} ${VERSION}" && exit 0
+      echo "${SCRIPT} ${VERSION}"; exit 0
       ;;
     '-M'|'--mountpoint')
-      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
-      OPT_MOUNTPOINT="${2}"; shift
+      __OPTION "${@}"; OPT_MOUNTPOINT="${2}"; shift
       ;;
     '-U'|'--uid')
-      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
-      OPT_UID="${2}"; shift
+      __OPTION "${@}"; OPT_UID="${2}"; shift
       ;;
     '-S'|'--size')
-      [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
-      OPT_SIZE="${2}"; shift
+      __OPTION "${@}"; OPT_SIZE="${2}"; shift
       ;;
     '-E'|'--encrypt')
       OPT_ENCRYPT='yes'
@@ -90,155 +97,188 @@ while [ -n "${1}" ]; do
       OPT_VERBOSE='yes'
       ;;
     -*)
-      _ERROR "Invalid option (${1})" && exit 1
+      __ERROR "Invalid option (${1})" && exit 1
       ;;
     *)
       if [ -z "${ARG_ACTION}" ]; then
         ARG_ACTION="${1}"
       else
-        _ERROR "Too many arguments (${1})" && exit 1
+        __ERROR "Too many arguments (${1})" && exit 1
       fi
       ;;
   esac
   shift
 done
 [ -z "${OPT_MOUNTPOINT}" ] && OPT_MOUNTPOINT="/ram/vault/${OPT_UID}"
-[ -z "${OPT_VERBOSE}" ] && OPT_SILENT='yes' || OPT_SILENT=
+if [ -n "${OPT_ENCRYPT}" ]; then
+  OPT_SIZE="$((OPT_SIZE+2))" # Accomodate LUKS metadata and keyslots
+fi
+
 
 ## Checks
-[ "$(id -u)" != '0' ] && _ERROR "This utility must be run as root (sudo)" && exit 1
-[ -z "$(which wipe)" ] && _ERROR "Missing the 'wipe' utility (apt-get install wipe)" && exit 1
+[ "$(id -u)" != '0' ] && __ERROR "This utility must be run as root (sudo)" 1
+[ -z "$(which wipe)" ] && __ERROR "Missing the 'wipe' utility (apt-get install wipe)" 1
 
 
 ## Actions
 
 # start
-function _DO_start {
+__DO_start() {
   # Mountpoint
-  mountpoint -q "${OPT_MOUNTPOINT}" && _WARNING "RAM vault (TMPFS) is already started/mounted" && exit 0
+  if mountpoint -q "${OPT_MOUNTPOINT}"; then
+    __WARNING "RAM vault (TMPFS) is already started/mounted"
+    exit 0
+  fi
   umask 022
-  [ ! -e "${OPT_MOUNTPOINT}" ] && _INFO "Creating RAM vault mountpoint (${OPT_MOUNTPOINT})" && mkdir -p "${OPT_MOUNTPOINT}"
-  [ ! -d "${OPT_MOUNTPOINT}" -o ! -w "${OPT_MOUNTPOINT}" ] && _ERROR "Invalid/unwritable RAM vault mountpoint (${OPT_MOUNTPOINT})" && exit 1
+  if [ ! -e "${OPT_MOUNTPOINT}" ]; then
+    __INFO "Creating RAM vault mountpoint (${OPT_MOUNTPOINT})"
+    mkdir -p "${OPT_MOUNTPOINT}" || true
+  fi
+  if [ ! -d "${OPT_MOUNTPOINT}" ] || [ ! -w "${OPT_MOUNTPOINT}" ]; then
+    __ERROR "Invalid/unwritable RAM vault mountpoint (${OPT_MOUNTPOINT})" 1
+  fi
   umask 077
 
   # SWAP
-  trap '_DO_stop' EXIT
-  _INFO "Disabling SWAP"
-  swapoff -a
-  [ $? -ne 0 ] && _ERROR "Failed to disable SWAP" && exit 1
+  trap '__DO_stop' EXIT
+  __INFO "Disabling SWAP"
+  if ! swapoff -a; then
+    __ERROR "Failed to disable SWAP" 1
+  fi
 
   # TMPFS
-  _INFO "Mounting the RAM vault TMPFS (${OPT_MOUNTPOINT}; size=${OPT_SIZE}m,mode=0700,uid=${OPT_UID},gid=nogroup)"
-  mount -t tmpfs -o size=${OPT_SIZE}m,mode=0700,uid=${OPT_UID},gid=nogroup,noatime tmpfs "${OPT_MOUNTPOINT}"
-  [ $? -ne 0 ] && _ERROR "Failed to mount RAM vault TMPFS" && exit 1
+  __INFO "Mounting the RAM vault TMPFS (${OPT_MOUNTPOINT}; size=${OPT_SIZE}m,mode=0700,uid=${OPT_UID},gid=nogroup)"
+  if ! mount -t tmpfs -o "size=$((OPT_SIZE*1048576+1024)),mode=0700,uid=${OPT_UID},gid=nogroup,noatime" tmpfs "${OPT_MOUNTPOINT}"; then
+    __ERROR "Failed to mount RAM vault TMPFS" 1
+  fi
 
   # LOOP/ENCRYPT
   if [ -z "${OPT_ENCRYPT}" ]; then
     RAM_DEV="$(losetup -f)"
-    _INFO "Creating and attaching the RAM vault LOOP image/device (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)"
-    dd status=none if=/dev/zero of="${OPT_MOUNTPOINT}/IMAGE" 2>/dev/null
-    losetup "${RAM_DEV}" "${OPT_MOUNTPOINT}/IMAGE"
-    [ $? -ne 0 ] && _ERROR "Failed to create/attach the RAM vault LOOP image/device" && exit 1
+    __INFO "Creating and attaching the RAM vault LOOP image/device (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)"
+    if ! dd status=none if=/dev/zero of="${OPT_MOUNTPOINT}/IMAGE" bs=1048576 count="${OPT_SIZE}" 2>/dev/null; then
+      __ERROR "Failed to create the RAM vault LOOP image/device" 1
+    fi
+    if ! losetup "${RAM_DEV}" "${OPT_MOUNTPOINT}/IMAGE"; then
+      __ERROR "Failed to attach the RAM vault LOOP image/device" 1
+    fi
   else
     RAM_DEV="luks.$(echo "${OPT_MOUNTPOINT}" | md5sum | sed -nE 's|^(.{16}).*$|\1|p')"
-    _INFO "Creating and attaching the RAM vault LUKS image/volume (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)"
-    dd status=none if=/dev/urandom of="${OPT_MOUNTPOINT}/KEY" bs=64 count=1 2>/dev/null
-    dd status=none if=/dev/urandom of="${OPT_MOUNTPOINT}/IMAGE" 2>/dev/null
-    cryptsetup luksFormat --batch-mode --type luks1 --key-file "${OPT_MOUNTPOINT}/KEY" "${OPT_MOUNTPOINT}/IMAGE"
-    [ $? -ne 0 ] && _ERROR "Failed to create the RAM vault LUKS image/volume" && exit 1
-    cryptsetup luksOpen --key-file "${OPT_MOUNTPOINT}/KEY" "${OPT_MOUNTPOINT}/IMAGE" "${RAM_DEV}"
-    [ $? -ne 0 ] && _ERROR "Failed to attach the RAM vault LUKS image/volume" && exit 1
-    _INFO "Secure-wiping the RAM vault LUKS volume key (${OPT_MOUNTPOINT}/KEY)"
-    wipe ${OPT_SILENT:+-s} -f -e "${OPT_MOUNTPOINT}/KEY"
-    [ $? -ne 0 ] && _ERROR "Failed to secure-wipe the RAM vault LUKS volume key" && exit 1
+    __INFO "Creating and attaching the RAM vault LUKS image/volume (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)"
+    if ! LUKS_KEY="$(dd status=none if=/dev/urandom bs=128 count=1 2>/dev/null | tr -d '\0' | head -c 64)"; then
+      __ERROR "Failed to create the RAM vault encryption key" 1
+    fi
+    if ! dd status=none if=/dev/urandom of="${OPT_MOUNTPOINT}/IMAGE" bs=1048576 count="${OPT_SIZE}" 2>/dev/null; then
+      __ERROR "Failed to create the RAM vault encrypted LOOP image/device" 1
+    fi
+    if ! cryptsetup luksFormat --batch-mode --type luks1 --key-file - "${OPT_MOUNTPOINT}/IMAGE" <<< "${LUKS_KEY}"; then
+      __ERROR "Failed to create the RAM vault LUKS image/volume" 1
+    fi
+    if ! cryptsetup luksOpen --key-file - "${OPT_MOUNTPOINT}/IMAGE" "${RAM_DEV}" <<< "${LUKS_KEY}"; then
+      __ERROR "Failed to attach the RAM vault LUKS image/volume" 1
+    fi
     RAM_DEV="/dev/mapper/${RAM_DEV}"
   fi
 
   # EXT2
-  _INFO "Creating and mounting the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT}; mode=0700,uid=${OPT_UID},gid=nogroup)"
-  mke2fs -t ext2 -L RAMVAULT -m 0 -q "${RAM_DEV}"
-  [ $? -ne 0 ] && _ERROR "Failed create the RAM vault EXT2 filesystem" && exit 1
-  mount -t ext2 -o noatime "${RAM_DEV}" "${OPT_MOUNTPOINT}"
-  [ $? -ne 0 ] && _ERROR "Failed mount the RAM vault EXT2 filesystem" && exit 1
-  chmod 700 "${OPT_MOUNTPOINT}"
-  chown ${OPT_UID}:nogroup "${OPT_MOUNTPOINT}"
+  __INFO "Creating and mounting the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT}; mode=0700,uid=${OPT_UID},gid=nogroup)"
+  if ! mke2fs -t ext2 -L RAMVAULT -m 0 -q "${RAM_DEV}"; then
+    __ERROR "Failed to create the RAM vault EXT2 filesystem" 1
+  fi
+  if ! mount -t ext2 -o noatime "${RAM_DEV}" "${OPT_MOUNTPOINT}"; then
+    __ERROR "Failed to mount the RAM vault EXT2 filesystem" 1
+  fi
+  if ! chmod 700 "${OPT_MOUNTPOINT}" || ! chown "${OPT_UID}:nogroup" "${OPT_MOUNTPOINT}"; then
+    __ERROR "Failed to change filesystem permissions" 1
+  fi
 
   # Done
   trap - EXIT
-  _INFO "RAM vault ready to use (${OPT_MOUNTPOINT})"
+  __INFO "RAM vault ready to use (${OPT_MOUNTPOINT})"
   echo "!!! DO NOT FORGET TO STOP THE VAULT TO SECURELY WIPE ITS CONTENT !!!"
 }
 
 # stop
-function _DO_stop {
+__DO_stop() {
   trap - EXIT
   w=0
 
   # EXT2
   if findmnt -n -t ext2 "${OPT_MOUNTPOINT}" >/dev/null; then
-    _INFO "Unmounting the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT})"
-    umount "${OPT_MOUNTPOINT}"
-    [ $? -ne 0 ] && _WARNING "Failed to unmount the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT})" && w=1
+    __INFO "Unmounting the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT})"
+    if ! umount "${OPT_MOUNTPOINT}"; then
+      __WARNING "Failed to unmount the RAM vault EXT2 filesystem (${OPT_MOUNTPOINT})"
+      w=1
+    fi
   fi
 
   # ENCRYPT
   RAM_DEV="luks.$(echo "${OPT_MOUNTPOINT}" | md5sum | sed -nE 's|^(.{16}).*$|\1|p')"
   if [ -e "/dev/mapper/${RAM_DEV}" ]; then
-    _INFO "Detaching the RAM vault LUKS volume (${RAM_DEV})"
-    cryptsetup luksClose "${RAM_DEV}"
-    [ $? -ne 0 ] && _WARNING "Failed to detach the RAM vault LUKS volume (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)" && w=1
+    __INFO "Detaching the RAM vault LUKS volume (${RAM_DEV})"
+    if ! cryptsetup luksClose "${RAM_DEV}"; then
+      __WARNING "Failed to detach the RAM vault LUKS volume (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)"
+      w=1
+    fi
   fi
 
   # LOOP
   RAM_DEV="$(losetup -nO NAME -j "${OPT_MOUNTPOINT}/IMAGE")"
   if [ -n "${RAM_DEV}" ]; then
-    _INFO "Detaching the RAM vault LOOP device (${RAM_DEV})"
-    losetup -d "${RAM_DEV}"
-    [ $? -ne 0 ] && _WARNING "Failed to detach the RAM vault LOOP device (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)" && w=1
+    __INFO "Detaching the RAM vault LOOP device (${RAM_DEV})"
+    if ! losetup -d "${RAM_DEV}"; then
+      __WARNING "Failed to detach the RAM vault LOOP device (${RAM_DEV}: ${OPT_MOUNTPOINT}/IMAGE)"
+      w=1
+    fi
   fi
 
   # Wipe
   if [ -e "${OPT_MOUNTPOINT}/IMAGE" ]; then
-    _INFO "Secure-wiping the RAM vault image (${OPT_MOUNTPOINT}/IMAGE)"
-    wipe -f -e "${OPT_MOUNTPOINT}/IMAGE"
-    [ $? -ne 0 ] && _ERROR "Failed to secure-wipe the RAM vault image" && exit 1
+    __INFO "Secure-wiping the RAM vault image (${OPT_MOUNTPOINT}/IMAGE)"
+    if ! wipe -f -e "${OPT_MOUNTPOINT}/IMAGE"; then
+      __ERROR "Failed to secure-wipe the RAM vault image" 1
+    fi
   else
-    _WARNING "Found no RAM vault image to secure-wipe" && w=1
+    __WARNING "Found no RAM vault image to secure-wipe"
+    w=1
   fi
 
   # TMPFS
   if findmnt -n -t tmpfs "${OPT_MOUNTPOINT}" >/dev/null; then
-    _INFO "Unmounting the RAM vault TMPFS (${OPT_MOUNTPOINT})"
-    umount "${OPT_MOUNTPOINT}"
-    [ $? -ne 0 ] && _WARNING "Failed to unmount the RAM vault TMPFS (${OPT_MOUNTPOINT})" && w=1
+    __INFO "Unmounting the RAM vault TMPFS (${OPT_MOUNTPOINT})"
+    if ! umount "${OPT_MOUNTPOINT}"; then
+      __WARNING "Failed to unmount the RAM vault TMPFS (${OPT_MOUNTPOINT})"
+      w=1
+    fi
   fi
 
   # SWAP
-  _INFO "Enabling SWAP"
-  swapon -a
-  [ $? -ne 0 ] && _WARNING "Failed to (re-)enable SWAP" && w=1
+  __INFO "Enabling SWAP"
+  if ! swapon -a; then
+    __WARNING "Failed to (re-)enable SWAP"
+    w=1
+  fi
 
   # Done
-  if [ ${w} -ne 0 ]; then
-    _WARNING "Failed to stop RAM vault properly"
+  if [ "${w}" -ne 0 ]; then
+    __WARNING "Failed to stop RAM vault properly"
     exit ${w}
   else
-    _INFO "RAM vault stopped"
+    __INFO "RAM vault stopped"
   fi
 }
 
 
 ## Main
 case "${ARG_ACTION}" in
-  'start')
-    _DO_start
+  'start'|'open')
+    __DO_start
     ;;
-  'stop')
-    _DO_stop
+  'stop'|'close')
+    __DO_stop
     ;;
     *)
-    _ERROR "Invalid action (${ARG_ACTION:-<none>})" && exit 1
+    __ERROR "Invalid action (${ARG_ACTION:-n/a})" 1
     ;;
 esac
 exit 0
-
