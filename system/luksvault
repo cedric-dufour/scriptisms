@@ -136,7 +136,8 @@ __luksFormat() {
     cryptsetup luksFormat --batch-mode ${LUKS_OPTIONS} --key-file "${OPT_KEYFILE}" "${OPT_IMAGE}" || return $?
   elif [ -n "${LUKSVAULT_KEY}" ]; then
     # shellcheck disable=SC2086
-    cryptsetup luksFormat --batch-mode ${LUKS_OPTIONS} --key-file - "${OPT_IMAGE}" <<< "${LUKSVAULT_KEY}" || return $?
+    printf '%s' "${LUKSVAULT_KEY}" \
+      | cryptsetup luksFormat --batch-mode ${LUKS_OPTIONS} --key-file - "${OPT_IMAGE}" || return $?
   else
     # shellcheck disable=SC2086
     cryptsetup luksFormat --batch-mode ${LUKS_OPTIONS} --verify-passphrase "${OPT_IMAGE}" || return $?
@@ -150,7 +151,8 @@ __luksOpen() {
   if [ -n "${OPT_KEYFILE}" ]; then
     cryptsetup luksOpen --key-file "${OPT_KEYFILE}" "${OPT_IMAGE}" "${DEV_MAPPER}" || return $?
   elif [ -n "${LUKSVAULT_KEY}" ]; then
-    cryptsetup luksOpen --key-file - "${OPT_IMAGE}" "${DEV_MAPPER}" <<< "${LUKSVAULT_KEY}" || return $?
+    printf '%s' "${LUKSVAULT_KEY}" \
+      | cryptsetup luksOpen --key-file - "${OPT_IMAGE}" "${DEV_MAPPER}" || return $?
   else
     cryptsetup luksOpen "${OPT_IMAGE}" "${DEV_MAPPER}" || return $?
   fi
