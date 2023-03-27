@@ -1,7 +1,7 @@
 #!/bin/bash
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/misc/screen-split
 SCRIPT="${0##*/}"
-VERSION='1.0.20211103a'
+VERSION='1.0.20221110a'
 
 
 ## Helpers
@@ -49,16 +49,16 @@ while [ -n "${1}" ]; do
     '-Z'|'--zoom')
       [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
       OPT_ZOOM="${2}"
-      OPTS[${#OPTS[*]}]="${1}"; OPTS[${#OPTS[*]}]="${2}"; shift
+      OPTS+=("${1}" "${2}"); shift
       ;;
     '-P'|'--position')
       [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
       OPT_POSITION="${2}"
-      OPTS[${#OPTS[*]}]="${1}"
+      OPTS+=("${1}")
       ;;
     '-A'|'--above')
       OPT_POSITION='above'
-      OPTS[${#OPTS[*]}]="${1}"
+      OPTS+=("${1}")
       ;;
     -*)
       _ERROR "Invalid option (${1})" && exit 1
@@ -86,17 +86,32 @@ for attempt in 1 2; do
   [ -z "${XRANDR_DATA}" ] && _ERROR "Failed to query XRandR" && exit 1
 
   # Primary display
-  read PRI_NAME PRI_X_VIRT PRI_Y_VIRT PRI_X_OFF PRI_Y_OFF PRI_X_PHYS PRI_Y_PHYS PRI_X_RES PRI_Y_RES < \
+  read -r PRI_NAME PRI_X_VIRT PRI_Y_VIRT PRI_X_OFF PRI_Y_OFF PRI_X_PHYS PRI_Y_PHYS PRI_X_RES PRI_Y_RES < \
   <(
     echo "${XRANDR_DATA}" \
     | grep '\sprimary\s' \
     | head -n 1 \
     | sed -nE 's|^(\S+) .* ([0-9]+x[0-9]+\+[0-9]+\+[0-9]+) .* ([0-9]+mm x [0-9]+mm)( +panning +[0-9]+x[0-9]+\+[0-9]*\+[0-9]+)? *([0-9]+x[0-9]+).*$|\1 \2 \3 \5|;s|[+xm ]+| |gp'
   )
-  [ -z "${PRI_NAME}" ] && _ERROR "Failed to detect primary output" && exit 1
+  if [ -z "${PRI_NAME}" ]; then
+    if [ ${attempt} -eq 1 ]; then
+      _WARNING "Failed to detect primary output; resetting..."
+      for output in $(
+        xrandr --query \
+        | grep '^eDP' \
+        | awk '{print $1}'
+      ); do
+        xrandr --output "${output}" --primary --auto
+      done
+      sleep 3
+      continue
+    else
+      _ERROR "Failed to detect primary output" && exit 1
+    fi
+  fi
 
   # Secondary
-  read SEC_NAME SEC_X_VIRT SEC_Y_VIRT SEC_X_OFF SEC_Y_OFF SEC_X_PHYS SEC_Y_PHYS SEC_X_RES SEC_Y_RES < \
+  read -r SEC_NAME SEC_X_VIRT SEC_Y_VIRT SEC_X_OFF SEC_Y_OFF SEC_X_PHYS SEC_Y_PHYS SEC_X_RES SEC_Y_RES < \
   <(
     echo "${XRANDR_DATA}" \
     | grep -v '\sprimary\s' \
@@ -115,6 +130,7 @@ for attempt in 1 2; do
         xrandr --output "${output}" --auto
       done
       sleep 3
+      continue
     else
       _ERROR "Failed to detect secondary output" && exit 1
     fi
@@ -131,8 +147,8 @@ case "${ARG_ACTION}" in
     SCALE="$(echo "scale=2; ${PRI_Y_RES}/${SEC_Y_RES}" | bc)"
 
     # XRandR
-    xrandr --output ${PRI_NAME} --panning 0x0+0+0
-    xrandr --output ${SEC_NAME} --same-as ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
+    xrandr --output "${PRI_NAME}" --panning 0x0+0+0
+    xrandr --output "${SEC_NAME}" --same-as "${PRI_NAME}" --mode "${SEC_X_RES}x${SEC_Y_RES}" --scale "${SCALE}x${SCALE}"
 
     # Conky
     pkill -USR1 conky
@@ -146,17 +162,17 @@ case "${ARG_ACTION}" in
     case "${OPT_POSITION}" in
       'above')
         PRI_Y_OFF="$(echo "scale=0; ${SEC_Y_RES}*${SCALE}" | bc)"
-        xrandr --output ${SEC_NAME} --above ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
-        xrandr --output ${PRI_NAME} --panning ${PRI_X_RES}x${PRI_Y_RES}+0+${PRI_Y_OFF}
+        xrandr --output "${SEC_NAME}" --above "${PRI_NAME}" --mode "${SEC_X_RES}x${SEC_Y_RES}" --scale "${SCALE}x${SCALE}"
+        xrandr --output "${PRI_NAME}" --panning "${PRI_X_RES}x${PRI_Y_RES}+0+${PRI_Y_OFF}"
         ;;
       'left-of')
         PRI_X_OFF="$(echo "scale=0; ${SEC_X_RES}*${SCALE}" | bc)"
-        xrandr --output ${SEC_NAME} --left ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
-        xrandr --output ${PRI_NAME} --panning ${PRI_X_RES}x${PRI_Y_RES}+${PRI_X_OFF}+0
+        xrandr --output "${SEC_NAME}" --left "${PRI_NAME}" --mode "${SEC_X_RES}x${SEC_Y_RES}" --scale "${SCALE}x${SCALE}"
+        xrandr --output "${PRI_NAME}" --panning "${PRI_X_RES}x${PRI_Y_RES}+${PRI_X_OFF}+0"
         ;;
       *)
-        xrandr --output ${PRI_NAME} --panning 0x0+0+0
-        xrandr --output ${SEC_NAME} --${OPT_POSITION} ${PRI_NAME} --mode ${SEC_X_RES}x${SEC_Y_RES} --scale ${SCALE}x${SCALE}
+        xrandr --output "${PRI_NAME}" --panning 0x0+0+0
+        xrandr --output "${SEC_NAME}" --${OPT_POSITION} "${PRI_NAME}" --mode "${SEC_X_RES}x${SEC_Y_RES}" --scale "${SCALE}x${SCALE}"
         ;;
     esac
 
@@ -165,7 +181,7 @@ case "${ARG_ACTION}" in
     ;;
 
   'toggle')
-    if [ "${PRI_X_OFF}" != "0" -o "${PRI_Y_OFF}" != "0" -o "${SEC_X_OFF}" != "0" -o "${SEC_Y_OFF}" != "0" ]; then
+    if [ "${PRI_X_OFF}" != "0" ] || [ "${PRI_Y_OFF}" != "0" ] || [ "${SEC_X_OFF}" != "0" ] || [ "${SEC_Y_OFF}" != "0" ]; then
       "${0}" off
     else
       "${0}" "${OPTS[@]}" on
@@ -176,4 +192,3 @@ case "${ARG_ACTION}" in
     _ERROR "Invalid action (${ARG_ACTION})" && exit 1
     ;;
 esac
-
