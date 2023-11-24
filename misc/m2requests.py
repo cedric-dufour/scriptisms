@@ -154,7 +154,8 @@ class M2HttpsAdapter(requests.adapters.BaseAdapter):
 
         # Get response
         # REF: https://docs.python.org/3/library/http.client.html#http.client.HTTPResponse
-        resp = urllib3.response.HTTPResponse.from_httplib(conn.getresponse())
+        # REF: https://docs.python.org/3/library/http.client.html#http.client.HTTPConnection.getresponse
+        resp = conn.getresponse()
 
         # Build output response
         # REF: https://github.com/psf/requests/blob/master/requests/adapters.py
