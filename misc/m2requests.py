@@ -61,7 +61,7 @@ class M2HttpsAdapter(requests.adapters.BaseAdapter):
       request.cert=("pkcs11:type=cert;...", "pkcs11:type=private;...")
       request.get("https://...")
 
-    REF: https://github.com/psf/requests/blob/master/requests/adapters.py
+    REF: https://github.com/psf/requests/blob/main/src/requests/adapters.py
     """
 
     def __init__(self):
@@ -158,7 +158,7 @@ class M2HttpsAdapter(requests.adapters.BaseAdapter):
         resp = conn.getresponse()
 
         # Build output response
-        # REF: https://github.com/psf/requests/blob/master/requests/adapters.py
+        # REF: https://github.com/psf/requests/blob/main/src/requests/adapters.py
         output = requests.models.Response()
         output.connection = self
         output.request = request
