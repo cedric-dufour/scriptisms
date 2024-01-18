@@ -14,6 +14,7 @@ A few configuration options are available via environment variables:
  - PROCESSTCPPROXY_BIND:      bind IP address (default: 127.0.0.1)
  - PROCESSTCPPROXY_PORT:      listening (TCP) port (default: 6666)
  - PROCESSTCPPROXY_PASSWORD:  connection password (password must be sent before anything is forwarded to the proxied process)
+ - PROCESSTCPPROXY_ERR2OUT:   if "true" or "yes", redirect stderr output to TCP proxy-ed stdout
  - PROCESSTCPPROXY_MIRROR:    if "true" or "yes", mirror the process std{in,out,err} to the current std{in,out,err}
  - PROCESSTCPPROXY_DEBUG:     if "true" or "yes", enable debug logging
 
@@ -21,6 +22,7 @@ Thorougher configuration is also possible via a PROCESSTCPPROXY_CONFIG-defined C
 
     [global]
     #debug = true
+    #err2out = true
     #mirror = true
 
     [server]
@@ -50,6 +52,7 @@ Enjoy!
 """
 
 from configparser import ConfigParser
+import errno
 import logging
 from os import getenv, set_blocking
 from queue import Empty, Queue
@@ -59,45 +62,45 @@ from socketserver import BaseRequestHandler, TCPServer
 from subprocess import PIPE, Popen
 from ssl import CERT_REQUIRED, PROTOCOL_TLS_SERVER, SSLContext, VERIFY_CRL_CHECK_LEAF
 import sys
-from threading import enumerate as _threadEnumerate, Thread
+from threading import enumerate as _threadEnumerate, Event, Thread
 from time import sleep
+from typing import cast
 
 logger = logging.getLogger("ProcessTCPProxy")
 
 
 class ProcessThread:
-    def __init__(self, command: list = None, mirror: bool = False):
+    def __init__(self, proxy: "ProcessTCPProxy", command: list = None, err2out: bool = False, mirror: bool = False):
         """Initialisation.
 
+        :param proxy:    parent ProcessTCPProxy instance
         :param command:  command to execute (executable path and arguments)
+        :param err2out:  whether to redirect stderr output to TCP proxy-ed stdout
         :param mirror:   whether to mirror the process std{in,out,err} to the current std{in,out,err}
         """
+        self.proxy = proxy
         self.command = command
-        self._stop = True
+        self._err2out = err2out
         self._mirror = mirror
 
-    def start(self, queueIn: Queue, queueOut: Queue):
-        """Thread start.
-
-        :param queueIn:   stdin (input) queue
-        :param queueOut:  stdout (output) queue
-        :returns:         command exit code
-        """
+    def start(self):
+        """Thread start."""
         logger.info(f"[ProcessThread] Starting; command: {self.command}")
         process = Popen(self.command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
         set_blocking(process.stdout.fileno(), False)
         set_blocking(process.stderr.fileno(), False)
 
-        self._stop = False
         ret = None
         while True:
             # Have we been stopped ?
-            if self._stop:
+            if self.proxy.stopped():
                 logger.info("[ProcessThread] Terminating process")
                 try:
                     process.terminate()
+                    ret = errno.ESHUTDOWN
                 except Exception as e:
-                    logger.warning(f"[ProcessThread] Failed to terminate process; {e}")
+                    logger.warning(f"[ProcessThread] Failed to terminate process; {e.__class__.__name__}: {e}")
+                    ret = errno.ENOTRECOVERABLE
                 break
 
             # Has process stopped by itself ?
@@ -105,9 +108,9 @@ class ProcessThread:
             if ret is not None:
                 break
 
-            # Queued input for stdin ?
+            # Anything proxied/queued from the TCP server for stdin ?
             try:
-                data = queueIn.get(timeout=0.1)
+                data = self.proxy.queueIn.get(timeout=0.1)
                 if self._mirror:
                     sys.stdout.write("< " + data.decode(sys.stdout.encoding or "utf-8", errors="replace"))
                 process.stdin.write(data)
@@ -115,99 +118,45 @@ class ProcessThread:
             except Empty:
                 pass
 
-            # Anything on stdout ?
+            # Anything on stdout to proxy/queue to the TCP server ?
             for data in process.stdout:
                 if self._mirror:
                     sys.stdout.write("> " + data.decode(sys.stdout.encoding or "utf-8", errors="replace"))
-                queueOut.put(data)
+                self.proxy.queueOut.put(data)
 
-            # Anything on stderr ?
+            # Anything on stderr to proxy/queue to the TCP server ?
             for data in process.stderr:
                 if self._mirror:
                     sys.stderr.write("! " + data.decode(sys.stderr.encoding or "utf-8", errors="replace"))
-        self._stop = True
+                if self._err2out:
+                    self.proxy.queueOut.put(data)
 
         logger.debug(f"[ProcessThread] Process terminated; return code: {ret}")
-        return ret
-
-    def stop(self):
-        """Thread stop."""
-        self._stop = True
 
 
 class TCPServerThread(TCPServer):
-    class _RequestHandler(BaseRequestHandler):
-        def handle(self):
-            """Client request handler."""
-            logger.debug("[TCPServerThread:request] Handling client connection")
-            authenticated = self.server.password is None
-            if not authenticated:
-                logger.info("[TCPServerThread:request] Authentication required")
-            self.request.settimeout(0.1)  # -> non-blocking read()
-            line = b""
-            disconnect = False
-            while True:
-                if disconnect or self.server.stopped():
-                    logger.debug("[TCPServerThread:request] Closing client connection")
-                    try:
-                        self.request.shutdown(SHUT_RDWR)
-                        self.request.close()
-                    except Exception as e:
-                        logger.warning(f"[TCPServerThread:request] Failed to close client connection; {e}")
-                    break
-
-                try:
-                    while True:
-                        data = self.request.recv(1)  # NB: socket.settimeout(...)
-                        if data == b"":
-                            # Disconnected
-                            logger.debug("[TCPServerThread:request] Client disconnected")
-                            disconnect = True
-                            break
-                        line += data
-                        if data == b"\n":
-                            if authenticated:
-                                logger.debug(f"[TCPServerThread:request] Request: {line}")
-                                self.server.queueIn.put(line)
-                            else:
-                                if line.decode().strip() == self.server.password:
-                                    logger.info("[TCPServerThread:request] Request: Authenticated")
-                                    self.request.sendall(b"ProcessTCPProxy:AUTHENTICATED\n")
-                                    authenticated = True
-                                else:
-                                    logger.warning("[TCPServerThread:request] Request: Unauthorized")
-                                    self.request.sendall(b"ProcessTCPProxy:UNAUTHORIZED\n")
-                            line = b""
-                            break
-                except TimeoutError:
-                    pass
-                try:
-                    while True:
-                        try:
-                            data = self.server.queueOut.get(timeout=0.1)
-                            logger.debug(f"[TCPServerThread:request] Response: {data}")
-                            self.request.sendall(data)
-                        except Empty:
-                            break
-                except BrokenPipeError:
-                    break
-
-    def __init__(self, bind: str = "127.0.0.1", port: int = 6666, password: str = None, ssl: dict = None):
+    def __init__(
+        self,
+        proxy: "ProcessTCPProxy",
+        bind: str = "127.0.0.1",
+        port: int = 6666,
+        password: str = None,
+        ssl: dict = None,
+    ):
         """Initialisation.
 
+        :param proxy:     parent ProcessTCPProxy instance
         :param bind:      bind IP address
         :param port:      listening (TCP) port
         :param password:  connection password (password must be sent before anything is forwarded to the proxied process)
         :param ssl:       SSL options as passed to SSLContext.load_cert_chain(...) and SSLContext.load_verify_locations(...)
         """
+        self.proxy = proxy
         self.bind = bind
         self.port = port
         self.password = password
         self.ssl = ssl
         super().__init__((self.bind, self.port), self._RequestHandler)
-        self.queueIn = None
-        self.queueOut = None
-        self._stop = True
 
     def server_bind(self):
         """Override TCPServer.server_bind(...)."""
@@ -239,32 +188,85 @@ class TCPServerThread(TCPServer):
 
         return (socket, addr)
 
-    def start(self, queueIn: Queue, queueOut: Queue):
-        """Thread start.
-
-        :param queueIn:   stdin (input) queue
-        :param queueOut:  stdout (output) queue
-        """
+    def start(self):
+        """Thread start."""
         logger.info(f"[TCPServerThread] Starting server: {self.bind}:{self.port}")
-        self.queueIn = queueIn
-        self.queueOut = queueOut
-        self._stop = False
         self.serve_forever(0.1)
 
-    def stop(self):
-        """Thread stop."""
         logger.info("[TCPServerThread] Stopping")
-        self._stop = True
         try:
-            self.shutdown()
             self.server_close()
         except Exception as e:
-            logger.warning(f"[TCPServerThread] Failed to stop server; {e}")
-        self.queueIn = None
-        self.queueOut = None
+            logger.warning(f"[TCPServerThread] Failed to stop server; {e.__class__.__name__}: {e}")
 
-    def stopped(self):
-        return self._stop
+    class _RequestHandler(BaseRequestHandler):
+        def handle(self):
+            """Client request handler."""
+            logger.debug("[TCPServerThread:request] Handling client connection")
+            authenticated = self.server.password is None
+            if not authenticated:
+                logger.info("[TCPServerThread:request] Authentication required")
+            self.request.settimeout(0.1)  # -> non-blocking read()
+            self.server = cast(TCPServerThread, self.server)
+
+            line = b""
+            disconnect = False
+            while True:
+                # Have we been stopped ?
+                if self.server.proxy.stopped():
+                    break
+
+                # Has the client (been) disconnected ?
+                if disconnect:
+                    break
+
+                # Anything proxied/queued from the process stdout(/stderr) to send ?
+                try:
+                    while True:
+                        try:
+                            data = self.server.proxy.queueOut.get(timeout=0.1)
+                            logger.debug(f"[TCPServerThread:request] Response: {data}")
+                            self.request.sendall(data)
+                        except Empty:
+                            break
+                except BrokenPipeError:
+                    break
+
+                # Anything to receive and proxy/queue to the process stdin ?
+                try:
+                    while True:
+                        data = self.request.recv(1)  # NB: socket.settimeout(...)
+                        if data == b"":
+                            # Disconnected
+                            logger.debug("[TCPServerThread:request] Client disconnected")
+                            disconnect = True
+                            break
+                        line += data
+                        if data == b"\n":
+                            if authenticated:
+                                logger.debug(f"[TCPServerThread:request] Request: {line}")
+                                self.server.proxy.queueIn.put(line)
+                            else:
+                                if line.decode().strip() == self.server.password:
+                                    logger.info("[TCPServerThread:request] Request: Authenticated")
+                                    self.request.sendall(b"ProcessTCPProxy:AUTHENTICATED\n")
+                                    authenticated = True
+                                else:
+                                    logger.warning("[TCPServerThread:request] Request: Unauthorized")
+                                    self.request.sendall(b"ProcessTCPProxy:UNAUTHORIZED\n")
+                            line = b""
+                            break
+                except TimeoutError:
+                    pass
+
+            logger.debug("[TCPServerThread:request] Closing client connection")
+            try:
+                self.request.shutdown(SHUT_RDWR)
+                self.request.close()
+            except Exception as e:
+                logger.warning(
+                    f"[TCPServerThread:request] Failed to close client connection; {e.__class__.__name__}: {e}"
+                )
 
 
 class ProcessTCPProxy:
@@ -275,6 +277,7 @@ class ProcessTCPProxy:
         port: int = 6666,
         password: str = None,
         ssl: dict = None,
+        err2out: bool = False,
         mirror: bool = False,
     ):
         """Initialisation.
@@ -284,12 +287,19 @@ class ProcessTCPProxy:
         :param port:      listening (TCP) port
         :param password:  connection password (password must be sent before anything is forwarded to the proxied process)
         :param ssl:       SSL options as passed to SSLContext.load_cert_chain(...) and SSLContext.load_verify_locations(...)
+        :param err2out:   whether to redirect stderr output to TCP proxy-ed stdout
         :param mirror:    whether to mirror the process std{in,out,err} to the current std{in,out,err}
         """
+        # stdin/stdout queues
+        self.queueIn = Queue(maxsize=10)
+        self.queueOut = Queue(maxsize=1000)
+
         # Process / TCP Server
-        self.process = ProcessThread(command, mirror)
-        self.server = TCPServerThread(bind, port, password, ssl)
-        self._stop = True
+        self.process = ProcessThread(self, command, err2out, mirror)
+        self.tcpServer = TCPServerThread(self, bind, port, password, ssl)
+
+        # Threads control
+        self._stop = Event()
 
     def __signal(self, *args, **kwargs):
         """Signal handler."""
@@ -299,35 +309,17 @@ class ProcessTCPProxy:
         """Process TCP proxy start."""
         logger.debug("[ProcessTCPProxy] Starting")
 
-        # stdin/stdout queues
-        queueIn = Queue(maxsize=10)
-        queueOut = Queue(maxsize=1000)
-
         for s in (SIGINT, SIGTERM):
             signal(s, self.__signal)
 
-        threadProcess = Thread(name="ProcessThread", target=self.process.start, args=[queueIn, queueOut])
+        threadProcess = Thread(name="ProcessThread", target=self.process.start)
         threadProcess.start()
-        threadTCPServer = Thread(name="TCPServerThread", target=self.server.start, args=[queueIn, queueOut])
+        threadTCPServer = Thread(name="TCPServerThread", target=self.tcpServer.start)
         threadTCPServer.start()
 
-        self._stop = False
+        self._stop.clear()
         while True:
-            if self._stop:
-                logger.debug("[ProcessTCPProxy] Stopping")
-                wait = 10
-                threads = []
-                while True:
-                    threads = [t.name for t in _threadEnumerate() if t.name != "MainThread"]
-                    for t in threads:
-                        logger.debug(f"[ProcessTCPProxy] Thread still running: {t}")
-                    if wait == 0 or len(threads) == 0:
-                        break
-                    logger.debug(f"[ProcessTCPProxy] Waiting {wait} seconds ...")
-                    sleep(1)
-                    wait -= 1
-                if len(threads) > 0:
-                    logger.warning("[ProcessTCPProxy] Threads are still running; exiting ungracefully!")
+            if self._stop.wait(timeout=0.1):
                 break
 
             # Check both process and server threads are still running
@@ -338,20 +330,31 @@ class ProcessTCPProxy:
                 logger.warning("[ProcessTCPProxy] TCPServerThread stopped")
             if len(threads) < 2:
                 self.stop()
-            else:
-                sleep(1)
+
+        self.tcpServer.shutdown()
+
+        logger.debug("[ProcessTCPProxy] Stopping")
+        wait = 10
+        threads = []
+        while True:
+            sleep(1)
+            threads = [t.name for t in _threadEnumerate() if t.name != "MainThread"]
+            for t in threads:
+                logger.debug(f"[ProcessTCPProxy] Thread still running: {t}")
+            if wait == 0 or len(threads) == 0:
+                break
+            logger.debug(f"[ProcessTCPProxy] Waiting {wait} seconds ...")
+            wait -= 1
+        if len(threads) > 0:
+            logger.warning("[ProcessTCPProxy] Threads are still running; exiting ungracefully!")
 
     def stop(self):
         """Process TCP proxy stop."""
-        self._stop = True
-        try:
-            self.server.stop()
-        except Exception:
-            pass
-        try:
-            self.process.stop()
-        except Exception:
-            pass
+        self._stop.set()
+
+    def stopped(self) -> Event:
+        """Wait for Process TCP proxy stop event."""
+        return self._stop.wait(timeout=0.1)
 
 
 if __name__ == "__main__":
@@ -361,7 +364,7 @@ if __name__ == "__main__":
 
     # Configuration
     CONFIG = {
-        "global": {"debug": "false", "mirror": "false"},
+        "global": {"debug": "false", "err2out": "false", "mirror": "false"},
         "server": {"bind": "127.0.0.1", "port": "6666", "password": ""},
         "ssl": {},
     }
@@ -376,6 +379,7 @@ if __name__ == "__main__":
     else:
         config = CONFIG.copy()
     debug = config["global"]["debug"]
+    err2out = config["global"]["err2out"]
     mirror = config["global"]["mirror"]
     bind = config["server"]["bind"]
     port = config["server"]["port"]
@@ -387,6 +391,7 @@ if __name__ == "__main__":
     bind = getenv("PROCESSTCPPROXY_BIND", bind)
     port = int(getenv("PROCESSTCPPROXY_PORT", port))
     password = getenv("PROCESSTCPPROXY_PASSWORD", password)
+    err2out = getenv("PROCESSTCPPROXY_ERR2OUT", mirror).lower() in ["true", "yes", "t", "y", "1"]
     mirror = getenv("PROCESSTCPPROXY_MIRROR", mirror).lower() in ["true", "yes", "t", "y", "1"]
 
     # Logging
@@ -400,6 +405,6 @@ if __name__ == "__main__":
             exit(0)
         if len(sys.argv) < 2:
             raise RuntimeError(f"USAGE: {sys.argv[0]} <command> [<args> ...]")
-        ProcessTCPProxy(sys.argv[1:], bind, port, password, ssl, mirror).start()
+        ProcessTCPProxy(sys.argv[1:], bind, port, password, ssl, err2out, mirror).start()
     except KeyboardInterrupt:
         pass
