@@ -1,0 +1,250 @@
+#!/bin/bash
+# REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/yubikey-otp-easy
+SCRIPT="${0##*/}"
+VERSION='1.1.20240211a'
+shopt -s nocasematch
+
+
+## Helpers
+_INFO() {
+  [ -n "${OPT_VERBOSE}" ] && echo "INFO[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
+}
+_NOTICE() {
+  echo "NOTICE[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
+}
+_WARNING() {
+  echo "WARNING[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  return 0
+}
+_ERROR() {
+  echo "ERROR[${SCRIPT}${ARG_COMMAND:+:${ARG_COMMAND}}]: ${1}" >&2
+  [ -n "${2}" ] && exit "${2}"
+  return 0
+}
+
+
+## Usage
+__USAGE() {
+cat >&2 << EOF
+USAGE: ${SCRIPT} <command> [options]
+
+SYNOPSIS:
+  An easy wrapper for everyday-use of Yubico's YubiKey OTP
+
+COMMANDS:
+
+  YubiKey OTP initialization -> ${SCRIPT} help-init
+  YubiKey variables dump     -> ${SCRIPT} help-vars
+
+GLOBAL OPTIONS:
+
+  -...
+    Option passed "as is" to the YubiKey Manager utility
+
+EOF
+}
+
+# Arguments
+ARG_COMMAND=
+OPT_VERBOSE="${YUBIKEY_OTP_VERBOSE}"
+OPTS=()
+ARGS=()
+while [ -n "${1}" ]; do
+  case "${1}" in
+
+    '+verbose')
+      case "${1}" in
+        '+verbose') OPT_VERBOSE='yes';;
+      esac
+      ;;
+
+    'version'|'+version'|'--version')
+      echo "${SCRIPT} ${VERSION}" && exit 0
+      ;;
+
+    'help'|'+help'|'--help')
+      __USAGE && exit 1
+      ;;
+
+    +*)
+      _ERROR "Invalid option (${1})" && exit 1
+      ;;
+
+    -*)
+      if [ "${2:0:1}" == '-' ]; then
+        OPTS+=("${1}")
+      else
+        OPTS+=("${1}" "${2}")
+        shift
+      fi
+      ;;
+
+    *)
+      if [ -z "${ARG_COMMAND}" ]; then
+        ARG_COMMAND="${1}"
+      else
+        ARGS+=("${1}")
+      fi
+      ;;
+
+  esac
+  shift
+done
+export YUBIKEY_OTP_VERBOSE="${OPT_VERBOSE}"
+
+
+## Environment
+
+# Checks
+[ -z  "$(which ykman)" ] && _ERROR 'Missing YubiKey Manager utility (ykman)' 1
+
+
+## Helpers (cont'd)
+
+# YubiKey
+_YKMAN_vars() {
+  ykman info \
+  | sed -nE '/^\s/d;s|:\s*|:|;s|:$|:yes|;s|\s|_|g;s|^([_a-zA-Z0-9]*):([^'"'"']*)$|YKMAN_\1='"'"'\2'"'"'|p' \
+  || return 1
+  return 0
+}
+
+_YKOTP_vars() {
+  ykman otp info \
+  | sed -nE '/^\s/d;s|:\s*|:|;s|:$|:yes|;s|\s|_|g;s|^([_a-zA-Z0-9]*):([^'"'"']*)$|YKINFO_\1='"'"'\2'"'"'|p' \
+  || return 1
+  return 0
+}
+
+
+## Commands
+case "${ARG_COMMAND}" in
+
+  ########################################################################
+  # Initialization
+
+  'help-init') cat << EOF
+USAGE: ${SCRIPT} <command> [options]
+
+SYNOPSIS:
+  YubiKey OTP initialization
+
+COMMANDS:
+
+  ${SCRIPT} init-key
+    Initialize the YubiKey OTP
+    Always safe (all actions are idempotent)
+
+  ${SCRIPT} init-keepassxc
+    Initialize the YubiKey for use as Hardware Key in KeepassXC
+    DANGEROUS!!! THE HMAC-SHA1 KEY (SLOT 2) WILL BE RESET!!!
+
+  ${SCRIPT} init-reset
+    Factory-reset the YubiKey OTP
+    DANGEROUS!!! THE HMAC-SHA1 KEY (SLOT 2) WILL BE IRREVOCABLY WIPED!!!
+
+  ${SCRIPT} init-man, init-doc
+    Show YubiKey Manager manual/documentation page
+
+EOF
+    ;;
+
+
+  'init-man')
+    man ykman || echo 'https://docs.yubico.com/software/yubikey/tools/ykman/Using_the_ykman_CLI.html'
+    ;;
+
+
+  'init-doc')
+    echo 'https://docs.yubico.com/software/yubikey/tools/ykman/Using_the_ykman_CLI.html'
+    ;;
+
+
+  'init-key')
+    # Dump the key status
+    # shellcheck disable=SC2046
+    eval $(_YKMAN_vars) || exit 1
+    [ -z "${YKMAN_Serial_number}" ] && _ERROR 'Missing YubiKey serial number' 1
+
+    # YubiKey OTP: Swap slot 1 <-> 2 (enforce two-second delay for on-touch OTP generation)
+    if [ "${YKINFO_Slot_1}" == 'programmed' ] && [ "${YKINFO_Slot_2}" == 'empty' ]; then
+      ykman otp swap \
+      || _ERROR "Failed to swap the YubiKey OTP slots 1 and 2" 1
+      _INFO "Successfully swapped the YubiKey OTP slots 1 and 2"
+    fi
+    [ -n "${OPT_VERBOSE}" ] && echo 'YubiKey Slot Status:' && ykman otp info
+    ;;
+
+
+  'init-keepasxc')
+    # Generate random HMAC KEY (20-bytes)
+    KEY="$(openssl rand -hex 20)"
+
+    # YubiKey OTP: Init HMAC-SHA1 Challenge-Response mode on slot 2
+    # ykpersonalize -2 \
+    #   -a${KEY} \
+    #   -ochal-resp -ochal-hmac -ohmac-lt64 \
+    #   -ochal-btn-trig \
+    #   -oserial-api-visible \
+    #   -oallow-update \
+    ykman otp chalresp \
+      --touch \
+      2 \
+      "${KEY}" \
+    || _ERROR 'Failed to initialize HMAC-SHA1 Challenge-Response' 1
+    _NOTICE "Successfully initialized HMAC-SHA1 Challenge-Response (${KEY})"
+    ;;
+
+
+  'init-reset')
+    # YubiKey OTP: Reset
+    ykman otp delete 2 \
+    || _ERROR 'Failed to reset the YubiKey OTP' 1
+    _INFO 'Successfully reset the YubiKey OTP'
+    ;;
+
+
+  ########################################################################
+  # Variables
+
+  'help-vars') cat << EOF
+USAGE: ${SCRIPT} <command> [options]
+
+SYNOPSIS:
+  YubiKey variables dump
+
+COMMANDS:
+
+  ${SCRIPT} vars-yk
+    YubiKey status variables
+
+  ${SCRIPT} vars-otp
+    YubiKey OTP status variables
+
+EOF
+    ;;
+
+
+  'vars-yk')
+    _YKMAN_vars || exit 1
+    ;;
+
+
+  'vars-otp')
+    _YKOTP_vars || exit 1
+    ;;
+
+
+  ########################################################################
+  # (nope...)
+
+  *)
+    _ERROR 'Invalid command' 1
+
+esac
+
+
+## DONE!
+exit 0
