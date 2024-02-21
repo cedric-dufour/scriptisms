@@ -1,0 +1,52 @@
+#!/bin/bash
+# shellcheck disable=SC2034
+set -e -o pipefail
+SCRIPT="${0##*/}"
+SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
+
+## Defaults
+: "${DOWNLOAD_INSTALL_BIN_DIR:=${HOME}/bin}"
+: "${DOWNLOAD_INSTALL_LINK_DIR:=${HOME}/bin}"
+
+
+## Usage
+__USAGE() {
+  cat <<EOF
+USAGE: "${SCRIPT} <download-url>
+
+SYNOPSIS:
+  Download and install (symlink) the given OVF Tool version from
+    https://developer.vmware.com/tool/ovf-tool
+EOF
+}
+{ [ $# -lt 1 ] || [ "${1##*-}" == 'help' ]; } && __USAGE && exit 1
+
+# Arguments
+DOWNLOAD_URL="${1}"
+
+
+## Parameters
+VERSION="$(echo "${DOWNLOAD_URL}" | sed -nE 's|^.*VMware-ovftool-([^-]+)-.*$|\1|p')"
+DOWNLOAD_INSTALL_BIN="${DOWNLOAD_INSTALL_BIN_DIR}/ovftool-${VERSION}"
+DOWNLOAD_INSTALL_LINK="${DOWNLOAD_INSTALL_LINK_DIR}/ovftool"
+
+
+## Download
+DOWNLOAD_TMP="$(mktemp --suffix=.zip)"
+# shellcheck disable=SC2064
+trap "rm -f '${DOWNLOAD_TMP}'" EXIT
+
+echo "INFO[${SCRIPT}]: Downloading ${DOWNLOAD_URL} ..."
+wget -q -O "${DOWNLOAD_TMP}" "${DOWNLOAD_URL}"
+
+echo "INFO[${SCRIPT}]: Installing ${DOWNLOAD_INSTALL_LINK} -> ${DOWNLOAD_INSTALL_BIN} ..."
+mkdir -p "${DOWNLOAD_INSTALL_BIN}"
+cd "${DOWNLOAD_INSTALL_BIN}"
+unzip "${DOWNLOAD_TMP}"
+sed -i 's|readlink|readlink -e|' ovftool/ovftool
+chmod a+rx ovftool/ovftool
+rm -f "${DOWNLOAD_INSTALL_LINK}"
+ln -rs "${DOWNLOAD_INSTALL_BIN}/ovftool/ovftool" "${DOWNLOAD_INSTALL_LINK}"
+
+echo "INFO[${SCRIPT}]: Done!"
+ovftool --version | head -n 1
