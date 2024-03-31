@@ -1,0 +1,21 @@
+[flake8]
+max-line-length = 160
+
+# docstrings
+# REF: https://pypi.org/project/flake8-docstrings/
+docstring-convention = google
+
+# import-order
+# REF: https://pypi.org/project/flake8-import-order/
+import-order-style = edited
+
+# Mmmh...
+extend-ignore = D100,D104,D105,D107,D401,D402,E265,E266
+# D100 missing docstring in public module
+# D104 missing docstring in public package
+# D105 missing docstring in magic method
+# D107 missing docstring in __init__
+# D401 first line should be in imperative mood
+# D402 first line should not be the function's "signature"
+# E265 block comment should start with '# '
+# E266 too many leading '#' for block comment

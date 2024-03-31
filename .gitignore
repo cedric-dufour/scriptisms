@@ -3,3 +3,7 @@
 *~
 semantic.cache
 
+# Python artefacts
+*.pyc
+__pycache__
+.venv

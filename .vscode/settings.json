@@ -1,0 +1,8 @@
+{
+    "black-formatter.args": [
+        "--config=${workspaceFolder}/.dev/black.toml"
+    ],
+    "flake8.args": [
+        "--config=${workspaceFolder}/.dev/flake8.toml"
+    ]
+}
