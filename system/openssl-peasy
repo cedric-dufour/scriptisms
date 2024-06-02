@@ -1,0 +1,2056 @@
+#!/usr/bin/env python3
+"""An OpenSSL wrapper (library and CLI utility) for easy peasy everyday CA/PKI operations.
+
+Why wrapping the 'openssl' utility and not using a cryptographic library ?
+The rationale behind this choice is:
+- the vast majority of (Linux) stacks that use SSL material are based on the OpenSSL library;
+  using the same library/utility to generate that material is the most reliable way to "experience the
+  same behavior" (limitations and/or bugs included)
+- from the author's experience, OpenSSL (library and utility) is the only stack that exposes even the
+  most arcane aspects of X.509 (and ASN.1) specifications; e.g. creating Smart Card (PKCS#11) certificates
+  that work with MIT Kerberos or Microsoft ActiveDirectory
+- using the OpenSSL utility (and CLI invocations) rather than the OpenSSL library makes it easier for everyone
+  to follow (and replicate) the undertaken actions
+"""
+
+import logging
+import sys
+from collections import namedtuple
+from datetime import date as Date, datetime as DateTime
+from getpass import getpass
+from inspect import cleandoc
+from os import getenv
+from pathlib import Path
+from re import compile as _reCompile
+from subprocess import PIPE, Popen
+from tempfile import NamedTemporaryFile
+from time import time
+from typing import cast, Tuple, Union
+from urllib.parse import quote as _urlQuote
+
+logger = logging.getLogger("OpenSSL_Peasy")
+
+VERSION = '1.0.20240602a'
+
+
+########################################################################################################################
+# OpenSSL Peasy
+#
+
+
+class OpenSSL_Peasy_Exception(Exception):
+    """OpenSSL Peasy-specific exception."""
+
+    pass
+
+
+class OpenSSL_Peasy_ConfAndEnv:
+    """Update the OpenSSL configuration (with quirks applied, if necessary) and return the update shell environment (variables)."""
+
+    RE_CONF_ENV = _reCompile(r"(ENV::OPENSSL_(DN_[A-Z]+|EXT_SAN))")
+
+    def __init__(self, path: str, env: dict):
+        self._conf = path
+        self._env = env
+        self._file = None
+
+    def __enter__(self) -> dict:
+        # Gather OPENSSL_* environment variables - defining certificates attributes (DN/SANs) and potentially
+        # used in the OpenSSL configuration file - that are undefined
+        confEnvUndefined = []
+        for attr in OpenSSL_Peasy.SUBJECT_DN_ATTRS.keys():
+            envName = f"OPENSSL_DN_{attr}"
+            if not self._env.get(envName):
+                confEnvUndefined.append(f"ENV::{envName}")
+        if not self._env.get("OPENSSL_EXT_SAN"):
+            confEnvUndefined.append("ENV::OPENSSL_EXT_SAN")
+
+        # Create a temporary copy of the OpenSSL configuration file where lines referencing undefined environment
+        # variables are skipped (which would otherwise make OpenSSL fail)
+        with open(self._conf, "r") as f_conf:
+            self._file = NamedTemporaryFile("w", suffix=".conf")
+            for line in f_conf.readlines():
+                skip = False
+                for match, _ in self.RE_CONF_ENV.findall(line):
+                    if match in confEnvUndefined:
+                        skip = True
+                if skip:
+                    continue
+                self._file.write(line)
+            self._file.flush()
+            self._env["OPENSSL_CONF"] = self._file.name
+            logger.debug(f"Temporary OpenSSL configuration file written to: {self._file.name}")
+            return self._env
+
+    def __exit__(self, *args, **kwargs):
+        if self._file:
+            self._file.close()
+            self._file = None
+
+
+class OpenSSL_Peasy:
+    """An OpenSSL wrapper for easy peasy everyday CA/PKI operations."""
+
+    ####################################################################################################################
+    # Constants
+    #
+
+    # Working context
+    CONTEXT_CA = "CA"
+    CONTEXT_SUBSCRIBER = "subscriber"
+    CONTEXT_SELFSIGN = "selfsign"
+    CONTEXTS = [CONTEXT_CA, CONTEXT_SUBSCRIBER, CONTEXT_SELFSIGN]
+
+    # Cryptographic family
+    CRYPTO_FAMILY_RSA = "RSA"
+    CRYPTO_FAMILY_EC = "EC"
+    CRYPTO_FAMILIES = [CRYPTO_FAMILY_RSA, CRYPTO_FAMILY_EC]
+
+    # Default configuration
+    # REF: https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final
+    #    > CA: good for 20 years
+    #    > Subscriber: good for 10 years
+    CRYPTO_CONF = {
+        CRYPTO_FAMILY_RSA: {
+            CONTEXT_CA: {
+                "bits": 4096,
+                "wrap": "aes256",
+                "days": 7320,
+            },
+            CONTEXT_SUBSCRIBER: {
+                "bits": 3072,
+                "wrap": "aes256",
+            },
+            CONTEXT_SELFSIGN: {
+                "bits": 4096,
+                "wrap": "aes256",
+                "days": 7320,
+            },
+        },
+        CRYPTO_FAMILY_EC: {
+            CONTEXT_CA: {
+                "curve": "secp384r1",
+                "wrap": "aes256",
+                "days": 7320,
+            },
+            CONTEXT_SUBSCRIBER: {
+                "curve": "prime256v1",
+                "wrap": "aes256",
+            },
+            CONTEXT_SELFSIGN: {
+                "curve": "secp384r1",
+                "wrap": "aes256",
+                "days": 7320,
+            },
+        },
+    }
+
+    # File types
+    TYPE_PRIVATE_KEY = "key"
+    TYPE_PUBLIC_KEY = "pub"
+    TYPE_ATTESTATION = "attn"
+    TYPE_REQUEST = "req"
+    TYPE_CERTIFICATE = "cert"
+    TYPE_REVOCATION_LIST = "crl"
+    TYPES = [TYPE_PRIVATE_KEY, TYPE_PUBLIC_KEY, TYPE_ATTESTATION, TYPE_REQUEST, TYPE_CERTIFICATE, TYPE_REVOCATION_LIST]
+
+    # File direction
+    DIRECTION_INPUT = "in"
+    DIRECTION_OUTPUT = "out"
+    DIRECTIONS = [DIRECTION_INPUT, DIRECTION_OUTPUT]
+
+    # Subject / Distinguished Name (DN) attributes
+    SUBJECT_DN_ATTRS = {
+        "CN": "Common Name",
+        "C": "Country",
+        "ST": "State",
+        "L": "Locality",
+        "O": "Organization",
+        "OU": "Organizational Unit",
+        "T": "Title",
+        "MAIL": "E-mail",
+    }
+
+    # (helper regexp)
+    RE_DN_ATTRS = _reCompile(
+        r"(^|,)\s*(?P<attr>({ATTRS}))\s*=\s*".replace("{ATTRS}", "|".join(SUBJECT_DN_ATTRS.keys()))
+    )
+
+    # Subject Alternative Names (SANs)
+    SUBJECT_ALT_NAMES = {
+        "DNS": "Fully-Qualified Domain Name (FQDN)",
+        "IP": "IPv4/IPv6 address",
+        "email": "E-mail address",
+        "URI": "Uniform Resource Identifier",
+        "RID": "Resource Identifier",
+        "dirName": "Directory name",
+        "otherName": "Other name",
+    }
+
+    # Certificate status
+    CERTIFICATE_STATUS_VALID = "VALID"
+    CERTIFICATE_STATUS_EXPIRED = "EXPIRED"
+    CERTIFICATE_STATUS_REVOKED = "REVOKED"
+    CERTIFICATE_STATUSES = [CERTIFICATE_STATUS_VALID, CERTIFICATE_STATUS_EXPIRED, CERTIFICATE_STATUS_REVOKED]
+
+    # PKCS#11 resources
+    PKCS11_RESOURCES = {
+        "engine": "OpenSSL PKCS#11 engine (library entrypoint) identifier",
+        "token": "Token identifier (label)",
+        "object": "Object identifier (name)",
+        "id": "Resource identifier (index)",
+    }
+
+    ####################################################################################################################
+    # Initialization
+    #
+
+    def __init__(self, root: str = None, conf: str = None):
+        """Initialization.
+
+        Args:
+            root: root working directory path; by default: the current working directory
+            conf: OpenSSL configuration file path; by default: {root}/openssl.conf
+        """
+        self._root = Path(root if root is not None else getenv("OPENSSL_ROOT", ".")).resolve()
+        self._conf = Path(conf if conf is not None else getenv("OPENSSL_CONF", f"{self._root}/openssl.conf"))
+        self.withBinaries()
+        self.withContext()
+        self.withSecrets()
+        self.withDirectories()
+        self.withPermissions()
+        self.withDate()
+        self.withAuto()
+        self.withUnlink()
+        self.withPKCS11()
+
+    def withBinaries(self, openssl: str = "openssl", pkcs11_tool: str = "pkcs11-tool") -> "OpenSSL_Peasy":
+        """Set the path to the required binaries.
+
+        Args:
+            openssl: path to the OpenSSL utility
+            pkcs11_tool: path to the PKCS#11 tool
+
+        Returns:
+            self
+        """
+        self._binOpenSSL = openssl
+        self._binPKCS11Tool = pkcs11_tool
+        return self
+
+    def withContext(
+        self, context: str = CONTEXT_SUBSCRIBER, family: str = CRYPTO_FAMILY_EC, conf: dict = None
+    ) -> "OpenSSL_Peasy":
+        """Set the signing context and cryptography parameters.
+
+        Args:
+            context: working context (among CONTEXTS)
+            family: cryptography family (among CRYPTO_FAMILIES)
+            conf: cryptography configuration (see CRYPTO_CONF)
+
+        Returns:
+            self
+        """
+        self.validContext(context)
+        self.validFamily(family)
+        self._context = context
+        self._crypto = self.CRYPTO_CONF[family][self._context].copy()
+        if conf:
+            for k in self._crypto.keys():
+                v = conf.get(k)
+                if v:
+                    self._crypto[k] = v
+        self._crypto["family"] = family
+        return self
+
+    def withSecrets(self, CA: str = None, subscriber: str = None) -> "OpenSSL_Peasy":
+        """Set the secrets to access the CA/subscribers private key.
+
+        Args:
+            CA: Certification Authority's private key secret
+            subscriber: subscribers' private key secret
+
+        Returns:
+            self
+        """
+        self._secrets = {
+            OpenSSL_Peasy.CONTEXT_CA: CA,
+            OpenSSL_Peasy.CONTEXT_SUBSCRIBER: subscriber,
+            OpenSSL_Peasy.CONTEXT_SELFSIGN: subscriber,
+        }
+        return self
+
+    def withDirectories(self, directories: dict = None) -> "OpenSSL_Peasy":
+        """Set the directories where the various OpenSSL-ed (CA/PKI) resources are located.
+
+        Args:
+            directories: dictionary of resources paths (per type):
+                "CA": Certification Authority (CA) material (private key, certificate, database, etc.)
+                "key": subscribers private keys
+                "pub": subscribers public keys
+                "req": subscribers Certificate Signing Requests (CSRs)
+                "attn": subscribers CSRs attestations
+                "cert": subscribers X.509 certificates
+                "crl": Certificates Revocation Lists (CRLs)
+
+        Returns:
+            self
+        """
+        directories = directories or {}
+        self._directories = {
+            "CA": Path(directories.get("CA") or self._root / "CA").resolve(),
+            "key": Path(directories.get("key") or self._root / "keys").resolve(),
+            "pub": Path(directories.get("pub") or self._root / "pubs").resolve(),
+            "req": Path(directories.get("req") or self._root / "reqs").resolve(),
+            "attn": Path(directories.get("attn") or self._root / "attns").resolve(),
+            "cert": Path(directories.get("cert") or self._root / "certs").resolve(),
+            "crl": Path(directories.get("crl") or self._root / "crls").resolve(),
+        }
+        return self
+
+    def withPermissions(self, file: int = 0o600, directory: int = 0o700) -> "OpenSSL_Peasy":
+        """Set the permissions to set on newly created file/directory.
+
+        Args:
+            file: file permissions
+            directory: directory permissions
+
+        Returns:
+            self
+        """
+        self._modeFile = file
+        self._modeDirectory = directory
+
+    def withDate(self, date: Union[Date, str, float] = None, glob: bool = True) -> "OpenSSL_Peasy":
+        """Set the working date (YYYYMMDD).
+
+        Args:
+            date: Date object, ISO8601 date or UNIX timestamp; by default: current date
+            glob: whether to look for a most recent match if a resource with the given date does not exist
+
+        Returns:
+            self
+        """
+        date = date or time()
+        if isinstance(date, (int, float)):
+            date = Date.fromtimestamp(date)
+        if isinstance(date, Date):
+            date = cast(Date, date).isoformat()
+        self._date = date.replace("-", "")
+        self._dateGlob = glob
+        return self
+
+    def withAuto(self, auto: bool = False) -> "OpenSSL_Peasy":
+        """Automatically create required resources (if missing).
+
+        Args:
+            auto: whether to automatically create required resources; if False, missing resources will trigger an Exception
+
+        Returns:
+            self
+        """
+        self._auto = auto
+        return self
+
+    def withUnlink(self, unlink: bool = False) -> "OpenSSL_Peasy":
+        """Unlink (delete) existing resources (if conflicting).
+
+        Args:
+            unlink: whether to unlink (delete) existing resources; if False, conflicting resources will trigger an Exception
+
+        Returns:
+            self
+        """
+        self._unlink = unlink
+        return self
+
+    def withPKCS11(
+        self, token: str = None, object: str = None, id: Union[int, str] = None, engine: str = "pkcs11"
+    ) -> "OpenSSL_Peasy":
+        """Use PKCS#11, hardware-hosted private key.
+
+        Args:
+            token: PKCS#11 token identifier
+            object: PKCS#11 object identifier
+            id: PKCS#11 resource identifier
+            engine: PKCS#11 (library) entrypoint (in OPENSSL_CONF)
+
+        Returns:
+            self
+        """
+        if any((token, object, id)):
+            self._pkcs11 = {"engine": engine}
+            # REF: https://www.rfc-editor.org/rfc/rfc7512
+            uriParts = []
+            if token:
+                self._pkcs11["token"] = token
+                uriParts.append(f"token={_urlQuote(token)}")
+            if object:
+                self._pkcs11["object"] = token
+                uriParts.append(f"object={_urlQuote(object)}")
+            if id:
+                # 123456 (0x1e240) => "%01%E2%40"
+                self._pkcs11["id"] = id
+                id = f"{int(id):X}"
+                if len(id) % 2:
+                    id = f"0{id}"
+                id = "".join([f"%{id[i:i+2]}" for i in range(0, len(id), 2)])
+                uriParts.append(f"id={id}")
+            self._pkcs11["uri"] = f"pkcs11:{';'.join(uriParts)}"
+        else:
+            self._pkcs11 = None
+        return self
+
+    def caInit(self, external: bool = False):
+        """Initialize the OpenSSL Certification Authority (CA) directory structure.
+
+        Args:
+            external: if True, initialize the CA as one that is externally managed (i.e. which private key is not available)
+        """
+        # Root (working) directory
+        if not self._root.exists() or not self._root.is_dir():
+            return OpenSSL_Peasy_Exception(f"Missing or invalid root directory: {self._root}")
+
+        # Resources directories
+        for dir in self._directories.values():
+            dir.mkdir(mode=self._modeDirectory, exist_ok=True)
+
+        # CA sub-directory
+        CA_path = self._directories["CA"]
+        (CA_path / "certs").mkdir(mode=self._modeDirectory, exist_ok=True)
+        (CA_path / "database").touch(mode=self._modeFile, exist_ok=True)
+        (CA_path / "attn.pem").touch(mode=self._modeFile, exist_ok=True)
+        for file in ["crl.pem", "ocsp.pem"]:
+            path = CA_path / file
+            if not path.exists():
+                path.symlink_to(CA_path / "cert.pem")
+        if not external:
+            (CA_path / "attr").touch(mode=self._modeFile, exist_ok=True)
+            for file in ["serial", "crlnumber"]:
+                path = CA_path / file
+                path.touch(mode=self._modeFile, exist_ok=True)
+                with open(path, "w") as f:
+                    f.write("01\n")
+
+        logger.info(f"OpenSSL Certification Authority directory structure successfully created: {self._root}")
+
+    ####################################################################################################################
+    # Properties
+    #
+
+    @property
+    def root(self) -> Path:
+        """Return the root working directory path."""
+        return self._root
+
+    @property
+    def conf(self) -> Path:
+        """Return the OpenSSL configuration file path."""
+        return self._conf
+
+    def directory(self, type: str) -> Path:
+        """Return the directory path for the specified resource type."""
+        return self._directories[type]
+
+    @property
+    def date(self) -> str:
+        """Return the working date (YYYYMMDD)."""
+        return self._date
+
+    ####################################################################################################################
+    # Helpers
+    #
+
+    @staticmethod
+    def validContext(context: str, exception: bool = True) -> bool:
+        """Validate the given working context."""
+        if context in OpenSSL_Peasy.CONTEXTS:
+            return True
+        if exception:
+            raise OpenSSL_Peasy_Exception(f"Invalid working context: {context}")
+        return False
+
+    @staticmethod
+    def validFamily(family: str, exception: bool = True) -> bool:
+        """Validate the given cryptography family."""
+        if family in OpenSSL_Peasy.CRYPTO_FAMILIES:
+            return True
+        if exception:
+            raise OpenSSL_Peasy_Exception(f"Invalid cryptography family: {family}")
+        return False
+
+    @staticmethod
+    def validType(type: str, exception: bool = True) -> bool:
+        """Validate the given file type."""
+        if type in OpenSSL_Peasy.TYPES:
+            return True
+        if exception:
+            raise OpenSSL_Peasy_Exception(f"Invalid file type: {type}")
+        return False
+
+    @staticmethod
+    def validDirection(direction: str, exception: bool = True) -> bool:
+        """Validates the given file direction."""
+        if direction in OpenSSL_Peasy.DIRECTIONS:
+            return True
+        if exception:
+            raise OpenSSL_Peasy_Exception(f"Invalid file direction: {direction}")
+        return False
+
+    def path(self, id: str, type: str, direction: str) -> Path:
+        """Return the path corresponding to the specified resource ID/type.
+
+        For input files and if date globbing is enabled - see withDate(...) - this will look for the most recent corresponding match.
+        For output files and if unlinking is enabled - see withUnlink(...) - this will unlink (delete) any existing file before proceeding.
+
+        Args:
+            id: resource ID
+            type: resource type (among TYPES)
+            direction: file direction (among DIRECTIONS)
+
+        Returns:
+            resource path
+        """
+        self.validType(type)
+        self.validDirection(direction)
+
+        if self._context == self.CONTEXT_SELFSIGN:
+            d = Path.cwd()
+            p = d / f"{id}-{type}-{self._date}.pem"
+        elif self._context == self.CONTEXT_CA:
+            d = Path(self._directories["CA"])
+            p = d / f"{type}.pem"
+        elif self._context == self.CONTEXT_SUBSCRIBER:
+            d = Path(self._directories[type])
+            if type == self.TYPE_REVOCATION_LIST:
+                p = d / f"{type}-{self._date}.pem"
+            else:
+                p = d / f"{id}-{type}-{self._date}.pem"
+        else:
+            raise OpenSSL_Peasy_Exception("Huh?!?... WTF!?!")
+
+        if direction == self.DIRECTION_INPUT:
+            if not p.exists():
+                if self._context != self.CONTEXT_SELFSIGN and self._dateGlob:
+                    logger.debug(f"Input file does not exists: {p}; looking for most recent match ...")
+                    if type == self.TYPE_REVOCATION_LIST:
+                        p_list = sorted(d.glob(f"{type}-[12][09][0-9][0-9][01][0-9][0-3][0-9].pem"))
+                    else:
+                        p_list = sorted(d.glob(f"{id}-{type}-[12][09][0-9][0-9][01][0-9][0-3][0-9].pem"))
+                    if not p_list:
+                        raise OpenSSL_Peasy_Exception(f"No matching input file: {id}-{type}-*.pem")
+                    p = p_list[-1]
+                    logger.debug(f"Using input file most recent match: {p}")
+                else:
+                    raise OpenSSL_Peasy_Exception(f"Input file does not exist: {p}")
+        elif direction == self.DIRECTION_OUTPUT:
+            if p.exists():
+                if not self._unlink:
+                    raise OpenSSL_Peasy_Exception(f"Output file already exists: {p}")
+                logger.debug(f"Output file already exists: {p}; unlinking (deleting)")
+                p.unlink()
+        else:
+            raise OpenSSL_Peasy_Exception("Huh?!?... WTF!?!")
+
+        return p
+
+    def pathComponents(self, path: Path) -> Tuple[str, str, str]:
+        """Return the components - ID, type and date - from the given path."""
+        components = path.stem.split("-")
+        id = "-".join(components[:-2])
+        type = components[-2]
+        date = components[-1]
+        return (id, type, date)
+
+    def binOpenSSL(self, asList: bool = True) -> list:
+        """Return the OpenSSL binary path / command."""
+        return [self._binOpenSSL] if asList else self._binPKCS11Tool
+
+    def binPKCS11Tool(self, asList: bool = True) -> list:
+        """Return the PKCS#11 Tool binary path / command."""
+        return [self._binPKCS11Tool] if asList else self._binPKCS11Tool
+
+    def shellCommand(
+        self,
+        command: Union[list, str],
+        stdin: Union[str, bytes] = None,
+        env: dict = None,
+        timeout: float = None,
+        exception: bool = True,
+    ) -> Tuple[int, bytes, bytes]:
+        """Execute the given shell command.
+
+        Args:
+            command: executable path and arguments (as passed to subprocess.Popen)
+            stdin: standard input (as passed to subprocess.communicate)
+            env: additional environment (variables)
+            timeout: execution timeout [seconds]
+            exception: raise OSError on non-zero exit code
+
+        Returns:
+            Tuple (exit code, standard output, standard error)
+
+        Raises:
+            OSError: on non-zero exit code (if 'exception' is True)
+        """
+        if isinstance(stdin, str):
+            stdin = stdin.encode(sys.stdin.encoding or "utf-8")
+        env = env or self.shellEnvironment()
+
+        # REF: https://docs.python.org/3/library/subprocess.html#popen-objects
+        if logger:
+            logger.debug(f"shellCommand: Executing command (CLI): {command}")
+        p = Popen(
+            command, env=env, stdin=PIPE if stdin else None, stdout=PIPE, stderr=PIPE, shell=isinstance(command, str)
+        )
+        (stdout, stderr) = p.communicate(stdin, timeout or 3.0)
+        rc = p.returncode
+
+        if rc != 0 and exception:
+            raise OSError(rc, stderr.decode(sys.stderr.encoding or "utf-8", errors="replace").strip())
+
+        return (rc, stdout, stderr)
+
+    def shellEnvironment(self, dn: dict = None, sans: list = None, env: dict = None) -> dict:
+        """Return the environment (variables) to pass to the OpenSSL utility.
+
+        Args:
+            dn: certificate subject / Distinguished Name (DN), as a dictionary (see SUBJECT_DN_ATTRS)
+            sans: Subject Alternative Names (SANs); as a list (each entry being prefixed its type; see SUBJECT_ALT_NAMES)
+            env: additional environment variables to include
+
+        Returns:
+            The dictionary of OpenSSL environment variables:
+            - OPENSSL_CONF: path to the OpenSSL configuration file
+            - OPENSSL_ROOT: root working directory
+            - OPENSSL_DN_{CN,C,ST,...}: certificate subject / Distinguished Name (DN) attributes
+            - OPENSSL_EXT_SAN: comma-seperated Subject Alternative Names (SANs)
+        """
+        environment = {
+            "OPENSSL_ROOT": str(self._root),
+            "OPENSSL_CONF": "/dev/null",
+        }
+        if env:
+            environment.update(env)
+        if dn:
+            for attr, value in dn.items():
+                if attr not in self.SUBJECT_DN_ATTRS.keys():
+                    raise OpenSSL_Peasy_Exception(f"Invalid subject / Distinguished Name (DN) attribute: {attr}")
+                environment[f"OPENSSL_DN_{attr}"] = str(value)
+        if sans:
+            for san in sans:
+                try:
+                    san = san.split(":", 1)[0]
+                    if san not in self.SUBJECT_ALT_NAMES.keys():
+                        raise ValueError()
+                except (ValueError, IndexError):
+                    raise OpenSSL_Peasy_Exception(f"Invalid Subject Alternative Names (SAN) type: {san}")
+            environment["OPENSSL_EXT_SAN"] = ",".join(sans)
+        return environment
+
+    ####################################################################################################################
+    # Private key / OpenSSL_Peasy.TYPE_PRIVATE_KEY
+    #
+
+    @staticmethod
+    def keyDoc() -> list:
+        """Return the documentation link(s) for private key operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-genpkey.html",
+            "https://www.openssl.org/docs/manmaster/man1/openssl-pkey.html",
+        ]
+
+    def keyMake(self, id: str, opensslOptions: list = None):
+        """Create private key.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception(
+                "Operation not applicable with PKCS#11; please use ad-hoc tooling (pkcs15-tool, yubico-piv-tool, etc.)"
+            )
+
+        env = self.shellEnvironment()
+        timeout = None if self._secrets[self._context] else 30.0
+
+        p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_OUTPUT)
+
+        tmp_param = None
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["genpkey", "-out", p_key])
+            if self._crypto["family"] == self.CRYPTO_FAMILY_RSA:
+                openssl.extend(["-algorithm", "RSA", "-pkeyopt", f"rsa_keygen_bits:{self._crypto['bits']}"])
+            elif self._crypto["family"] == self.CRYPTO_FAMILY_EC:
+                tmp_param = NamedTemporaryFile()
+                openssl_param = ["openssl", "genpkey", "-genparam", "-out", tmp_param.name]
+                openssl_param.extend(["-algorithm", "EC", "-pkeyopt", f"ec_paramgen_curve:{self._crypto['curve']}"])
+                self.shellCommand(openssl_param)
+                openssl.extend(["-paramfile", tmp_param.name])
+            else:
+                raise OpenSSL_Peasy_Exception(f"Unsupported cryptography family: {self._crypto}")
+            if self._secrets[self._context]:
+                env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+                openssl.extend([f"-{self._crypto['wrap']}", "-pass", "env:OPENSSL_PASSWORD"])
+            logger.info("Creating private key (this may take some time) ...")
+            self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=300.0)
+        except Exception:
+            p_key.unlink(missing_ok=True)
+            raise
+        finally:
+            if tmp_param:
+                tmp_param.close()
+        logger.info(f"Private key successfully created: {p_key.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-in", p_key, "-noout", "-text"])
+            if self._secrets[self._context]:
+                openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+            (_, stdout, _) = self.shellCommand(openssl, env=env, timeout=timeout)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def keyImport(self, id: str, data: bytes = None, opensslOptions: list = None):
+        """Import private key.
+
+        Args:
+            id: resource ID
+            data: private key; alternatively, use OpenSSL '-in ...' option
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        env = self.shellEnvironment()
+        timeout = None if self._secrets[self._context] else 30.0
+
+        p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-out", p_key])
+            if self._secrets[self._context]:
+                env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+                openssl.extend([f"-{self._crypto['wrap']}", "-passout", "env:OPENSSL_PASSWORD"])
+            self.shellCommand([*openssl, *(opensslOptions or [])], env=env, stdin=data, timeout=timeout)
+        except Exception:
+            p_key.unlink(missing_ok=True)
+            raise
+        logger.info(f"Private key successfully imported: {p_key.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-in", p_key, "-noout", "-text"])
+            if self._secrets[self._context]:
+                openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+            (_, stdout, _) = self.shellCommand(openssl, env=env, timeout=timeout)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def keyGet(self, id: str, opensslOptions: list = None) -> bytes:
+        """Return private key data.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        env = self.shellEnvironment()
+        timeout = None if self._secrets[self._context] else 30.0
+
+        p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["pkey", "-in", p_key])
+        if self._secrets[self._context]:
+            env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+            openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+        return stdout
+
+    ####################################################################################################################
+    # Public key / OpenSSL_Peasy.TYPE_PUBLIC_KEY
+    #
+
+    @staticmethod
+    def pubDoc() -> list:
+        """Return the documentation link(s) for public key operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-pkey.html",
+        ]
+
+    def pubMake(self, id: str, opensslOptions: list = None):
+        """Create public key.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        env = self.shellEnvironment()
+        timeout = None if not self._pkcs11 and self._secrets[self._context] else 30.0
+
+        p_pub = self.path(id, self.TYPE_PUBLIC_KEY, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-pubout", "-out", p_pub])
+            if self._pkcs11:
+                openssl.extend(
+                    [
+                        "-in",
+                        f"{self._pkcs11['uri']};type=private",
+                        "-inform",
+                        "engine",
+                        "-engine",
+                        self._pkcs11["engine"],
+                    ]
+                )
+            else:
+                try:
+                    p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+                except OpenSSL_Peasy_Exception:
+                    if not self._auto:
+                        raise
+                    self.keyMake(id)
+                    p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+
+                openssl.extend(["-in", p_key])
+                if self._secrets[self._context]:
+                    env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+                    openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+            self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+        except Exception:
+            p_pub.unlink(missing_ok=True)
+            raise
+        logger.info(f"Public key successfully created: {p_pub.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-pubin", "-in", p_pub, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def pubImport(self, id: str, data: bytes = None, opensslOptions: list = None):
+        """Import public key.
+
+        Args:
+            id: resource ID
+            data: public key; alternatively, use OpenSSL '-in ...' option
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        p_pub = self.path(id, self.TYPE_PUBLIC_KEY, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-pubout", "-out", p_pub, "-pubin"])
+            self.shellCommand([*openssl, *(opensslOptions or [])], stdin=data)
+        except Exception:
+            p_pub.unlink(missing_ok=True)
+            raise
+        logger.info(f"Public key successfully imported: {p_pub.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["pkey", "-pubin", "-in", p_pub, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def pubGet(self, id: str, opensslOptions: list = None) -> bytes:
+        """Return public key data.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        p_pub = self.path(id, self.TYPE_PUBLIC_KEY, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["pkey", "-pubin", "-in", p_pub])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])])
+        return stdout
+
+    ####################################################################################################################
+    # Attestation / OpenSSL_Peasy.TYPE_ATTESTATION
+    #
+    # NOTE: An attestation is a certificate based on the subscriber's private key and signed by the hardware hosting
+    #       that private key, using its own internal (Intermediate) Certification Authority, usually chained to
+    #       the hardware vendor's Root Certification Authority.
+    #       As such, it allows other Certification Authorities to verify that a subcriber's request is based on a
+    #       a private key hosted on authorized hardware only.
+    #
+
+    @staticmethod
+    def attnDoc() -> list:
+        """Return the documentation link(s) for attestation operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-verify.html",
+            "https://developers.yubico.com/PIV/Introduction/PIV_attestation.html",
+        ]
+
+    def attnImport(self, id: str, data: bytes = None, opensslOptions: list = None):
+        """Import attestation.
+
+        Args:
+            id: resource ID
+            data: X.509 certificate; alternatively, use OpenSSL '-in ...' option
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        p_attn = self.path(id, self.TYPE_ATTESTATION, self.DIRECTION_OUTPUT)
+
+        # NOTE: We must import the attestation "as-is" as it may contain additional certificates that participate to the chain (down to the anchoring Root CA)
+        try:
+            self.shellCommand(["tee", p_attn], stdin=data)
+            # (verify)
+            openssl = self.binOpenSSL()
+            openssl.extend(["x509", "-in", p_attn])
+            self.shellCommand([*openssl, *(opensslOptions or [])])
+        except Exception:
+            p_attn.unlink(missing_ok=True)
+            raise
+        logger.info(f"Attestation successfully imported: {p_attn.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["x509", "-in", p_attn, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def attnGet(self, id: str, opensslOptions: list = None) -> bytes:
+        """Return attestation data.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        p_attn = self.path(id, self.TYPE_ATTESTATION, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_attn])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])])
+        return stdout
+
+    def attnVerify(self, id: str, opensslOptions: list = None, exception: bool = True) -> bool:
+        """Verify attestation (is issued by an authorized CA).
+
+        NOTE: The authorized attesting Root CA(s) certificate(s) must be bundled in the {CA}/attn.pem file.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+            exception: raise an Exception if the verification fails
+
+        Returns:
+            True is the verification succeeds, False otherwise
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        p_attn = self.path(id, self.TYPE_ATTESTATION, self.DIRECTION_INPUT)
+
+        # NOTE: We allow the attestation file to include the ICA chain if applicable (<-> -untrusted ...)
+        p_attn_cas = self._directories["CA"] / "attn.pem"
+        openssl = self.binOpenSSL()
+        openssl.extend(["verify", "-CAfile", p_attn_cas, "-untrusted", p_attn])
+        openssl.extend(opensslOptions or [])
+        openssl.extend(["--", p_attn])
+        try:
+            (rc, stdout, stderr) = self.shellCommand(openssl, exception=False)
+            if logger.isEnabledFor(logging.DEBUG) and stdout:
+                sys.stderr.buffer.write(stdout + b"\n")
+            if rc:
+                raise OSError(rc, stderr.decode(sys.stderr.encoding or "utf-8", errors="replace").strip())
+        except OSError as e:
+            logger.error(f"{e.__class__.__name__}: {e.strerror} [{e.errno}]")
+            if exception:
+                raise OpenSSL_Peasy_Exception(
+                    f"Attestation verification failed: {p_attn.name} <!> {p_attn_cas.name}"
+                ) from None
+            return False
+
+        logger.info(f"Attestation is valid: {p_attn.name} <-> {p_attn_cas.name}")
+        return True
+
+    ####################################################################################################################
+    # Certificate Signing Request (CSR) / OpenSSL_Peasy.TYPE_REQUEST
+    #
+
+    @staticmethod
+    def reqDoc() -> list:
+        """Return the documentation link(s) for Certificate Signing Request (CSR) operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-req.html",
+        ]
+
+    def reqMake(self, id: str, dn: dict = None, sans: list = None, opensslOptions: list = None):
+        """Create Certificate Signing Request (CSR).
+
+        Args:
+            id: resource ID
+            dn: certificate subject / Distinguished Name (DN), as a dictionary (see SUBJECT_DN_ATTRS)
+            sans: Subject Alternative Names (SANs); as a list (each entry being prefixed its type; see SUBJECT_ALT_NAMES)
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        dn = dn or {}
+        if "CN" not in dn:
+            raise OpenSSL_Peasy_Exception("Subject / Distinguished Name (DN) must contain Common Name (CN) attribute")
+        env = self.shellEnvironment(dn=dn, sans=sans)
+        timeout = None if not self._pkcs11 and self._secrets[self._context] else 30.0
+
+        p_req = self.path(id, self.TYPE_REQUEST, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["req", "-new", "-out", p_req])
+            if self._pkcs11:
+                openssl.extend(
+                    [
+                        "-key",
+                        f"{self._pkcs11['uri']};type=private",
+                        "-keyform",
+                        "engine",
+                        "-engine",
+                        self._pkcs11["engine"],
+                    ]
+                )
+            else:
+                try:
+                    p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+                except OpenSSL_Peasy_Exception:
+                    if not self._auto:
+                        raise
+                    self.keyMake(id)
+                    p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+
+                openssl.extend(["-key", p_key])
+                if self._secrets[self._context]:
+                    env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+                    openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+            with OpenSSL_Peasy_ConfAndEnv(self._conf, env) as env:
+                self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+        except Exception:
+            p_req.unlink(missing_ok=True)
+            raise
+        logger.info(f"Certificate Signing Request (CSR) successfully created: {p_req.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["req", "-in", p_req, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def reqImport(self, id: str, data: bytes = None, opensslOptions: list = None):
+        """Import Certificate Signing Request (CSR).
+
+        Args:
+            id: resource ID
+            data: Certificate Signing Request (CSR); alternatively, use OpenSSL '-in ...' option
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        p_req = self.path(id, self.TYPE_REQUEST, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["req", "-out", p_req])
+            self.shellCommand([*openssl, *(opensslOptions or [])], stdin=data)
+        except Exception:
+            p_req.unlink(missing_ok=True)
+            raise
+        logger.info(f"Certificate Signing Request (CSR) successfully imported: {p_req.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["req", "-in", p_req, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def reqGet(self, id: str, opensslOptions: list = None) -> bytes:
+        """Return Certificate Signing Request (CSR) data.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        p_req = self.path(id, self.TYPE_REQUEST, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["req", "-in", p_req])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])])
+        return stdout
+
+    def reqAttest(self, id: str, exception: bool = True) -> bool:
+        """Verify Certificate Signing Request (CSR) matches attestation.
+
+        Args:
+            id: resource ID
+            exception: raise an Exception if the verification fails
+
+        Returns:
+            True if the verification succeeds, False otherwise
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        # NOTE: We verify that both CSR and attestation are based on the same private key by comparing their public key (which must be identical)
+        p_req = self.path(id, self.TYPE_REQUEST, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["req", "-in", p_req, "-noout", "-pubkey"])
+        (_, pubkey_req, _) = self.shellCommand(openssl)
+
+        p_attn = self.path(id, self.TYPE_ATTESTATION, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_attn, "-noout", "-pubkey"])
+        (_, pubkey_attn, _) = self.shellCommand(openssl)
+
+        if b"PUBLIC KEY" not in pubkey_req or pubkey_req != pubkey_attn:
+            if exception:
+                raise OpenSSL_Peasy_Exception(
+                    f"Certificate Signing Request (CSR) does not match attestation: {p_req.name} <!> {p_attn.name}"
+                )
+            return False
+
+        logger.info(f"Certificate Signing Request (CSR) matches attestation: {p_req.name} <-> {p_attn.name}")
+        return True
+
+    ####################################################################################################################
+    # X.509 Certificate / OpenSSL_Peasy.TYPE_CERTIFICATE
+    #
+
+    @staticmethod
+    def certDoc() -> list:
+        """Return the documentation link(s) for X.509 certificate operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-ca.html",
+            "https://www.openssl.org/docs/manmaster/man1/openssl-req.html",
+        ]
+
+    def certMake(self, id: str, dn: dict = None, sans: list = None, opensslOptions: list = None):
+        """Create X.509 certificate.
+
+        Args:
+            id: resource ID
+            dn: certificate subject / Distinguished Name (DN), as a dictionary (similar to SUBJECT_DN_ATTRS)
+            sans: Subject Alternative Names (SANs); as a list (each entry being prefixed its type; see SUBJECT_ALT_NAMES)
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_OUTPUT)
+
+        try:
+            if self._context in (self.CONTEXT_CA, self.CONTEXT_SELFSIGN):
+                # Certification Authority or self-signed certificate
+                dn = dn or {}
+                if "CN" not in dn:
+                    raise OpenSSL_Peasy_Exception(
+                        "Subject / Distinguished Name (DN) must contain Common Name (CN) attribute"
+                    )
+                env = self.shellEnvironment(dn=dn, sans=sans)
+                timeout = None if not self._pkcs11 and self._secrets[self._context] else 30.0
+
+                openssl = self.binOpenSSL()
+                openssl.extend(["req", "-new", "-x509", "-out", p_cert])
+                openssl.extend(["-days", str(self._crypto["days"])])
+                if self._pkcs11:
+                    openssl.extend(
+                        [
+                            "-key",
+                            f"{self._pkcs11['uri']};type=private",
+                            "-keyform",
+                            "engine",
+                            "-engine",
+                            self._pkcs11["engine"],
+                        ]
+                    )
+                else:
+                    try:
+                        p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+                    except OpenSSL_Peasy_Exception:
+                        if not self._auto:
+                            raise
+                        self.keyMake(id)
+                        p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+
+                    openssl.extend(["-key", p_key])
+                    if self._secrets[self._context]:
+                        env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+                        openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+
+                with OpenSSL_Peasy_ConfAndEnv(self._conf, env) as env:
+                    self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+            elif self._context == self.CONTEXT_SUBSCRIBER:
+                env = self.shellEnvironment()
+                timeout = None if not self._pkcs11 and self._secrets["CA"] else 30.0
+
+                try:
+                    p_req = self.path(id, self.TYPE_REQUEST, self.DIRECTION_INPUT)
+                except OpenSSL_Peasy_Exception:
+                    if not self._auto:
+                        raise
+                    self.reqMake(id, dn, sans)
+                    p_req = self.path(id, self.TYPE_REQUEST, self.DIRECTION_INPUT)
+
+                openssl = self.binOpenSSL()
+                openssl.extend(["ca", "-notext", "-out", p_cert, "-in", p_req])
+                if self._pkcs11:
+                    openssl.extend(
+                        [
+                            "-keyfile",
+                            f"{self._pkcs11['uri']};type=private",
+                            "-keyform",
+                            "engine",
+                            "-engine",
+                            self._pkcs11["engine"],
+                        ]
+                    )
+                else:
+                    openssl.extend(["-keyfile", self._directories["CA"] / "key.pem"])
+                    if self._secrets["CA"]:
+                        env["OPENSSL_PASSWORD"] = self._secrets["CA"]
+                        openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+                openssl.extend(["-batch", "-rand_serial"])
+
+                with OpenSSL_Peasy_ConfAndEnv(self._conf, env) as env:
+                    self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+
+                # BUG/QUIRK: The CA database does not include the (-out) certificate file name (but "unknown" instead)
+
+                # (retrieve certificate serial)
+                openssl = self.binOpenSSL()
+                openssl.extend(["x509", "-in", p_cert, "-noout", "-serial"])
+                (_, stdout, _) = self.shellCommand(openssl)
+                certAttrs = dict(
+                    [line.split("=", 1) for line in stdout.decode(sys.stdout.encoding or "utf-8").splitlines()]
+                )
+                serial = certAttrs["serial"]
+
+                # (update CA database)
+                p_database = self._directories["CA"] / "database"
+                p_database_tmp = self._directories["CA"] / ".database.tmp"
+                p_database_tmp.touch(mode=p_database.stat().st_mode)
+                with open(p_database_tmp, "w") as f_out:
+                    with open(p_database, "r") as f_in:
+                        for line in f_in:
+                            dbStatus, dbUntil, dbRevokedOn, dbSerial, dbFile, dbSubject = line.strip().split("\t")
+                            if dbSerial == serial:
+                                dbFile = p_cert.name
+                            f_out.write(f"{dbStatus}\t{dbUntil}\t{dbRevokedOn}\t{dbSerial}\t{dbFile}\t{dbSubject}\n")
+                    p_database_tmp.rename(p_database)
+            else:
+                raise OpenSSL_Peasy_Exception("Huh?!?... WTF!?!")
+        except Exception:
+            p_cert.unlink(missing_ok=True)
+            raise
+        logger.info(f"X.509 certificate successfully created: {p_cert.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["x509", "-in", p_cert, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def certImport(self, id: str, data: bytes = None, opensslOptions: list = None):
+        """Import X.509 certificate.
+
+        Args:
+            id: resource ID
+            data: X.509 certificate; alternatively, use OpenSSL '-in ...' option
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["x509", "-out", p_cert])
+            self.shellCommand([*openssl, *(opensslOptions or [])], stdin=data)
+        except Exception:
+            p_cert.unlink(missing_ok=True)
+            raise
+
+        # Populate the CA database correspondingly
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_cert, "-noout", "-serial", "-subject", "-enddate"])
+        (_, stdout, _) = self.shellCommand(openssl)
+        certAttrs = dict([line.split("=", 1) for line in stdout.decode(sys.stdout.encoding or "utf-8").splitlines()])
+        certNotAfter = DateTime.strptime(certAttrs["notAfter"], "%b %d %H:%M:%S %Y %Z")
+        certAttrs["status"] = "V" if certNotAfter > DateTime.now() else "E"
+        certAttrs["notAfter"] = certNotAfter.strftime("%y%m%d%H%M%SZ")
+        certAttrs["subject"] = self.RE_DN_ATTRS.sub(r"/\g<attr>=", certAttrs["subject"])
+        with open(self._directories["CA"] / "database", "a") as f:
+            f.write(
+                f"{certAttrs['status']}\t{certAttrs['notAfter']}\t\t{certAttrs['serial']}\t{p_cert.name}\t{certAttrs['subject']}\n"
+            )
+
+        logger.info(f"X.509 certificate successfully imported: {p_cert.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["x509", "-in", p_cert, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def certGet(self, id: str, opensslOptions: list = None) -> bytes:
+        """Return X.509 certificate data.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_cert])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])])
+        return stdout
+
+    def certAttest(self, id: str, exception: bool = True) -> bool:
+        """Verify X.509 certificate matches attestation.
+
+        Args:
+            id: resource ID
+            exception: raise an Exception if the verification fails
+
+        Returns:
+            True if the verification succeeds, False otherwise
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        # NOTE: We verify that both certificate and attestation are based on the same private key by comparing their public key (which must be identical)
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_cert, "-noout", "-pubkey"])
+        (_, pubkey_cert, _) = self.shellCommand(openssl)
+
+        p_attn = self.path(id, self.TYPE_ATTESTATION, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_attn, "-noout", "-pubkey"])
+        (_, pubkey_attn, _) = self.shellCommand(openssl)
+
+        if b"PUBLIC KEY" not in pubkey_cert or pubkey_cert != pubkey_attn:
+            if exception:
+                raise OpenSSL_Peasy_Exception(
+                    f"X.509 certificate does not match attestation: {p_cert.name} <-> {p_attn.name}"
+                )
+            return False
+
+        logger.info(f"X.509 certificate matches attestation: {p_cert.name} <-> {p_attn.name}")
+        return True
+
+    def certRevoke(self, id: str, opensslOptions: list = None) -> bytes:
+        """Revoke X.509 certificate.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        env = self.shellEnvironment()
+        timeout = None if not self._pkcs11 and self._secrets["CA"] else 30.0
+
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["ca", "-revoke", p_cert])
+        if self._pkcs11:
+            openssl.extend(
+                [
+                    "-keyfile",
+                    f"{self._pkcs11['uri']};type=private",
+                    "-keyform",
+                    "engine",
+                    "-engine",
+                    self._pkcs11["engine"],
+                ]
+            )
+        else:
+            openssl.extend(["-keyfile", self._directories["CA"] / "key.pem"])
+            if self._secrets["CA"]:
+                env["OPENSSL_PASSWORD"] = self._secrets["CA"]
+                openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+
+        with OpenSSL_Peasy_ConfAndEnv(self._conf, env) as env:
+            self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+        logger.info(f"X.509 certificate successfully revoked: {p_cert.name}")
+
+    def certList(self, id: str = None, valid: bool = False, expired: bool = False, revoked: bool = False) -> list:
+        """Return the list of X.509 certificates.
+
+        Args:
+            id: resource ID (to filter the list with)
+            valid: show only valid certificates (respective to withDate(...))
+            expired: show only expired certificates (respective to withDate(...))
+            revoked: show only revoked certificates
+
+        Returns: the list of certificates, as named tuples:
+            id: resource ID
+            date: resource (creation) date (YYYYMMDD)
+            subject: X.509 certificate subject / Distinguished Name (DN)
+            serial: X.509 certificate serial (hexadecimal) number
+            status: X.509 certificate status (among CERTIFICATE_STATUSES)
+            until: X.509 certificate expiration/revocation date (YYYYMMDD)
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        Cert = namedtuple("Cert", ("id", "date", "subject", "serial", "status", "until"))
+        certs = []
+        with open(self._directories["CA"] / "database", "r") as f:
+            for line in f:
+                try:
+                    certStatus, certUntil, certRevokedOn, certSerial, certFile, certSubject = line.strip().split("\t")
+                    (certID, _, certDate) = self.pathComponents(Path(certFile))
+                except ValueError:
+                    continue
+                if id and certID != id:
+                    continue
+                certRevoked = certStatus == "R"
+                if certRevoked:
+                    certUntil = f"20{certRevokedOn[:6]}"
+                    certStatus = self.CERTIFICATE_STATUS_REVOKED
+                else:
+                    if revoked:
+                        continue
+                    certUntil = f"20{certUntil[:6]}"
+                    certValid = int(certUntil) > int(self.date)
+                    if certValid:
+                        if expired:
+                            continue
+                        certStatus = self.CERTIFICATE_STATUS_VALID
+                    else:
+                        if valid:
+                            continue
+                        certStatus = self.CERTIFICATE_STATUS_EXPIRED
+                certs.append(Cert(certID, certDate, certSubject, certSerial, certStatus, certUntil))
+
+        return certs
+
+    ########################################################################
+    # PKCS#12 (certificate and private key bundle) / OpenSSL_Peasy.TYPE_PKCS12
+    #
+
+    @staticmethod
+    def pkcs12Doc() -> list:
+        """Return the documentation link(s) for PKCS#12 (certificate and private key) bundle operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-pkcs12.html",
+        ]
+
+    def pkcs12Import(self, id: str, data: bytes = None, opensslOptions: list = None):
+        """Import PKCS#12 (certificate and private key) bundle.
+
+        Args:
+            id: resource ID
+            data: PKCS#12 bundle; alternatively, use OpenSSL '-in ...' option
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        if self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Operation not applicable with PKCS#11")
+
+        env = self.shellEnvironment()
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["pkcs12", "-noenc"])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])], env=env, stdin=data, timeout=60.0)
+
+        self.keyImport(id, stdout)
+        self.certImport(id, stdout)
+
+    def pkcs12Get(self, id: str, opensslOptions: list = None):
+        """Return PKCS#12 (certificate and private key) bundle data.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        env = self.shellEnvironment()
+        timeout = None if self._secrets[self._context] else 30.0
+
+        p_key = self.path(id, self.TYPE_PRIVATE_KEY, self.DIRECTION_INPUT)
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["pkcs12", "-export", "-name", id, "-inkey", p_key, "-in", p_cert])
+        if self._secrets[self._context]:
+            env["OPENSSL_PASSWORD"] = self._secrets[self._context]
+            openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+        return stdout
+
+    ####################################################################################################################
+    # Certificate Revocation List (CRL) / OpenSSL_Peasy.TYPE_REVOCATION_LIST
+    #
+
+    @staticmethod
+    def crlDoc() -> list:
+        """Return the documentation link(s) for Certificate Revocation List (CRL) operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-crl.html",
+            "https://www.openssl.org/docs/manmaster/man1/openssl-verify.html",
+        ]
+
+    def crlMake(self, opensslOptions: list = None):
+        """Create Certificate Revocation List (CRL).
+
+        Args:
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        env = self.shellEnvironment()
+        timeout = None if not self._pkcs11 and self._secrets["CA"] else 30.0
+
+        p_crl = self.path(None, self.TYPE_REVOCATION_LIST, self.DIRECTION_OUTPUT)
+
+        try:
+            openssl = self.binOpenSSL()
+            openssl.extend(["ca", "-gencrl", "-updatedb", "-out", p_crl])
+            if self._pkcs11:
+                openssl.extend(
+                    [
+                        "-keyfile",
+                        f"{self._pkcs11['uri']};type=private",
+                        "-keyform",
+                        "engine",
+                        "-engine",
+                        self._pkcs11["engine"],
+                    ]
+                )
+            else:
+                openssl.extend(["-keyfile", self._directories["CA"] / "key.pem"])
+                if self._secrets["CA"]:
+                    env = {"OPENSSL_PASSWORD": self._secrets["CA"]}
+                    openssl.extend(["-passin", "env:OPENSSL_PASSWORD"])
+
+            with OpenSSL_Peasy_ConfAndEnv(self._conf, env) as env:
+                self.shellCommand([*openssl, *(opensslOptions or [])], env=env, timeout=timeout)
+        except Exception:
+            p_crl.unlink(missing_ok=True)
+            raise
+        logger.info(f"Certificate Revocation List (CRL) successfully created: {p_crl.name}")
+
+        if logger.isEnabledFor(logging.DEBUG):
+            openssl = self.binOpenSSL()
+            openssl.extend(["crl", "-in", p_crl, "-noout", "-text"])
+            (_, stdout, _) = self.shellCommand(openssl)
+            sys.stderr.buffer.write(stdout + b"\n")
+
+    def crlGet(self, opensslOptions: list = None) -> bytes:
+        """Return Certificate Revocation List (CRL) data.
+
+        Args:
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        if self._context == self.CONTEXT_SELFSIGN:
+            raise OpenSSL_Peasy_Exception("Operation not applicable in selfsign context")
+
+        p_crl = self.path(None, self.TYPE_REVOCATION_LIST, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["crl", "-in", p_crl])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])])
+        return stdout
+
+    def crlVerify(self, id: str, opensslOptions: list = None, exception: bool = True) -> bool:
+        """Verify X.509 certificate validity by quering its remote CRL endpoint.
+
+        NOTE: The authorized revoking Root CA(s) certificate(s) must be bundled in the {CA}/crl.pem file.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+            exception: raise an Exception if the verification fails
+
+        Returns:
+            True is the verification succeeds, False otherwise
+        """
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_INPUT)
+
+        p_crl_cas = self._directories["CA"] / "crl.pem"
+        openssl = self.binOpenSSL()
+        openssl.extend(["verify", "-crl_check", "-crl_download", "-CAfile", p_crl_cas])
+        openssl.extend(opensslOptions or [])
+        openssl.extend([p_cert])
+        try:
+            (rc, stdout, stderr) = self.shellCommand(openssl, exception=False)
+            if logger.isEnabledFor(logging.DEBUG):
+                sys.stderr.buffer.write(stdout + b"\n")
+            if rc:
+                raise OSError(rc, stderr.decode(sys.stderr.encoding or "utf-8", errors="replace").strip())
+        except OSError as e:
+            logger.error(f"{e.__class__.__name__}: {e.strerror} [{e.errno}]")
+            if exception:
+                raise OpenSSL_Peasy_Exception(
+                    f"X.509 certificate CRL verification failed: {p_cert.name} <-> {p_crl_cas.name}"
+                )
+            return False
+
+        logger.info(f"X.509 certificate is valid (not in CRL): {p_cert.name} <-> {p_crl_cas.name}")
+        return True
+
+    ########################################################################
+    # Online Certificate Status Protocol (OCSP)
+    #
+
+    @staticmethod
+    def ocspDoc() -> list:
+        """Return the documentation link(s) for Online Certificate Status Protocol (OCSP) operations."""
+        return [
+            "https://www.openssl.org/docs/manmaster/man1/openssl-ocsp.html",
+        ]
+
+    def ocspVerify(self, id: str, opensslOptions: list = None, exception: bool = True):
+        """Verify X.509 certificate validity by quering its remote OCSP endpoint.
+
+        NOTE: The authorized OCSP Root CA(s) certificate(s) must be bundled in the {CA}/ocsp.pem file.
+
+        Args:
+            id: resource ID
+            opensslOptions: OpenSSL additional options/arguments
+            exception: raise an Exception if the verification fails
+
+        Returns:
+            True is the verification succeeds, False otherwise
+        """
+        p_cert = self.path(id, self.TYPE_CERTIFICATE, self.DIRECTION_INPUT)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-in", p_cert, "-noout", "-ocsp_uri"])
+        (_, stdout, _) = self.shellCommand(openssl)
+        try:
+            ocspURI = stdout.decode(sys.stdout.encoding or "utf-8").splitlines()[0]
+            if not ocspURI:
+                raise ValueError()
+        except (IndexError, ValueError):
+            raise OpenSSL_Peasy_Exception("Cannot retrieve the X.509 certificate OCSP server URI") from None
+
+        p_ocsp_cas = self._directories["CA"] / "ocsp.pem"
+        openssl = self.binOpenSSL()
+        openssl.extend(["ocsp", "-url", ocspURI, "-issuer", p_ocsp_cas, "-cert", p_cert])
+        try:
+            (rc, stdout, stderr) = self.shellCommand([*openssl, *(opensslOptions or [])], exception=False)
+            if logger.isEnabledFor(logging.DEBUG) and stdout:
+                sys.stderr.buffer.write(stdout + b"\n")
+            if rc:
+                raise OSError(rc, stderr.decode(sys.stderr.encoding or "utf-8", errors="replace"))
+        except OSError as e:
+            logger.error(f"{e.__class__.__name__}: {e.strerror} [{e.errno}]")
+            if exception:
+                raise OpenSSL_Peasy_Exception(
+                    f"X.509 certificate OCSP verification failed: {p_cert.name} <-> {p_ocsp_cas.name}"
+                ) from None
+            return False
+
+        logger.info(f"X.509 certificate is valid (as per OCSP verification): {p_cert.name} <-> {p_ocsp_cas.name}")
+        return True
+
+    ########################################################################
+    # PKCS#11 helpers
+    #
+
+    @staticmethod
+    def pkcs11Doc() -> list:
+        """Return the documentation link(s) for PKCS#11 operations."""
+        return [
+            "https://docs.oasis-open.org/pkcs11/pkcs11-base/v3.0/os/pkcs11-base-v3.0-os.html",
+            "https://www.rfc-editor.org/rfc/rfc7512",
+            "https://linux.die.net/man/1/pkcs11-tool",
+        ]
+
+    def _pkcs11Command(self) -> list:
+        """Return the PKCS#11 command prefix matching the supplied resource(s) identifier(s)."""
+        if not self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Missing PKCS#11 configuration")
+
+        command = self.binPKCS11Tool()
+        if "token" in self._pkcs11:
+            command.extend(["--token-label", self._pkcs11["token"]])
+        if "object" in self._pkcs11:
+            command.extend(["--label", self._pkcs11["object"]])
+        if "id" in self._pkcs11:
+            command.extend(["--id", self._pkcs11["id"]])
+        return command
+
+    def pkcs11Key(self, opensslOptions: list = None) -> bytes:
+        """Return PKCS#11-stored private key data.
+
+        WARNING: Most PKCS#11 tokens will refuse to export the private key(s)!
+
+        Args:
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        env = {"PKCS11_PIN": getenv("PKCS11_PIN", getpass("PKCS#11 Token PIN: "))}
+
+        pkcs11 = self._pkcs11Command()
+        pkcs11.extend(["--read-object", "--type", "privkey", "--login", "--pin", "env:PKCS11_PIN"])
+        (_, stdout, _) = self.shellCommand(pkcs11, env=env)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["pkey", "-inform", "DER"])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])], stdin=stdout)
+        return stdout
+
+    def pkcs11Pub(self, opensslOptions: list = None) -> bytes:
+        """Return PKCS#11-stored public key data.
+
+        Args:
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        pkcs11 = self._pkcs11Command()
+        pkcs11.extend(["--read-object", "--type", "pubkey"])
+        (_, stdout, _) = self.shellCommand(pkcs11)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["pkey", "-pubin", "-inform", "DER"])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])], stdin=stdout)
+        return stdout
+
+    def pkcs11Cert(self, opensslOptions: list = None) -> bytes:
+        """Return PKCS#11-stored X.509 certificate data.
+
+        Args:
+            opensslOptions: OpenSSL additional options/arguments
+        """
+        pkcs11 = self._pkcs11Command()
+        pkcs11.extend(["--read-object", "--type", "cert"])
+        (_, stdout, _) = self.shellCommand(pkcs11)
+
+        openssl = self.binOpenSSL()
+        openssl.extend(["x509", "-inform", "DER"])
+        (_, stdout, _) = self.shellCommand([*openssl, *(opensslOptions or [])], stdin=stdout)
+        return stdout
+
+    def pkcs11Test(self) -> bytes:
+        """Return PKCS#11 token test manifest."""
+        env = {"PKCS11_PIN": getenv("PKCS11_PIN", getpass("PKCS#11 Token PIN: "))}
+
+        pkcs11 = self._pkcs11Command()
+        pkcs11.extend(["--test", "--login", "--pin", "env:PKCS11_PIN"])
+        (_, stdout, _) = self.shellCommand(pkcs11, env=env)
+        return stdout
+
+    def pkcs11URI(self) -> bytes:
+        """Return the PKCS#11 Uniform Resource Identifier (URI)."""
+        if not self._pkcs11:
+            raise OpenSSL_Peasy_Exception("Missing PKCS#11 configuration")
+
+        return self._pkcs11["uri"].encode(sys.stdout.encoding or "utf-8")
+
+
+########################################################################################################################
+# Main
+#
+
+
+def main():
+    """OpenSSL wrapper for easy peasy everyday CA/PKI operations.
+
+    USAGE: openssl-peasy <command> [+<arguments> ...] [-<opensslOptions> ...]
+
+    ARGUMENTS:
+      +id <ID>
+        Resource identifier; use "CA" to operate on the Certification Authority itself.
+      +date <YYYYMMDD>
+        Resource creation date; defaults to today and date globbing if unspecified.
+      +dn-{cn,c,st,l,o,ou,t,mail} <value>
+        Subject / Distinguished Name (DN) attributes.
+      +san-{dns,ip,uri,email,rid,dirname,othername} <value>
+        Subject Alternative Names (SANs).
+      +pkcs11-{token,object,id,engine} <value>
+        PKCS#11 resources identifiers and engine entrypoint.
+      +crypto-{family,curve,bits,wrap,days} <value>
+        Cryptography configuration (overriding internal, sane defaults).
+      +auto
+        Automatically create required resources (if missing).
+      +force
+        Delete existing resources (if conflicting).
+      +selfsign
+        Self-signing operations (independent for CA/PKI resources).
+      +verbose
+        Output debug messages.
+      +silent
+        Output only warning/error messages.
+
+    ENVIRONMENT:
+      OPENSSL_ROOT
+        OpenSSL root working directory path.
+      OPENSSL_CONF
+        OpenSSL configuration file path.
+      OPENSSL_PASSWORD, OPENSSL_PASSWORD_CA
+        Subscribers' - respectively Certification Authorithy's - private key password.
+      OPENSSL_CRYPTO_{FAMILY,CURVE,BITS,WRAP,DAYS}
+        Cryptography configuration (overriding internal, sane defaults).
+
+    COMMANDS:
+      help [<command>]
+        Display help for the given command
+    """  # noqa: D403, D405
+    OpenSSL = OpenSSL_Peasy()
+    COMMANDS = {
+        "init": OpenSSL.caInit,
+        # Private key
+        "help-key": OpenSSL.keyDoc,
+        "make-key": OpenSSL.keyMake,
+        "import-key": OpenSSL.keyImport,
+        "show-key": OpenSSL.keyGet,
+        # Public key
+        "help-pub": OpenSSL.pubDoc,
+        "make-pub": OpenSSL.pubMake,
+        "import-pub": OpenSSL.pubImport,
+        "show-pub": OpenSSL.pubGet,
+        # Attestation
+        "help-attn": OpenSSL.attnDoc,
+        "import-attn": OpenSSL.attnImport,
+        "verify-attn": OpenSSL.attnVerify,
+        "show-attn": OpenSSL.attnGet,
+        # Certificate Signing Request (CSR)
+        "help-req": OpenSSL.reqDoc,
+        "make-req": OpenSSL.reqMake,
+        "import-req": OpenSSL.reqImport,
+        "attest-req": OpenSSL.reqAttest,
+        "show-req": OpenSSL.reqGet,
+        # X.509 Certificate
+        "help-cert": OpenSSL.certDoc,
+        "make-cert": OpenSSL.certMake,
+        "import-cert": OpenSSL.certImport,
+        "attest-cert": OpenSSL.certAttest,
+        "show-cert": OpenSSL.certGet,
+        "revoke-cert": OpenSSL.certRevoke,
+        "list-certs": OpenSSL.certList,
+        # PKCS#12 (certificate and private key) bundle
+        "help-pkcs12": OpenSSL.pkcs12Doc,
+        "import-pkcs12": OpenSSL.pkcs12Import,
+        "export-pkcs12": OpenSSL.pkcs12Get,
+        # Certificate Revocation List (CRL)
+        "help-crl": OpenSSL.crlDoc,
+        "make-crl": OpenSSL.crlMake,
+        "show-crl": OpenSSL.crlGet,
+        "verify-crl": OpenSSL.crlVerify,
+        # Online Certificate Status Protocol (OCSP)
+        "help-ocsp": OpenSSL.ocspDoc,
+        "verify-ocsp": OpenSSL.ocspVerify,
+        # PKCS#11 helpers
+        "help-pkcs11": OpenSSL.pkcs11Doc,
+        "pkcs11-key": OpenSSL.pkcs11Key,
+        "pkcs11-pub": OpenSSL.pkcs11Pub,
+        "pkcs11-cert": OpenSSL.pkcs11Cert,
+        "pkcs11-test": OpenSSL.pkcs11Test,
+        "pkcs11-uri": OpenSSL.pkcs11URI,
+    }
+
+    # Arguments
+    # NB: We parse arguments identically to what 'openssl-easy' (bash) script used to do:
+    #     +... : self options (ID, date, dn, etc.)
+    #     -... : OpenSSL options (passed "as-is")
+
+    # (command)
+    try:
+        command = arg = sys.argv[1]
+    except IndexError:
+        raise ValueError("Missing command") from None
+
+    # (version)
+    if command.lstrip("-") == "version":
+        sys.stdout.write(f"{VERSION}\n")
+        exit(0)
+
+    # (help)
+    if command.lstrip("-") == "help":
+        try:
+            command = arg = sys.argv[2]
+        except IndexError:
+            doc = cleandoc(main.__doc__)
+            for command, function in COMMANDS.items():
+                doc += f"\n  {command}:\n    {function.__doc__.splitlines()[0]}"
+            sys.stdout.write(doc + "\n")
+            exit(0)
+        try:
+            sys.stdout.write(cleandoc(COMMANDS[command].__doc__) + "\n")
+            exit(0)
+        except KeyError:
+            raise ValueError(f"Invalid command ({command})") from None
+
+    # (arguments)
+    opensslOptions = []
+    options = {}
+    dn = {}
+    sans = []
+    pkcs11 = {}
+    crypto = {}
+    i = 2
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        value = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+        i += 1
+        if arg[0] == "+":
+            if arg == "+id":
+                if value is None:
+                    raise ValueError(f"Missing argument value ({arg})")
+                options["id"] = value
+                i += 1
+            elif arg == "+date":
+                if value and value[0] not in ("+", "-"):
+                    options["date"] = value
+                    i += 1
+                else:
+                    options["date"] = time()
+            elif (
+                arg.startswith("+dn-")
+                or arg.startswith("+san-")
+                or arg.startswith("+pkcs11-")
+                or arg.startswith("+crypto-")
+            ):
+                if value is None or value[0] in ("+", "-"):
+                    raise ValueError(f"Missing argument value ({arg})") from None
+                i += 1
+                try:
+                    prefix, suffix = arg.split("-", 1)
+                    if prefix == "+dn":
+                        attr = {k.lower(): k for k in OpenSSL_Peasy.SUBJECT_DN_ATTRS.keys()}[suffix]
+                        dn[attr] = value
+                    elif prefix == "+san":
+                        san = {k.lower(): k for k in OpenSSL_Peasy.SUBJECT_ALT_NAMES.keys()}[suffix]
+                        sans.append(f"{san}:{value}")
+                    elif prefix == "+pkcs11":
+                        if suffix not in OpenSSL_Peasy.PKCS11_RESOURCES:
+                            raise KeyError(suffix)
+                        pkcs11[suffix] = value
+                    elif prefix == "+crypto":
+                        crypto[suffix] = value
+                except KeyError:
+                    raise ValueError(f"Invalid argument ({arg})") from None
+            elif arg in ("+verbose", "+silent", "+auto", "+force", "+valid", "+revoked", "+expired", "+selfsign"):
+                options[arg[1:]] = True
+            else:
+                raise ValueError(f"Invalid argument ({arg})")
+        else:
+            opensslOptions.append(arg)
+
+    # (ID/date)
+    id = options.get("id", "")
+    date = options.pop("date", None)
+    dateGlob = date is None
+
+    # (verbosity)
+    if options.pop("verbose", False):
+        logger.setLevel(logging.DEBUG)
+    if options.pop("silent", False):
+        logger.setLevel(logging.WARNING)
+
+    # (DN/SANs)
+    if dn:
+        options["dn"] = dn
+    del dn
+    if sans:
+        options["sans"] = sans
+    del sans
+
+    # (cryptography configuration)
+    crypto["context"] = (
+        OpenSSL.CONTEXT_SELFSIGN
+        if options.pop("selfsign", False)
+        else OpenSSL.CONTEXT_CA if id.startswith("CA") else OpenSSL.CONTEXT_SUBSCRIBER
+    )
+    crypto["family"] = crypto.get("family", getenv("OPENSSL_CRYPTO_FAMILY", OpenSSL.CRYPTO_FAMILY_EC)).upper()
+    OpenSSL.validFamily(crypto["family"])
+    for k in OpenSSL.CRYPTO_CONF[crypto["family"]][crypto["context"]].keys():
+        v = crypto.get(k, getenv(f"OPENSSL_CRYPTO_{k.upper()}"))
+        if v:
+            crypto[k] = v
+
+    # (OpenSSL passthru options)
+    if opensslOptions:
+        options["opensslOptions"] = opensslOptions
+    del opensslOptions
+
+    # (configure)
+    OpenSSL.withContext(
+        crypto.pop("context"),
+        crypto.pop("family"),
+        crypto,
+    ).withSecrets(
+        CA=getenv("OPENSSL_PASSWORD_CA"),
+        subscriber=getenv("OPENSSL_PASSWORD"),
+    ).withDate(date, dateGlob).withAuto(
+        options.pop("auto", False),
+    ).withUnlink(
+        options.pop("force", False),
+    ).withPKCS11(
+        **pkcs11
+    )
+    del crypto
+
+    # Command
+    try:
+        ret = COMMANDS[command](**options)
+        if command.startswith("show") or command.startswith("export") or command.startswith("pkcs11"):
+            sys.stdout.buffer.write(ret + b"\n")
+        elif command.startswith("help") or command.startswith("list"):
+            for line in ret:
+                if isinstance(line, Tuple):
+                    line = "\t".join(line)
+                sys.stdout.write(f"{line}\n")
+    except KeyError:
+        raise ValueError(f"Invalid command: {command}") from None
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    try:
+        main()
+    except Exception as e:
+        if logger.isEnabledFor(logging.DEBUG):
+            raise
+        logger.error(f"{e.__class__.__name__}: {e}")

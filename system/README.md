@@ -75,9 +75,9 @@ mysql-backup
 Backup a MySQL database according to the connection parameters specified
 in the configuration file(s).
 
-openssl-easy
+openssl-(p)easy
 ------------
-OpenSSL made easy (a command-line replacement for TinyCA)
+OpenSSL wrappers for easy (peasy; "p" as in Python) everyday CA/PKI operations
 
 packer
 ------
