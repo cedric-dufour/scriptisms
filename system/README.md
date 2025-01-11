@@ -48,6 +48,10 @@ freedns-v2.\*
 FreeDNS (https://freedns.afraid.org) dynamic DNS updater client (daemon)
 using the V2 interface (and randomized subdomain update token).
 
+jwt-es256
+---------
+Create and verify ES256-signed JWT tokens (RFC 7519)
+
 huawei-hilink.\*
 ----------------
 Huawei Hilink devices control client, leveraging Adam Schubert's `huawei_lte_api`

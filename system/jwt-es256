@@ -1,0 +1,201 @@
+#!/bin/bash
+set -e -o pipefail
+SCRIPT="${0##*/}"
+# shellcheck disable=SC2034
+SCRIPT_DIR="$(dirname "$(realpath -e "${0}")")"
+
+## Helpers
+
+# Usage
+__USAGE() {
+  cat >&2 <<EOF
+USAGE: ${SCRIPT} {create|verify|keypair} [<options>] [<arguments>]
+
+SYNOPSIS:
+  ES256-signed JSON Web Tokens (JWT, RFC7519) management.
+
+ACTIONS:
+
+  create [<json-payload-path/stdin> [<jwt-path/stdout>]]
+    Create a JWT token (ES256 signed)
+
+  verify [<jwt-path/stdin>]
+    Verify a JWT token (ES256 signature)
+
+  keypair [<keys-dir/cwd>]
+    Create the (signing) ES256 key pair
+
+OPTIONS:
+
+  -K, --key <key-path>
+    ES256 private (create) or public (verify) key path (default: 'jwt-{pub|key}.pem')
+
+  -P, --prefix <string>
+    ES256 keys creation (keypair) prefix '*-pub.pem' / '*-key.pem' (default: 'jwt')
+
+EOF
+}
+
+# Input/Output
+__INFO() {
+  echo "INFO[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}"
+  return 0
+}
+
+__ERROR() {
+  echo "ERROR[${SCRIPT}${ARG_ACTION:+:${ARG_ACTION}}]: ${1}" >&2
+  [ -n "${2}" ] && exit "${2}"
+  return 0
+}
+
+__OPTION() {
+  [ -z "${2}" ] && __ERROR "Missing option argument (${1})" 1
+  return 0
+}
+
+## Arguments
+OPT_PREFIX='jwt'
+OPT_KEY=
+ARG_ACTION=
+ARG_1=
+ARG_2=
+while [ -n "${1}" ]; do
+  case "${1}" in
+  '-h' | '--help')
+    __USAGE
+    exit 0
+    ;;
+  '-K' | '--key')
+    __OPTION "${@}"
+    OPT_KEY="${2}"
+    shift
+    ;;
+  '-P' | '--prefix')
+    __OPTION "${@}"
+    OPT_PREFIX="${2}"
+    shift
+    ;;
+  -?*)
+    __ERROR "Invalid option (${1})" 1
+    ;;
+  *)
+    if [ -z "${ARG_ACTION}" ]; then
+      ARG_ACTION="${1}"
+    elif [ -z "${ARG_1}" ]; then
+      ARG_1="${1}"
+    elif [ -z "${ARG_2}" ]; then
+      ARG_2="${1}"
+    else
+      __ERROR "Too many arguments (${1})" 1
+    fi
+    ;;
+  esac
+  shift
+done
+[ -z "${ARG_ACTION}" ] && ARG_ACTION='create'
+
+## Main
+case "${ARG_ACTION}" in
+
+'create')
+  [ -z "${ARG_1}" ] && ARG_1='-'
+  { [ -z "${ARG_2}" ] || [ "${ARG_2}" == '-' ]; } && ARG_2='/dev/stdout'
+  [ -z "${OPT_KEY}" ] && OPT_KEY='jwt-key.pem'
+  [ ! -r "${OPT_KEY}" ] && __ERROR "Unreadable/missing private key (${OPT_KEY})" 1
+
+  # JWT header -> Base64(URL)
+  JWT_HEADER="$(
+    echo -n '{"typ":"JWT","alg":"ES256"}' |
+      base64 -w0 | tr '/+' '_-' | tr -d '='
+  )"
+
+  # JWT payload -> Base64(URL)
+  JWT_PAYLOAD="$(
+    # shellcheck disable=SC2002
+    cat "${ARG_1}" |
+      jq -c | tr -d '\n' |
+      base64 -w0 | tr '/+' '_-' | tr -d '='
+  )"
+
+  # JWT signature (ES256) -> Base64(URL)
+  # WARNING: JWT (EC) signature is the concatenation of the two 32-bytes (64-hex) R and S values, NOT the OpenSSL DER output!
+  # REF: https://stackoverflow.com/questions/59904522/asn1-encoding-routines-errors-when-verifying-ecdsa-signature-type-with-openssl/59905274#59905274
+  JWT_SIGNATURE="$(
+    # DER -> {R,S} -> Base64(URL)
+    read -r R S < <(
+      echo -n "${JWT_HEADER}.${JWT_PAYLOAD}" |
+        openssl dgst -sha256 -binary -sign "${OPT_KEY}" |
+        openssl asn1parse -inform der |
+        sed -nE 's|^.*\sINTEGER\s+:||p' | tr '\n' ' '
+    )
+    {
+      printf '%64s' "${R}" | tr ' ' 0 | xxd -r -p
+      printf '%64s' "${S}" | tr ' ' 0 | xxd -r -p
+    } |
+      base64 -w0 | tr '/+' '_-' | tr -d '='
+  )"
+
+  # JWT
+  echo "${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIGNATURE}" > "${ARG_2}"
+  if [ "${ARG_2}" != '/dev/stdout' ]; then
+    __INFO "JWT token successfully created:" >&2
+    __INFO "${ARG_2}"
+  fi
+  ;;
+
+'verify')
+  [ -z "${ARG_1}" ] && ARG_1='-'
+  [ -z "${OPT_KEY}" ] && OPT_KEY='jwt-pub.pem'
+  [ ! -r "${OPT_KEY}" ] && __ERROR "Unreadable/missing public key (${OPT_KEY})" 1
+
+  # JWT signature (ES256) verification
+  # WARNING: JWT (EC) signature is the concatenation of the two 32-bytes (64-hex) R and S values, NOT the OpenSSL-expected DER input!
+  # REF: https://stackoverflow.com/questions/59904522/asn1-encoding-routines-errors-when-verifying-ecdsa-signature-type-with-openssl/59905274#59905274
+  set +e +o pipefail
+  IFS='.' read -r JWT_HEADER JWT_PAYLOAD JWT_SIGNATURE _ < <(cat "${ARG_1}")
+  # Base64(URL) -> {R,S} -> DER
+  JWT_SIG_FILE="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '${JWT_SIG_FILE}'" EXIT
+  read -r R S < <(
+    echo "${JWT_SIGNATURE}" |
+      tr '_-' '/+' | base64 -d 2>/dev/null |
+      xxd -p -c 32 | tr '\n' ' '
+  )
+  set -e -o pipefail
+  [[ "${R}" =~ ^[89a-f] ]] && R="00${R}"
+  [[ "${S}" =~ ^[89a-f] ]] && S="00${S}"
+  printf '30%02x02%02x%s02%02x%s' $(((${#R} + ${#S}) / 2 + 4)) $((${#R} / 2)) "${R}" $((${#S} / 2)) "${S}" |
+    xxd -r -p >"${JWT_SIG_FILE}"
+  # (verify)
+  echo -n "${JWT_HEADER}.${JWT_PAYLOAD}" |
+    openssl dgst -sha256 -binary -verify "${OPT_KEY}" -signature "${JWT_SIG_FILE}"
+  # (display)
+  echo "${JWT_PAYLOAD}" | tr '_-' '/+' | base64 -d 2>/dev/null |
+    jq .
+  ;;
+
+'keypair')
+  [ -z "${ARG_1}" ] && ARG_1='.'
+  PRIV_KEY="${ARG_1}/${OPT_PREFIX}-key.pem"
+  PUB_KEY="${ARG_1}/${OPT_PREFIX}-pub.pem"
+  [ -e "${PRIV_KEY}" ] && __ERROR "Private key already exists (${PRIV_KEY})" 1
+  [ -e "${PUB_KEY}" ] && __ERROR "Public key already exists (${PUB_KEY})" 1
+
+  # ES256 (P-256) key pair
+  openssl ecparam -name secp256r1 -genkey -noout -out "${PRIV_KEY}"
+  openssl ec -in "${PRIV_KEY}" -pubout >"${PUB_KEY}"
+  __INFO "Key pair successfully created:" >&2
+  __INFO "${PRIV_KEY}"
+  __INFO "${PUB_KEY}"
+  ;;
+
+*)
+  __ERROR "Invalid action (${ARG_ACTION})" 1
+  ;;
+
+esac
+
+## Done
+exit 0
+
