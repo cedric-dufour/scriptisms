@@ -16,6 +16,10 @@ edoc-mailer
 Parse a recipients list and send them the matching documents located in the
 various given directories.
 
+envertec-tcp14889.py
+-----
+Query and decode Envertech EVT microinverters TCP/14889 server data.
+
 gps2logbook
 -----
 Convert GPS (DSV) data to (aircraft) logbook entries, with touchdown/airborne
