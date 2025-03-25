@@ -25,7 +25,7 @@ import socket
 from contextlib import suppress
 from functools import reduce
 from struct import unpack
-from time import time
+from time import sleep, time
 from typing import Tuple
 
 LOGGER = logging.getLogger("EnvertecTcp14889")
@@ -44,8 +44,8 @@ class EnvertecTcp14889:
         "id": None,
         "host": "10.10.100.254",
         "port": 14889,
-        "timeout": 10.0,
-        "tries": 3,
+        "timeout": 6.0,
+        "tries": 5,
     }
 
     # Protocol
@@ -101,22 +101,22 @@ class EnvertecTcp14889:
                 {
                     "id": (20, 23, lambda v: v.hex(), None),
                     "firmware": (24, 25, lambda v: "{}.{}".format(*unpack("2b", v)), None),
-                    "inputDcVoltage": (26, 27, lambda v: unpack(">H", v)[0] / 512, "V"),
-                    "outputAcPower": (28, 29, lambda v: unpack(">H", v)[0] / 64, "W"),
-                    "outputTotal": (30, 33, lambda v: unpack(">L", v)[0] / 8192, "kWh"),
-                    "temperature": (34, 35, lambda v: unpack(">H", v)[0] / 128 - 40, "C"),
-                    "outputAcVoltage": (36, 37, lambda v: unpack(">H", v)[0] / 64, "V"),
-                    "outputAcFrequence": (38, 39, lambda v: unpack(">H", v)[0] / 256, "Hz"),
+                    "inputDcVoltage": (26, 27, lambda v: round(unpack(">H", v)[0] / 512, 1), "V"),
+                    "outputAcPower": (28, 29, lambda v: round(unpack(">H", v)[0] / 64, 1), "W"),
+                    "outputTotal": (30, 33, lambda v: round(unpack(">L", v)[0] / 8192, 3), "kWh"),
+                    "temperature": (34, 35, lambda v: round(unpack(">H", v)[0] / 128 - 40, 1), "C"),
+                    "outputAcVoltage": (36, 37, lambda v: round(unpack(">H", v)[0] / 64, 1), "V"),
+                    "outputAcFrequence": (38, 39, lambda v: round(unpack(">H", v)[0] / 256, 1), "Hz"),
                 },
                 {
                     "id": (52, 55, lambda v: v.hex(), None),
                     "firmware": (56, 57, lambda v: "{}.{}".format(*unpack("2b", v)), None),
-                    "inputDcVoltage": (58, 59, lambda v: unpack(">H", v)[0] / 512, "V"),
-                    "outputAcPower": (60, 61, lambda v: unpack(">H", v)[0] / 64, "W"),
-                    "outputTotal": (62, 65, lambda v: unpack(">L", v)[0] / 8192, "kWh"),
-                    "temperature": (66, 67, lambda v: unpack(">H", v)[0] / 128 - 40, "C"),
-                    "outputAcVoltage": (68, 69, lambda v: unpack(">H", v)[0] / 64, "V"),
-                    "outputAcFrequence": (70, 71, lambda v: unpack(">H", v)[0] / 256, "Hz"),
+                    "inputDcVoltage": (58, 59, lambda v: round(unpack(">H", v)[0] / 512, 1), "V"),
+                    "outputAcPower": (60, 61, lambda v: round(unpack(">H", v)[0] / 64, 1), "W"),
+                    "outputTotal": (62, 65, lambda v: round(unpack(">L", v)[0] / 8192, 3), "kWh"),
+                    "temperature": (66, 67, lambda v: round(unpack(">H", v)[0] / 128 - 40, 1), "C"),
+                    "outputAcVoltage": (68, 69, lambda v: round(unpack(">H", v)[0] / 64, 1), "V"),
+                    "outputAcFrequence": (70, 71, lambda v: round(unpack(">H", v)[0] / 256, 1), "Hz"),
                 },
             ],
             "_cksum": (84, 84, lambda v: v[0], None),
@@ -164,8 +164,8 @@ class EnvertecTcp14889:
                 id: Inverter ID (last 8 digits of its S/N); default: None (auto-detected)
                 host: Inverter TCP server IP(v4) address or (DNS) hostname; default: 10.10.100.154
                 port: Inverter TCP server port; default: 14889
-                timeout: Query timeout (seconds); default: 10.0
-                tries: Query attempts; default: 3
+                timeout: Query timeout (seconds); default: 6.0
+                tries: Query attempts; default: 5
         """
         self._config = self.CONFIG | config
 
@@ -297,9 +297,9 @@ class EnvertecTcp14889:
         if wait <= 0:
             raise TimeoutError()
         if sock:
-            # We might as well add 100ms to account for the time to carry out
-            # the next network operation
-            sock.settimeout(wait + 0.1)
+            # We might as well make sure to wait at least 100ms to account
+            # for the time to carry out the next network operation
+            sock.settimeout(max((wait, 0.1)))
 
     def query(self, withUnit: bool = False) -> dict:
         """Query and decode Envertech EVT microinverters TCP/14889 server data.
@@ -364,6 +364,9 @@ class EnvertecTcp14889:
                 tries -= 1
                 if not tries:
                     raise
+                if not isinstance(e, TimeoutError):
+                    sleep(max((deadline - time(), 0)))
+                deadline = time() + self._config["timeout"]
 
         with suppress(Exception):
             socketTcp.close()
@@ -376,13 +379,13 @@ class EnvertecTcp14889:
     #
 
     @classmethod
-    def discover(cls, bind: str, timeout: float = 10.0, tries: int = 3) -> list:
+    def discover(cls, bind: str, timeout: float = 6.0, tries: int = 5) -> list:
         """Discover Envertech EVT microinverters using UDP/48899 discovery.
 
         Args:
             bind: Bind IP(v4) address and network length (in bits)
-            timeout: Discovery timeout (seconds); default: 10.0
-            tries: Discovery attempts; default: 3
+            timeout: Discovery timeout (seconds); default: 6.0
+            tries: Discovery attempts; default: 5
 
         Returns: discovered inverters: {"ID": ("IP", "MAC")}
         """
@@ -433,13 +436,17 @@ class EnvertecTcp14889:
                 except ValueError as e:
                     cls.LOGGER.error(f"Invalid discovery response; {e}")
             except Exception as e:
-                tries -= 1
-                if isinstance(e, TimeoutError) or not tries:
-                    break
-                cls.LOGGER.error(f"Failed to discover inverters on: {broadcast}/{netmask}; {e.__class__.__name__}: {e}")
+                if not discovered:
+                    cls.LOGGER.error(f"Failed to discover inverters on: {broadcast}/{netmask}; {e.__class__.__name__}: {e}")
                 with suppress(Exception):
                     socketUdp.close()
                 socketUdp = None
+                tries -= 1
+                if not tries:
+                    break
+                if not isinstance(e, TimeoutError):
+                    sleep(max((deadline - time(), 0)))
+                deadline = time() + timeout
 
         with suppress(Exception):
             socketUdp.close()
@@ -470,8 +477,8 @@ if __name__ == "__main__":
     parser.add_argument("-U", "--unit", type=int, default=None, help="Output only the specified unit data")
     parser.add_argument("-J", "--json", action="store_true", help="Format output as JSON")
     parser.add_argument("-p", "--port", type=int, default=14889, help="Inverter TCP server port")
-    parser.add_argument("-t", "--timeout", type=float, default=10.0, help="Query timeout (seconds)")
-    parser.add_argument("-i", "--tries", type=int, default=3, help="Query attempts")
+    parser.add_argument("-t", "--timeout", type=float, default=6.0, help="Query timeout (seconds)")
+    parser.add_argument("-i", "--tries", type=int, default=5, help="Query attempts")
     parser.add_argument(
         "--discover", type=str, default=None, help="Perform inverters UDP discovery, within specified IPv4/prefix"
     )
@@ -504,7 +511,7 @@ if __name__ == "__main__":
             data = data["units"][args.unit]
 
         if args.json:
-            data["time"] = DateTime.now().isoformat()
+            data["time"] = DateTime.now().isoformat(timespec="seconds")
             sys.stdout.write(_jsonDumps(data))
         else:
 
