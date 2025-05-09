@@ -145,7 +145,8 @@ while IFS= read -r line; do
   pseudo="$(echo -n "${line}" | openssl dgst "-${OPT_ALGO}" -hmac "${secret}" -binary | ${formatter} | cut -c 1-${OPT_LENGTH})"
   pseudo="${OPT_PREFIX}${pseudo}${OPT_SUFFIX}"
   if [ -n "${OPT_SED}" ]; then
-    printf "s|${line}|${pseudo}|g\n"
+    line_escaped="$(echo -n "${line}" | sed -e 's|[]\|$*.^[]|\\&|g')"
+    echo "s|${line_escaped}|${pseudo}|g\n"
   else
     echo "${line}${OPT_SEPARATOR}${pseudo}"
   fi
