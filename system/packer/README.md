@@ -7,11 +7,11 @@ VM images using [HashiCorp Packer][packer], along [Debian preseeding][preseed].
 [packer]: https://www.packer.io/ "Packer: Build Automated Machine Images"
 [preseed]: https://www.debian.org/releases/stable/amd64/apb.en.html "Debian: Automating the installation using preseeding"
 
-In order to build a given image - e.g. `bullseye` - switch to the ad-hoc directory
+In order to build a given image - e.g. `trixie` - switch to the ad-hoc directory
 and launch `packer`:
 
 ```bash
-$ cd bullseye
+$ cd trixie
 $ packer build .
 ```
 
@@ -33,7 +33,7 @@ Debugging
 In order to debug the creation process, start Packer in `debug` mode:
 
 ```bash
-$ cd bullseye
+$ cd trixie
 $ packer build -debug .
 ```
 
@@ -64,8 +64,8 @@ It's magic!!!
 
 ```text
 ==> qemu: Retrieving ISO
-==> qemu: Trying https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-10.5.0-amd64-netinst.iso
-==> qemu: Trying https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-10.5.0-amd64-netinst.iso?checksum=sha256%3A93863e17ac24eeaa347dfb91dddac654f214c189e0379d7c28664a306e0301e7
+==> qemu: Trying https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-trixie-DI-amd64-netinst.iso
+==> qemu: Trying https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-trixie-DI-amd64-netinst.iso?checksum=sha256...
 ==> qemu: Creating required virtual machine disks
 ==> qemu: Starting HTTP server on port 8080
 ==> qemu: Found port for communicator (SSH, WinRM, etc): 2854.
@@ -78,7 +78,7 @@ It's magic!!!
 ==> qemu: Using ssh communicator to connect: 127.0.0.1
 ==> qemu: Waiting for SSH to become available...
 ==> qemu: Connected to SSH!
-==> qemu: Uploading /packer/buster/provision.sh => /tmp/
+==> qemu: Uploading /packer/trixie/provision.sh => /tmp/
 provision.sh 16.14 KiB / 16.14 KiB [==============================================================================================================================================================================================================================] 100.00% 0s
 ==> qemu: Provisioning with shell script: /tmp/packer-shell150527804
     qemu: ============================================================================
@@ -254,14 +254,14 @@ provision.sh 16.14 KiB / 16.14 KiB [============================================
 Build 'qemu' finished.
 
 ==> Builds finished. The artifacts of successful builds are:
---> qemu: VM files in directory: /local/data/unencrypted/packer/buster/output
+--> qemu: VM files in directory: /local/data/unencrypted/packer/trixie/output
 ```
 
 It's works!!!
 
 ```bash
 $ ls -lh output/
--rw-r--r-- 1 thomas anderson 289M Aug 12 10:41 buster.qcow2
+-rw-r--r-- 1 thomas anderson 289M Aug 12 10:41 trixie.qcow2
 ```
 
 (Yeah! That's only a 289MiB image file!)
