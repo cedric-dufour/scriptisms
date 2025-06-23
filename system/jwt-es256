@@ -178,15 +178,16 @@ case "${ARG_ACTION}" in
 'keypair')
   [ -z "${ARG_1}" ] && ARG_1='.'
   PRIV_KEY="${ARG_1}/${OPT_PREFIX}-key.pem"
+  PKCS8_KEY="${ARG_1}/${OPT_PREFIX}-pkcs8.pem"
   PUB_KEY="${ARG_1}/${OPT_PREFIX}-pub.pem"
   [ -e "${PRIV_KEY}" ] && __ERROR "Private key already exists (${PRIV_KEY})" 1
   [ -e "${PUB_KEY}" ] && __ERROR "Public key already exists (${PUB_KEY})" 1
-
   # ES256 (P-256) key pair
   openssl ecparam -name secp256r1 -genkey -noout -out "${PRIV_KEY}"
+  openssl pkcs8 -topk8 -nocrypt -in "${PRIV_KEY}" -out "${PKCS8_KEY}"
   openssl ec -in "${PRIV_KEY}" -pubout >"${PUB_KEY}"
   __INFO "Key pair successfully created:" >&2
-  __INFO "${PRIV_KEY}"
+  __INFO "${PRIV_KEY} (${PKCS8_KEY})"
   __INFO "${PUB_KEY}"
   ;;
 
