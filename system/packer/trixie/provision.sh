@@ -1,8 +1,8 @@
 #!/bin/bash
-# -*- mode:bash; tab-width:2; sh-basic-offset:2; intent-tabs-mode:nil; -*- ex: set tabstop=2 expandtab: 
+# -*- mode:bash; tab-width:2; sh-basic-offset:2; intent-tabs-mode:nil; -*- ex: set tabstop=2 expandtab:
 # REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/packer/trixie/provision.sh
 SCRIPT="${0##*/}"
-VERSION='2025.05.09a'
+VERSION='2025.09.08a'
 
 ## Usage
 function _USAGE {
@@ -32,17 +32,26 @@ OPTIONS:
 
 SECTIONS:
 
+  apt_modernize
+    Perform 'apt modernize-sources' (convert *.list to deb822 *.sources)
+
+  apt_disable_debsrc
+    Disable 'deb-src' (Debian source packages) sources
+
   apt_update
     Perform 'apt-get update'
+
+  clean_kernels
+    Removed unused kernels (after the Debian installer has updated the kernel)
 
   clean_packages
     Remove unnecessary packages (e.g. left behind by Debian installer or non-purged packages)
 
+  clean_ghosts
+    Remove ghost packages (that do not exist in any APT repository)
+
   clean_orphans
     Remove orphan packages (automatically-installed packages that no manually-installed package depends upon)
-
-  (clean_ghosts)
-    Remove ghost packages (that do not exist in any APT repository)
 
   preconfig_udev_ifnames
     UDEV network interfaces naming (pre-)configuration
@@ -91,8 +100,8 @@ EOF
 
 
 ## Arguments
-OPT_SECTIONS=
-OPT_EXCLUDES=
+OPT_SECTIONS=()
+OPT_EXCLUDES=()
 OPT_CONFIRM=
 OPT_BATCH=
 while [ -n "${1}" ]; do
@@ -105,11 +114,11 @@ while [ -n "${1}" ]; do
       ;;
     '-S'|'--section')
       [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
-      shift; OPT_SECTIONS="${OPT_SECTIONS}${OPT_SECTIONS:+ }${1}"
+      shift; OPT_SECTIONS+=("${1}")
       ;;
     '-X'|'--exclude')
       [ -z "${2}" ] && echo "ERROR: Missing option parameter (${1})" >&2 && exit 1
-      shift; OPT_EXCLUDES="${OPT_EXCLUDES}${OPT_EXCLUDES:+ }${1}"
+      shift; OPT_EXCLUDES+=("${1}")
       ;;
     '-C'|'--confirm')
       OPT_CONFIRM='yes'
@@ -126,28 +135,53 @@ while [ -n "${1}" ]; do
   esac
   shift
 done
-[ -z "${OPT_SECTIONS}" ] && OPT_SECTIONS="apt_update usrmerge clean_kernels clean_packages clean_orphans clean_ghosts preconfig_udev_ifnames preconfig_initramfs preconfig_grub preconfig_fstab preconfig_hosts apt_dist_upgrade clean_apt clean_history"
+[ -z "${OPT_SECTIONS[*]}" ] && OPT_SECTIONS=(apt_modernize apt_disable_debsrc apt_update usrmerge clean_kernels clean_packages clean_ghosts clean_orphans preconfig_udev_ifnames preconfig_initramfs preconfig_grub preconfig_fstab preconfig_hosts apt_dist_upgrade clean_apt clean_history)
 
 
 ## Sections
 
-# apt_modernize_sources
-# ?!? Weird this isn't already done by Debiani/Trixie
-DONE_apt_modernize_sources="${PRESET_apt_modernize_sources}"
-function _apt_modernize_sources {
-  [ -n "${DONE_apt_modernize_sources}" ] && return
+# apt_modernize
+# ?!? Weird this isn't already done by Debian/Trixie
+# shellcheck disable=SC2154
+DONE_apt_modernize="${PRESET_apt_modernize}"
+function _apt_modernize {
+  [ -n "${DONE_apt_modernize}" ] && return
   echo '============================================================================'
-  echo 'BEGIN{apt_modernize_sources}'
+  echo 'BEGIN{apt_modernize}'
   apt modernize-sources --yes
-  echo 'END{apt_modernize_sources}'
-  DONE_apt_modernize_sources='yes'
+  rm -f /etc/apt/sources.list.bak /etc/apt/*~ /etc/apt/sources.list.d/*~
+  echo 'END{apt_modernize}'
+  DONE_apt_modernize='yes'
+}
+
+# apt_disable_debsrc
+# shellcheck disable=SC2154
+DONE_apt_disable_debsrc="${PRESET_apt_disable_debsrc}"
+function _apt_disable_debsrc {
+  [ -n "${DONE_apt_disable_debsrc}" ] && return
+  echo '============================================================================'
+  echo 'BEGIN{apt_disable_debsrc}'
+  if [ -s /etc/apt/sources.list ]; then
+    sed -i -E 's/^\s*deb-src/#deb-src/' /etc/apt/sources.list
+  fi
+  if [ -s /etc/apt/sources.list.d/debian.sources ]; then
+    echo >> /etc/apt/sources.list.d/debian.sources
+    sed -nE -i /etc/apt/sources.list.d/debian.sources -f- << 'EOF'
+      s/\s+$//;
+      /^Types:\s*deb-src$/,/^$/{/^Enabled:/d;s/^$/Enabled: no\n/;p;b};
+      /^Types:\s*(deb\s+deb-src|deb-src\s+deb)$/,/^$/{s/^Types:.*$/Types: deb/p;/^Enabled:/p;s/^Types:.*$/Types: deb-src/;/^Enabled:/d;/^$/!H;/^(Types:|Enabled:|$)/!p;/^$/{s/^$/Enabled: no\n/;H;s/^Enabled:.*$//;x;p};b};
+      p
+EOF
+  fi
+  echo 'END{apt_disable_debsrc}'
+  DONE_apt_disable_debsrc='yes'
 }
 
 # apt_update
+# shellcheck disable=SC2154
 DONE_apt_update="${PRESET_apt_update}"
 function _apt_update {
   [ -n "${DONE_apt_update}" ] && return
-  _apt_modernize_sources
   echo '============================================================================'
   echo 'BEGIN{apt_update}'
   apt-get update --quiet=2
@@ -157,6 +191,7 @@ function _apt_update {
 
 # usrmerge
 # NB: Already installed/enabled as of Debian/Trixie but better safe than sorry
+# shellcheck disable=SC2154
 DONE_usrmerge="${PRESET_usrmerge}"
 function _usrmerge {
   [ -n "${DONE_usrmerge}" ] && return
@@ -169,32 +204,68 @@ function _usrmerge {
 }
 
 # clean_kernels
+# shellcheck disable=SC2154
 DONE_clean_kernels="${PRESET_clean_kernels}"
 function _clean_kernels {
   [ -n "${DONE_clean_kernels}" ] && return
   echo '============================================================================'
   echo 'BEGIN{clean_kernels}'
-  local -a debs=($(dpkg-query --show --showformat='${binary:Package}\n' 'linux-image-[0-9]*' | grep -v "$(uname -r)"))
+  local -a debs
+  readarray -tu3 debs 3< <(
+    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' 'linux-image-[0-9]*' | awk '{if ($1~"[rip]") print $2}' | grep -v "$(uname -r)"
+  )
   [ -n "${debs[*]}" ] && apt-get autoremove --purge --yes "${debs[@]}"
   echo 'END{clean_kernels}'
   DONE_clean_kernels='yes'
 }
 
 # clean_packages
+# shellcheck disable=SC2154
 DONE_clean_packages="${PRESET_clean_packages}"
 function _clean_packages {
   [ -n "${DONE_clean_packages}" ] && return
   echo '============================================================================'
   echo 'BEGIN{clean_packages}'
   apt-mark manual openssh-server
-  local -a debs_di=(apt-utils debconf-i18n dictionaries-common dmidecode eject emacsen-common iamerican ibritish ienglish-common installation-report intel-microcode ispell iucode-tool laptop-detect nano ncal os-prober pci.ids pciutils perl qemu-guest-agent shared-mime-info task-english tasksel tasksel-data usrmerge util-linux-locales wamerican xauth)
-  local -a debs_deinstall=($(dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' | awk '{if ($1~"[rp]") print $2}'))
+  local -a debs_di=(
+    apt-utils debconf-i18n dictionaries-common dmidecode eject emacsen-common iamerican ibritish ienglish-common installation-report intel-microcode ispell iucode-tool laptop-detect nano ncal os-prober pci.ids pciutils perl qemu-guest-agent shared-mime-info task-english tasksel tasksel-data usrmerge util-linux-locales wamerican xauth
+  )
+  local -a debs_deinstall
+  readarray -tu3 debs_deinstall 3< <(
+    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' | awk '{if ($1~"[rp]") print $2}'
+  )
   apt-get autoremove --purge --yes "${debs_di[@]}" "${debs_deinstall[@]}"
   echo 'END{clean_packages}'
   DONE_clean_packages='yes'
 }
 
+# clean_ghosts
+# shellcheck disable=SC2154
+DONE_clean_ghosts="${PRESET_clean_ghosts}"
+function _clean_ghosts {
+  [ -n "${DONE_clean_ghosts}" ] && return
+  _apt_update
+  echo '============================================================================'
+  echo 'BEGIN{clean_ghosts}'
+  local -a debs
+  local pkg
+  while read -ru3 pkg; do
+    if ! apt-cache policy "${pkg}" | grep -qE '\shttps?://'; then
+      debs+=("${pkg}")
+    fi
+  done 3< <(
+    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' | awk '{if ($1=="i") print $2}'
+  )
+  if [ -n "${debs[*]}" ]; then
+    echo "GHOSTS: ${debs[*]}"
+    apt-get autoremove --purge --yes "${debs[@]}"
+  fi
+  echo 'END{clean_ghosts}'
+  DONE_clean_ghosts='yes'
+}
+
 # clean_orphans
+# shellcheck disable=SC2154
 DONE_clean_orphans="${PRESET_clean_orphans}"
 function _clean_orphans {
   [ -n "${DONE_clean_orphans}" ] && return
@@ -204,7 +275,8 @@ function _clean_orphans {
   # NB: As of 2025-05-09, deborphan isn't available in Debian/Trixie
   #apt-get install --no-install-recommends --yes deborphan
   #while true; do
-  #  local -a debs=($(deborphan --guess-all))
+  #  local -a debs
+  #  readarray -tu3 debs 3< <(deborphan --guess-all)
   #  [ -z "${debs[*]}" ] && break
   #  apt-get autoremove --purge --yes "${debs[@]}"
   #  unset debs
@@ -212,10 +284,14 @@ function _clean_orphans {
   #apt-get autoremove --purge --yes deborphan
   while true; do
     local -a debs
-    for pkg in $(dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' 'lib*' | awk '{if ($1=="i") print $2}'); do
+    local pkg
+    while read -ru3 pkg; do
       [ -z "$(apt-cache rdepends --installed "${pkg}" | sed -n '0,/^Reverse Depends:/!p')" ] && debs+=("${pkg}")
-    done
+    done 3< <(
+      dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' 'lib*' | awk '{if ($1=="i") print $2}'
+    )
     [ -z "${debs[*]}" ] && break
+    echo "ORPHANS: ${debs[*]}"
     apt-get autoremove --purge --yes "${debs[@]}"
     unset debs
   done
@@ -223,23 +299,8 @@ function _clean_orphans {
   DONE_clean_orphans='yes'
 }
 
-# clean_ghosts
-DONE_clean_ghosts="${PRESET_clean_ghosts}"
-function _clean_ghosts {
-  [ -n "${DONE_clean_ghosts}" ] && return
-  _apt_update
-  echo '============================================================================'
-  echo 'BEGIN{clean_ghosts}'
-  local -a debs
-  for pkg in $(dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' | awk '{if ($1=="i") print $2}'); do
-    [ -z "$(apt-cache policy "${pkg}" | grep -E '\shttps?://')" ] && debs+=("${pkg}")
-  done
-  [ -n "${debs[*]}" ] && apt-get autoremove --purge --yes "${debs[@]}"
-  echo 'END{clean_ghosts}'
-  DONE_clean_ghosts='yes'
-}
-
 # preconfig_udev_ifnames
+# shellcheck disable=SC2154
 DONE_preconfig_udev_ifnames="${PRESET_preconfig_udev_ifnames}"
 function _preconfig_udev_ifnames {
   [ -n "${DONE_preconfig_udev_ifnames}" ] && return
@@ -260,6 +321,7 @@ EOF
 }
 
 # preconfig_initramfs
+# shellcheck disable=SC2154
 DONE_preconfig_initramfs="${PRESET_preconfig_initramfs}"
 function _preconfig_initramfs {
   [ -n "${DONE_preconfig_initramfs}" ] && return
@@ -278,6 +340,7 @@ EOF
 }
 
 # preconfig_grub
+# shellcheck disable=SC2154
 DONE_preconfig_grub="${PRESET_preconfig_grub}"
 function _preconfig_grub {
   [ -n "${DONE_preconfig_grub}" ] && return
@@ -303,6 +366,7 @@ EOF
 }
 
 # preconfig_fstab
+# shellcheck disable=SC2154
 DONE_preconfig_fstab="${PRESET_preconfig_fstab}"
 function _preconfig_fstab {
   [ -n "${DONE_preconfig_fstab}" ] && return
@@ -353,24 +417,26 @@ EOF
 # - local: /dev/<dev> /local/data ext4 defaults 0 2
 # - NFS: <server>:<export> /remote/data nfs tcp,vers=3,rw,hard 0 0
 EOF
-  local device_mountpoint_fstype; for device_mountpoint_fstype in $(grep -E '\s/local(\s|/)' /proc/mounts | awk '{print $1":"$3":"$5}'); do
-    device="${device_mountpoint_fstype##:*}"; device_mountpoint_fstype="${device_mountpoint_fstype%*:}"
-    mountpoint="${device_mountpoint_fstype##:*}"; device_mountpoint_fstype="${device_mountpoint_fstype%*:}"
-    fstype="${device_mountpoint_fstype}"
+  local device mountpoint fstype
+  while read -ru3 device mountpoint fstype; do
     echo "${device} ${mountpoint} ${fstype} defaults 0 2" >> /etc/fstab
-  done
+  done 3< <(
+    awk '{if ($2~"^/local(/|$)") print $1, $2, $3}' /proc/mounts
+  )
   echo 'END{preconfig_fstab}'
   DONE_preconfig_fstab='yes'
 }
 
 # preconfig_hosts
+# shellcheck disable=SC2154
 DONE_preconfig_hosts="${PRESET_preconfig_hosts}"
 function _preconfig_hosts {
   [ -n "${DONE_preconfig_hosts}" ] && return
   echo '============================================================================'
   echo 'BEGIN{preconfig_hosts}'
-  local hostname_fqdn="$(hostname -f)"
-  local hostname_short="$(hostname -s)"
+  local hostname_fqdn hostname_short
+  hostname_fqdn="$(hostname -f)"
+  hostname_short="$(hostname -s)"
   cat > /etc/hosts << EOF
 ## File provisioned by Packer
 
@@ -389,6 +455,7 @@ EOF
 }
 
 # apt_dist_upgrade
+# shellcheck disable=SC2154
 DONE_apt_dist_upgrade="${PRESET_apt_dist_upgrade}"
 function _apt_dist_upgrade {
   [ -n "${DONE_apt_dist_upgrade}" ] && return
@@ -402,6 +469,7 @@ function _apt_dist_upgrade {
 }
 
 # clean_apt
+# shellcheck disable=SC2154
 DONE_clean_apt="${PRESET_clean_apt}"
 function _clean_apt {
   [ -n "${DONE_clean_apt}" ] && return
@@ -413,6 +481,7 @@ function _clean_apt {
 }
 
 # clean_history
+# shellcheck disable=SC2154
 DONE_clean_history="${PRESET_clean_history}"
 function _clean_history {
   [ -n "${DONE_clean_history}" ] && return
@@ -438,6 +507,7 @@ function _clean_history {
 }
 
 # clean_root_ssh
+# shellcheck disable=SC2154
 DONE_clean_root_ssh="${PRESET_clean_root_ssh}"
 function _clean_root_ssh {
   [ -n "${DONE_clean_root_ssh}" ] && return
@@ -449,6 +519,7 @@ function _clean_root_ssh {
 }
 
 # clean_network
+# shellcheck disable=SC2154
 DONE_clean_network="${PRESET_clean_network}"
 function _clean_network {
   [ -n "${DONE_clean_network}" ] && return
@@ -457,7 +528,7 @@ function _clean_network {
   local iface
   for iface in $(ifquery --list); do
     [ "${iface}" == 'lo' ] && continue
-    ifdown ${iface}
+    ifdown "${iface}"
   done
   rm -fv /var/lib/dhcp/dhclient*.leases
   echo 'END{clean_network}'
@@ -465,6 +536,7 @@ function _clean_network {
 }
 
 # clean_identity
+# shellcheck disable=SC2154
 DONE_clean_identity="${PRESET_clean_identity}"
 function _clean_identity {
   [ -n "${DONE_clean_identity}" ] && return
@@ -481,6 +553,7 @@ function _clean_identity {
 }
 
 # clean_self
+# shellcheck disable=SC2154
 DONE_clean_self="${PRESET_clean_self}"
 function _clean_self {
   [ -n "${DONE_clean_self}" ] && return
@@ -506,18 +579,20 @@ function _clean_shutdown {
 }
 
 # zero_freespace
+# shellcheck disable=SC2154
 DONE_zero_freespace="${PRESET_zero_freespace}"
 function _zero_freespace {
   [ -n "${DONE_zero_freespace}" ] && return
   echo '============================================================================'
   echo 'BEGIN{zero_freespace}'
-  local resource
-  for resource in $(awk '{if($3 ~ "^ext") print $2}' /etc/fstab); do
+  local -a resources
+  readarray -tu3 resources 3< <(awk '{if($3 ~ "^ext") print $2}' /etc/fstab)
+  for resource in "${resources[@]}"; do
     if [ -z "${OPT_BATCH}" ]; then
       local prompt='yes'
       local input=
       while [ -n "${prompt}" ]; do
-        echo -n "Zero free space in ${resource} [Yes/No]? " && read input
+        echo -n "Zero free space in ${resource} [Yes/No]? " && read -r input
         case "${input:0:1}" in
           'Y'|'y') prompt=;;
           'N'|'n') resource=; prompt=;;
@@ -528,12 +603,13 @@ function _zero_freespace {
     dd if=/dev/zero of="${resource%%/}/ZERO" bs=1M
     rm "${resource%%/}/ZERO"
   done
-  for resource in $(awk '{if($3 ~ "^swap$") print $1}' /etc/fstab); do
+  readarray -tu3 resources 3< <(awk '{if($3 ~ "^swap") print $1}' /etc/fstab)
+  for resource in "${resources[@]}"; do
     local prompt='yes'
     local input=
     if [ -z "${OPT_BATCH}" ]; then
       while [ -n "${prompt}" ]; do
-        echo -n "Zero free space in ${resource} [Yes/No]? " && read input
+        echo -n "Zero free space in ${resource} [Yes/No]? " && read -r input
         case "${input:0:1}" in
           'Y'|'y') prompt=;;
           'N'|'n') resource=; prompt=;;
@@ -541,11 +617,12 @@ function _zero_freespace {
       done
     fi
     [ -z "${resource}" ] && continue
-    local uuid="$(blkid -s UUID -o value "${resource}")"
+    local uuid
+    uuid="$(blkid -s UUID -o value "${resource}")"
     swapoff "${resource}"
     dd if=/dev/zero of="${resource}" bs=1M
     mkswap -U "${uuid}" "${resource}"
-    swapon "${resource}"
+    #swapon "${resource}"
   done
   echo 'END{zero_freespace}'
   DONE_zero_freespace='yes'
@@ -564,14 +641,14 @@ else
 fi
 
 # Loop through sections
-for section in ${OPT_SECTIONS}; do
-  [ -n "$(echo ${OPT_EXCLUDES} | egrep "(^|\\s)${section}(\\s|\$)")" ] && continue
+for section in "${OPT_SECTIONS[@]}"; do
+  echo "${OPT_EXCLUDES[*]}" | grep -qE "(^|\\s)${section}(\\s|\$)" && continue
   if [ -n "${OPT_CONFIRM}" ]; then
     prompt='yes'
     input=
     while [ -n "${prompt}" ]; do
       echo '****************************************************************************'
-      echo -n "EXECUTE SECTION '${section}' [Yes/No]? " && read input
+      echo -n "EXECUTE SECTION '${section}' [Yes/No]? " && read -r input
       case "${input:0:1}" in
         'Y'|'y') prompt=;;
         'N'|'n') continue 2;;
@@ -579,13 +656,14 @@ for section in ${OPT_SECTIONS}; do
     done
   fi
   case "${section}" in
-    'apt_modernize_sources') _apt_modernize_sources;;
+    'apt_modernize') _apt_modernize;;
+    'apt_disable_debsrc') _apt_disable_debsrc;;
     'apt_update') _apt_update;;
     'usrmerge') _usrmerge;;
     'clean_kernels') _clean_kernels;;
     'clean_packages') _clean_packages;;
-    'clean_orphans') _clean_orphans;;
     'clean_ghosts') _clean_ghosts;;
+    'clean_orphans') _clean_orphans;;
     'preconfig_udev_ifnames') _preconfig_udev_ifnames;;
     'preconfig_initramfs') _preconfig_initramfs;;
     'preconfig_grub') _preconfig_grub;;
