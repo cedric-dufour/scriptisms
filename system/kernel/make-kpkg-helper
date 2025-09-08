@@ -35,7 +35,7 @@ OPTIONS:
     Author e-mail address (default: $(whoami)@$(hostname -f))
 
   -j, --concurrency <integer>
-    Concurrency level (default: CPU cores quantity)
+    Concurrency level (default: CPU hyper-cores quantity)
 
   --use-make-kpkg
     Use old 'make-kpkg' method (<-> 'kernel-package' package)
@@ -52,7 +52,7 @@ MY_APT=
 MY_BUILD='.'
 MY_NAME="$(getent passwd $(whoami) | cut -d: -f5)"
 MY_EMAIL="$(whoami)@$(hostname -f)"
-MY_CONCURRENCY=$(fgrep 'core id' /proc/cpuinfo | sort -u | wc -l)
+MY_CONCURRENCY=$(grep -F 'core id' /proc/cpuinfo | wc -l)
 MY_USE_MAKE_KPKG=
 while [ -n "${1}" ]; do
   case "${1}" in
