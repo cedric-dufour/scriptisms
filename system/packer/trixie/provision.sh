@@ -212,7 +212,9 @@ function _clean_kernels {
   echo 'BEGIN{clean_kernels}'
   local -a debs
   readarray -tu3 debs 3< <(
-    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' 'linux-image-[0-9]*' | awk '{if ($1~"[rip]") print $2}' | grep -v "$(uname -r)"
+    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' 'linux-image-[0-9]*' \
+    | awk '{if ($1~"[rip]") print $2}' \
+    | grep -v "$(uname -r)"
   )
   [ -n "${debs[*]}" ] && apt-get autoremove --purge --yes "${debs[@]}"
   echo 'END{clean_kernels}'
@@ -232,7 +234,8 @@ function _clean_packages {
   )
   local -a debs_deinstall
   readarray -tu3 debs_deinstall 3< <(
-    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' | awk '{if ($1~"[rp]") print $2}'
+    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' \
+    | awk '{if ($1~"[rp]") print $2}'
   )
   apt-get autoremove --purge --yes "${debs_di[@]}" "${debs_deinstall[@]}"
   echo 'END{clean_packages}'
@@ -247,19 +250,26 @@ function _clean_ghosts {
   _apt_update
   echo '============================================================================'
   echo 'BEGIN{clean_ghosts}'
-  local -a debs
-  local pkg
-  while read -ru3 pkg; do
-    if ! apt-cache policy "${pkg}" | grep -qE '\shttps?://'; then
-      debs+=("${pkg}")
+  for type in auto manual; do
+    local -a candidates
+    local -a debs
+    readarray -tu3 candidates 3< <(
+      apt-mark show${type} \
+      | sort
+    )
+    readarray -tu3 debs 3< <(
+      apt-cache policy "${candidates[@]}" \
+      | sed -nE 's#(^(\S.*)|.*\s(https?).*)$#\2\3#p' \
+      | tr -d '\n' \
+      | sed -E 's#:((https?)*)#:\1\n#g' \
+      | awk -F: '{if(!$2) print $1}'
+    )
+    if [ -n "${debs[*]}" ]; then
+      echo "GHOSTS[${type}]: ${debs[*]}"
+      apt-get autoremove --purge --yes "${debs[@]}"
     fi
-  done 3< <(
-    dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' | awk '{if ($1=="i") print $2}'
-  )
-  if [ -n "${debs[*]}" ]; then
-    echo "GHOSTS: ${debs[*]}"
-    apt-get autoremove --purge --yes "${debs[@]}"
-  fi
+    unset candidates debs
+  done
   echo 'END{clean_ghosts}'
   DONE_clean_ghosts='yes'
 }
@@ -272,28 +282,31 @@ function _clean_orphans {
   _apt_update
   echo '============================================================================'
   echo 'BEGIN{clean_orphans}'
-  # NB: As of 2025-05-09, deborphan isn't available in Debian/Trixie
-  #apt-get install --no-install-recommends --yes deborphan
-  #while true; do
-  #  local -a debs
-  #  readarray -tu3 debs 3< <(deborphan --guess-all)
-  #  [ -z "${debs[*]}" ] && break
-  #  apt-get autoremove --purge --yes "${debs[@]}"
-  #  unset debs
-  #done
-  #apt-get autoremove --purge --yes deborphan
+  # NB: deborphan is no longer available in Debian/Trixie
   while true; do
+    local -a depends
+    local -a candidates
     local -a debs
-    local pkg
-    while read -ru3 pkg; do
-      [ -z "$(apt-cache rdepends --installed "${pkg}" | sed -n '0,/^Reverse Depends:/!p')" ] && debs+=("${pkg}")
-    done 3< <(
-      dpkg-query --show --showformat='${db:Status-Want;1} ${binary:Package}\n' 'lib*' | awk '{if ($1=="i") print $2}'
+    readarray -tu3 depends 3< <(
+      apt-cache depends --installed '*' \
+      | sed -nE 's#^.*Depends:\s+##p' \
+      | sort -u
+    )
+    readarray -tu3 candidates 3< <(
+      cat \
+      <(apt-mark showauto '^lib.*' '.*-common$' '.*-data$' '.*-dbg$' '.*-dev$')\
+      <(apt-mark showmanual '^lib.*') \
+      | sort -u
+    )
+    readarray -tu3 debs 3< <(
+      join -v1 \
+      <(printf '%s\n' "${candidates[@]}") \
+      <(printf '%s\n' "${depends[@]}")
     )
     [ -z "${debs[*]}" ] && break
     echo "ORPHANS: ${debs[*]}"
     apt-get autoremove --purge --yes "${debs[@]}"
-    unset debs
+    unset depends candidates debs
   done
   echo 'END{clean_orphans}'
   DONE_clean_orphans='yes'
@@ -603,7 +616,7 @@ function _zero_freespace {
     dd if=/dev/zero of="${resource%%/}/ZERO" bs=1M
     rm "${resource%%/}/ZERO"
   done
-  readarray -tu3 resources 3< <(awk '{if($3 ~ "^swap") print $1}' /etc/fstab)
+  readarray -tu3 resources 3< <(awk '{if($3 == "swap") print $1}' /etc/fstab)
   for resource in "${resources[@]}"; do
     local prompt='yes'
     local input=
