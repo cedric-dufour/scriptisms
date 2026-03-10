@@ -29,8 +29,11 @@ OPTIONS:
   -Z, --zoom <float>
     Zoom factor (default: 1.0)
 
-  -P, --position
-    Position secondary screen above primary (default: right-of)
+  -P, --position {right-of|left-of|above|below)
+    Position of the secondary screen relative to the primary (default: right-of)
+
+  -A, --above
+    Alias for --position above
 
 EOF
 }
@@ -49,12 +52,14 @@ while [ -n "${1}" ]; do
     '-Z'|'--zoom')
       [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
       OPT_ZOOM="${2}"
-      OPTS+=("${1}" "${2}"); shift
+      OPTS+=("${1}" "${2}")
+      shift
       ;;
     '-P'|'--position')
       [ -z "${2}" ] && _ERROR "Missing option argument (${1})" && exit 1
       OPT_POSITION="${2}"
-      OPTS+=("${1}")
+      OPTS+=("${1}" "${2}")
+      shift
       ;;
     '-A'|'--above')
       OPT_POSITION='above'
@@ -144,7 +149,7 @@ case "${ARG_ACTION}" in
 
   'off')
     # Scale
-    SCALE="$(echo "scale=2; ${PRI_Y_RES}/${SEC_Y_RES}" | bc)"
+    SCALE="$(echo "scale=2; ${PRI_X_RES}/${SEC_X_RES}" | bc)"
 
     # XRandR
     xrandr --output "${PRI_NAME}" --panning 0x0+0+0
@@ -156,7 +161,7 @@ case "${ARG_ACTION}" in
 
   'on')
     # Scale
-    SCALE="$(echo "scale=2; ${SEC_Y_PHYS}/${PRI_Y_PHYS} * ${PRI_Y_RES}/${SEC_Y_RES} / ${OPT_ZOOM}" | bc)"
+    SCALE="$(echo "scale=2; ${SEC_X_PHYS}/${PRI_X_PHYS} * ${PRI_X_RES}/${SEC_X_RES} / ${OPT_ZOOM}" | bc)"
 
     # XRandR
     case "${OPT_POSITION}" in
