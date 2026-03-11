@@ -128,23 +128,28 @@ if [ -z "${DECRYPT}" ]; then
     [[ "${AKEY}" =~ 'type=' ]] || AKEY="${AKEY};type=public"
   fi
   SKEY="$(openssl rand -base64 24)"
-  echo "${SKEY}" | openssl pkeyutl -encrypt -pubin -inkey "${AKEY}" | base64 \
+  PBKDF2_MD='sha-256'
+  PBKDF2_ITER=500000
+  echo "${SKEY} ${PBKDF2_ITER} ${PBKDF2_MD}" | openssl pkeyutl -encrypt -pubin -inkey "${AKEY}" | base64 \
   > "${OUTPUT}.key"
   export SKEY
 else
   if [ "${AKEY:0:7}" == 'pkcs11:' ]; then
     [[ "${AKEY}" =~ 'type=' ]] || AKEY="${AKEY};type=private"
   fi
-  SKEY="$(base64 -d "${INPUT}.key" | openssl pkeyutl -decrypt -inkey "${AKEY}")"
+  read -ru3 SKEY PBKDF2_ITER PBKDF2_MD _ 3< <(base64 -d "${INPUT}.key" | openssl pkeyutl -decrypt -inkey "${AKEY}")
   export SKEY
+  # (backward compatibility)
+  [ -z "${PBKDF2_ITER}" ] && PBKDF2_ITER=100000
+  [ -z "${PBKDF2_MD}" ] && PBKDF2_MD='sha-256'
 fi
 
 # Encryption/decryption
 if [ -z "${DECRYPT}" ]; then
-  cat "${INPUT}" | openssl enc -aes-256-ctr -e -pbkdf2 -iter 100000 -pass env:SKEY -out "${OUTPUT}"
+  cat "${INPUT}" | openssl enc -aes-256-ctr -e -pbkdf2 -md "${PBKDF2_MD}" -iter "${PBKDF2_ITER}" -pass env:SKEY -out "${OUTPUT}"
   sha256sum "${OUTPUT}" | sed 's| .*/| |' > "${OUTPUT}.sha256sum"
 else
-  openssl enc -aes-256-ctr -d -pbkdf2 -iter 100000 -pass env:SKEY -in "${INPUT}" | cat "${OUTPUT}"
+  openssl enc -aes-256-ctr -d -pbkdf2 -md "${PBKDF2_MD}" -iter "${PBKDF2_ITER}" -pass env:SKEY -in "${INPUT}" | cat "${OUTPUT}"
 fi
 
 ## Done
