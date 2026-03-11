@@ -92,13 +92,17 @@ __openssl_pkcs11_conf() {
   cat <<EOF >"${1}"
 ## REF: https://github.com/cedric-dufour/scriptisms/blob/master/system/openssl.opensc-pkcs11.conf
 openssl_conf = SSL_Configuration
+
 [ SSL_Configuration ]
 providers = SSL_Providers
+
 [ SSL_Providers ]
 default = PROV_default
 pkcs11 = PROV_pkcs11
+
 [ PROV_default ]
 activate = 1
+
 [ PROV_pkcs11 ]
 module = /usr/lib/x86_64-linux-gnu/ossl-modules/pkcs11.so
 pkcs11-module-path = /usr/lib/x86_64-linux-gnu/pkcs11/opensc-pkcs11.so
@@ -111,10 +115,12 @@ EOF
 
 # Symmetric key
 if [ "${AKEY:0:7}" == 'pkcs11:' ]; then
-  OPENSSL_CONF="$(mktemp --suffix .openssl.conf)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '${OPENSSL_CONF}'" EXIT
-  __openssl_pkcs11_conf "${OPENSSL_CONF}"
+  if [ -z "${OPENSSL_CONF}" ] || [ ! -e "${OPENSSL_CONF}" ]; then
+    OPENSSL_CONF="$(mktemp --suffix .openssl.conf)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '${OPENSSL_CONF}'" EXIT
+    __openssl_pkcs11_conf "${OPENSSL_CONF}"
+  fi
   export OPENSSL_CONF
 fi
 if [ -z "${DECRYPT}" ]; then
