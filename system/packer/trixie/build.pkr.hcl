@@ -6,8 +6,8 @@
 
 source "qemu" "trixie" {
   # Image
-  iso_url      = "https://cdimage.debian.org/cdimage/release/13.1.0/amd64/iso-cd/debian-13.1.0-amd64-netinst.iso"
-  iso_checksum = "sha512:873e9aa09a913660b4780e29c02419f8fb91012c8092e49dcfe90ea802e60c82dcd6d7d2beeb92ebca0570c49244eee57a37170f178a27fe1f64a334ee357332"
+  iso_url      = "https://cdimage.debian.org/cdimage/release/13.6.0/amd64/iso-cd/debian-13.6.0-amd64-netinst.iso"
+  iso_checksum = "sha512:ce0eeee7b51fdcdbed1e5116668c1fee27e528767bdf488e5f115a67b225e5dfd0afca1d456aaa9408ceb6b8527521ff7b6b5d62fdbe6f8c5faaf8df56a96292"
   # (output)
   output_directory = "${path.root}/output"
   vm_name          = "trixie.qcow2"
