@@ -1,6 +1,10 @@
 Scripts for Engineering the Universe
 ====================================
 
+> THIS PROJECT HAS MOVED TO https://codeberg.org/cedric-dufour/scriptisms
+>
+> (and may vanish from GitHub with no further notice; please update your upstream URL)
+
 Sysnopsis
 ---------
 
